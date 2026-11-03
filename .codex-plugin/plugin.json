@@ -1,0 +1,7 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "description": "Collaboration workflows across Codex, Claude Code, DeepSeek Harness, Junie and Antigravity.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

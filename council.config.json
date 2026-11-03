@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "backend": "acpx",
+  "stateDir": ".council",
+  "maxConcurrency": 3,
+  "timeoutMs": 180000,
+  "maxOutputBytes": 131072,
+  "maxCalls": 16,
+  "agents": {
+    "codex": {
+      "enabled": true,
+      "profile": "codex"
+    },
+    "claude": {
+      "enabled": true,
+      "profile": "claude"
+    },
+    "deepseek-harness": {
+      "enabled": true,
+      "profile": "deepseek-harness"
+    },
+    "junie": {
+      "enabled": true,
+      "profile": "junie"
+    },
+    "antigravity": {
+      "enabled": true,
+      "profile": "antigravity"
+    }
+  }
+}

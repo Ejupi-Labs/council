@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.council/
+.serena/
+coverage/
+*.tgz
+.env
+.env.*
+!.env.example
