@@ -1,6 +1,6 @@
 {
   "name": "council",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Bounded collaboration workflows, peer review and project coordination across coding agents.",
   "license": "MIT"
 }

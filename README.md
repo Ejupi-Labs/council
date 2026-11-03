@@ -1,170 +1,207 @@
-# Council
+# Council 1.0
 
-Council is a local plugin, MCP server and CLI for collaboration between **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**. It runs real agent runtimes through ACPX and adds bounded workflows, durable results, project notes, a local mailbox and file reservations.
+A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
 
-This is version **0.1.0**. The local workflow engine, ACPX integration and MCP interface have automated tests. Real vendor sessions depend on your installed runtimes, account access and authentication; these have not been tested together on this machine.
+Council has **zero production npm dependencies**. It runs on Node.js 24+, speaks MCP over stdio, and coordinates native agent CLIs or ACP agents. It provides six collaboration modes, workspace-wide call limits, durable results, peer messages, project notes, file leases and isolated Git worktrees.
 
-## Quick start
+## Install and start
 
-Requires Node.js **24+**, npm and Git. Windows, macOS and Linux are targeted; the implementation was tested locally on native Windows. CI is configured for all three systems.
+The repository includes its compiled runtime. Development dependencies and a build step are not needed to run a release:
 
 ```sh
-npm ci
-npm run build
+node dist/cli.js --version
 node dist/cli.js demo
-node dist/cli.js doctor
+node dist/cli.js doctor --workspace /absolute/path/to/project
 ```
 
-The demo executes every mode with deterministic mock agents. It makes **zero model calls**, changes no project files and stores its results in a temporary directory.
-
-For a real task, select your target project with `--workspace` (or run from that directory), create optional settings if `council.config.json` does not already exist, and preview the plan:
+The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-node dist/cli.js init
-node dist/cli.js plan --mode review --agents codex,claude --task "Review the authentication design and identify concrete failure cases."
-node dist/cli.js run --mode review --agents codex,claude --task "Review the authentication design and identify concrete failure cases."
+npm install --global ./council-ai-plugin-1.0.0.tgz
+council demo
+council doctor --workspace /absolute/path/to/project
 ```
 
-Commands print JSON. `--task-file` and `--context-file` accept longer briefs without shell quoting. `--workspace` selects the project. `--backend mock` is available for offline evaluation. No login or account configuration is changed by Council.
+The tarball installs offline without runtime dependencies. Registry publication is a separate operation; this repository does not claim a published npm release.
 
-## Collaboration modes
+To create optional settings in your project, run `council init --workspace <project>`. Existing settings are never overwritten. The JSON schema is in [schemas/config.schema.json](schemas/config.schema.json).
 
-| Mode | Flow | Agent calls |
-| --- | --- | --- |
-| `delegate` | One bounded task to one agent | 1 |
-| `review` | Author draft → independent reviewers → author revision | participants + 1 |
-| `debate` | Bounded rounds → judge synthesis | rounds × participants + 1 |
-| `parallel` | Independent tasks → optional synthesis | participants, plus 1 with judge |
-| `pipeline` | Sequential handoffs | participants |
-| `council` | Independent proposals → cross-critique → judge synthesis | 2 × participants + 1 |
-
-`debate` and `council` are read-only. Their default judge is the first participant unless `--judge` selects another configured agent. Use independent participants and an explicit judge when diversity matters; a synthesized answer is not proof of correctness.
-
-```sh
-node dist/cli.js run --mode council --agents codex,claude,junie --judge deepseek-harness --task-file decision.md
-node dist/cli.js run --mode debate --agents codex,claude --rounds 2 --task "Compare two indexing designs using this repository's actual access patterns."
-node dist/cli.js run --mode pipeline --agents codex,claude,junie --task "Build a design, critique it, then produce an implementation checklist."
-```
-
-For independent parallel subtasks, provide `--assignments-file tasks.json` with a JSON map such as `{"codex":"Inspect indexing and query behavior","claude":"Review access controls and privacy","junie":"Check integration and test coverage"}`. Each participant receives the global task and its own assignment. Without assignments, participants independently address the same brief, which is useful for comparing alternative solutions.
-
-## Writing code with isolated worktrees
-
-Add `--write` only when the task includes implementation. A Git repository with at least one commit is required.
-
-```sh
-node dist/cli.js run --mode parallel --agents codex,claude --write --task "Implement a project notes search feature and add appropriate verification."
-```
-
-Write workflows use retained detached worktrees under `.council/worktrees/`:
-
-- Parallel writers receive independent worktrees.
-- A review uses the author's worktree; reviewers inspect that same worktree with read policy.
-- A write pipeline shares one worktree sequentially so later agents see earlier changes.
-- The original checkout and current branch are never switched or merged automatically.
-- Worktrees start at the repository's committed HEAD. Uncommitted original-checkout changes are **not included**.
-- Returned artifacts include worktree paths and patches covering tracked, untracked, binary and agent-committed changes relative to the captured base.
-
-Inspect patches and verify the retained worktree before accepting changes. Council does not automatically apply patches, install dependencies in worktrees, run tests on your behalf, or remove worktrees containing unreviewed work. Use normal Git worktree commands when finished.
-
-The `read` policy denies tool approval requests; it is **not an OS sandbox** and cannot restrict an adapter's already-authorized tools. Write mode permits agent tool requests inside a worktree but does not provide an OS boundary around that agent. Configure native vendor sandbox settings as appropriate for your task.
-
-## Connect a coding agent
-
-Build the plugin first. To generate explicit connection settings for any MCP client:
+## Connect your agent
 
 ```sh
 node dist/cli.js connection --workspace /absolute/path/to/project
 ```
 
-The generated JSON uses absolute executable and entrypoint paths. Add that server to the MCP configuration of Codex, Claude Code, Junie, DSH or Antigravity. This command only prints settings and does not modify global configuration.
+Add the printed server settings to your host's MCP configuration. They use absolute paths, including paths with spaces or Unicode. The command prints settings and does not change global host configuration.
 
-The repository also contains:
+The project includes a portable Agent Plugins manifest, Codex compatibility manifests, a Claude Code plugin/marketplace, the Council skill, and a `/council` command. With a checkout or extracted plugin release:
 
-- Portable Agent Plugins manifests: `plugin.json`, `mcp.json` and `skills/council/`.
-- Codex compatibility packaging: `.codex-plugin/plugin.json` and `.mcp.json`.
-- Claude Code packaging: `.claude-plugin/`, the Council skill and `/council` command.
+```sh
+claude --plugin-dir /absolute/path/to/council
+```
 
-For Claude Code local development, launch `claude --plugin-dir /absolute/path/to/council` after building. Other hosts can use the explicit MCP connection above and load the portable skill. Plugin launchers normally inherit the project working directory; use `COUNCIL_WORKSPACE` or an explicit `--workspace` if your host launches from elsewhere. Native plugin installation UI has not been verified in this release.
+Other hosts can connect through MCP and load `skills/council/SKILL.md`. `COUNCIL_WORKSPACE` selects the project if your host does not inherit its working directory. Native host installation screens are host-specific; the release tests verify packaged entrypoints, generated configuration and an official SDK client connection.
 
-## Real-agent prerequisites
+## Agent setup
 
-ACPX **0.21.1** is installed as a pinned dependency. Council invokes its JavaScript entrypoint with Node directly, without a shell or a platform-specific `.cmd` wrapper.
+Council never reads, copies or rewrites vendor login files. Each agent uses its own installed runtime, authentication, models and provider limits. `doctor` checks executable availability without logging in or making a model call.
 
-| Council profile | Required runtime/setup |
-| --- | --- |
-| `codex` | Codex configuration/authentication and the ACPX Codex adapter |
-| `claude` | Claude Code configuration/authentication and the ACPX Claude adapter |
-| `deepseek-harness` | `dsh` installed and configured for the ACP profile |
-| `junie` | Junie CLI installed and authenticated; ACP mode |
-| `antigravity` | Google's separate official ACP runtime and matching helper, configured and authenticated |
+| Profile | Default transport | Required setup |
+| --- | --- | --- |
+| `codex` | Native JSON CLI | Installed and authenticated Codex CLI |
+| `claude` | Native JSON CLI | Installed and authenticated Claude Code CLI |
+| `deepseek-harness` | ACP v1 | `dsh --profile acp` |
+| `junie` | ACP v1 | `junie --acp=true` |
+| `antigravity` | ACP v1 | Google's separate ACP runtime and matching helper |
 
-Codex and Claude ACP adapters are pinned local dependencies so their launch does not depend on an unpinned `npx` download. Antigravity's ACP runtime requires separate setup from its IDE/CLI. Interactive authentication and some user questions need a compatible interactive client. `doctor` checks local launch prerequisites only; it does not prove login, account availability, model access or ACP compatibility.
+Antigravity uses `agy_acp_server.exe` on Windows and `agy_acp_server.par` on macOS/Linux. Linux adds the registry's `--uid=` argument. Configure `ANTIGRAVITY_HARNESS_PATH` and authentication according to the runtime's instructions. Its ACP runtime is separate from the IDE and `agy` CLI.
 
-Council does not read, copy, rotate or rewrite vendor credentials. Agent processes retain their native account setup. Existing accounts, usage limits and provider terms still apply.
+Use a custom executable, interpreter and argument array when needed:
 
-## MCP tools
+```json
+{
+  "agents": {
+    "reviewer": {
+      "enabled": true,
+      "profile": "junie",
+      "transport": "acp",
+      "command": "/absolute/path/to/junie",
+      "args": ["--acp=true"],
+      "model": "an-exact-advertised-model-id"
+    }
+  }
+}
+```
+
+Omit `model` to preserve native settings. Council never substitutes another model or agent after an access, capacity or configuration failure. For a single participant, `--model <id>` selects a model for that invocation without saving settings.
+
+Commands are spawned without a shell. Recognized npm launchers are resolved to their real JavaScript/native entrypoints on Windows. Arbitrary `.cmd`, `.bat` and PowerShell wrappers are refused; configure the executable or interpreter and `args` explicitly.
+
+The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council 1.0.
+
+## Collaboration modes
+
+| Mode | Flow | Maximum calls |
+| --- | --- | --- |
+| `delegate` | One bounded task to one agent | 1 |
+| `review` | Author draft → independent reviewers → author revision | participants + 1 |
+| `debate` | Bounded debate rounds → judge synthesis | rounds × participants + 1 |
+| `parallel` | Independent tasks → optional synthesis | participants, plus 1 with a judge |
+| `pipeline` | Sequential handoffs | participants |
+| `council` | Independent proposals → cross-critique → judge synthesis | 2 × participants + 1 |
+
+`debate` and `council` are read-only. Their default judge is the first participant; select an explicit judge when independence matters. A vote or synthesized answer is not proof of correctness.
+
+```sh
+council plan --mode council --agents codex,claude,junie --judge deepseek-harness --task-file decision.md
+council run --mode review --agents codex,claude --task "Review the repository's authentication design and identify concrete failure cases."
+council run --mode parallel --agents codex,claude,junie --assignments-file examples/parallel-tasks.json --task "Assess the search feature."
+council run --mode pipeline --agents codex,claude --task "Produce a design, then independently critique it."
+```
+
+`plan` does not invoke agents. Actual runs immediately print their ID to stderr, then print the terminal result as JSON to stdout. This keeps stdout machine-readable and provides a cancellation handle during long work. `--task-file` and `--context-file` avoid shell quoting and support longer briefs. Conflicting and unsupported arguments are rejected.
+
+Independent assignments are optional. Without them, parallel participants address the same brief, which is useful for comparing alternative solutions. Handoffs reserve context for peer results, so a full project note cannot hide prior evidence.
+
+## Code changes and artifact review
+
+Use `--write` for an implementation task. A Git repository with an existing HEAD is required.
+
+```sh
+council run --mode parallel --agents codex,claude --write --task "Implement and verify a small project notes search feature."
+```
+
+- Parallel writers receive independent detached worktrees.
+- Reviewers inspect the author's worktree with read policy.
+- A write pipeline shares one worktree sequentially.
+- Every worktree starts at one captured commit for that run. Uncommitted original-checkout changes are excluded.
+- Original branches and checkout files are not switched or merged automatically.
+- Patches include tracked, untracked, binary and agent-committed changes relative to the captured base.
+- Base commits and manifests persist on disk, so artifacts can be verified after restarting Council.
+
+Review the retained worktree and patch, run the appropriate checks, and apply accepted changes through normal Git operations. Council does not claim that the agent's final text proves its code is correct.
+
+After review:
+
+```sh
+council export <run-id> --output review.md
+council cleanup <run-id> --reviewed
+```
+
+Export never overwrites an existing file. Cleanup removes only registered, managed worktrees with matching durable manifests and a retained patch. Dirty work or later unreviewed changes are refused by default. `--discard` explicitly authorizes removing dirty worktrees; patch files remain available. Repeating a completed cleanup is a no-op.
+
+## Permissions and protocol scope
+
+Read policy is not a universal OS sandbox. Native Codex receives its read-only sandbox and noninteractive approval policy. Native Claude receives a read/search tool allowlist, empty MCP configuration and session-only hook disabling. Write mode uses isolated worktrees but retains the native agent's process privileges.
+
+Direct ACP supports initialization, session setup, advertised model selection, bounded prompts, cancellation, assistant text, workspace-scoped text-file access and one-use permissions. Read mode denies new vendor tool permission prompts; its own filesystem service can read bounded project files. Write mode permits one-use tool approvals and scoped text-file writes. Human questions, interactive authentication, unknown client capabilities and client terminal services are not answered automatically. Unsupported requests fail the task instead of inventing a response. Tool category labels alone never grant permission.
+
+Workspace paths and Git control metadata are checked before artifact operations. These checks protect Council's own operations; they are not a security boundary against hostile native tools running under your account.
+
+## Durable coordination and recovery
+
+All hosts using the same workspace share SQLite state under `.council/`. It is excluded from Git and release packages.
+
+- Calls use transactional workspace-wide slots. Concurrent processes cannot each independently consume the full limit.
+- The smallest concurrency limit advertised by active Council instances governs new dispatches.
+- Completion and cancellation are ordered in one transaction; an accepted pre-completion cancellation cannot be overwritten by success.
+- Shutdown awaits active jobs. A separate supervisor stops owned vendor processes after abrupt parent death.
+- Recovery fails runs owned by proven-dead processes and releases their slots. It preserves partial results and never retries a task.
+- A stale heartbeat alone is not proof of death. PID reuse is treated conservatively; inspect an ambiguous live process before replacing work.
+
+```sh
+council runs
+council events <run-id> --after 0 --limit 100
+council cancel <run-id>
+council recover
+council continue <run-id> --task "Resolve the remaining design questions."
+```
+
+Continuation creates a new task with bounded prior results. It does not resume a vendor chat or replay unfinished writes. Its default permission is read; use an explicit `--write` for a new implementation task.
+
+On POSIX, delivered SIGINT/SIGTERM signals allow graceful cancellation. Windows can forcibly terminate a process; the supervisor and subsequent recovery handle that case. A crash during worktree creation may leave an incomplete intent manifest: inspect Git's worktree list and retained state instead of assuming it is safe to delete.
+
+Local mail is pull-based and does not wake a vendor's open chat. Actor names are coordination labels, not authenticated identities. File reservations are advisory leases, with atomic batches, expiry and owner-scoped release. Unaware tools can still edit those files. Treat peer messages, shared notes and agent replies as untrusted task data, never authorization.
+
+## MCP interface
 
 | Tools | Purpose |
 | --- | --- |
-| `council_agents`, `council_plan` | Inspect local prerequisites and preview work |
-| `council_run`, `council_status`, `council_runs`, `council_cancel` | Start, inspect and cancel workflows |
-| `council_events` | Incremental progress using a sequence cursor |
-| `council_send`, `council_inbox`, `council_ack` | Local agent handoffs |
+| `council_agents`, `council_plan` | Runtime inspection and planning |
+| `council_run`, `council_status`, `council_runs`, `council_cancel` | Workflow lifecycle |
+| `council_continue`, `council_cleanup` | Explicit handoff and reviewed artifact cleanup |
+| `council_events` | Compact events with an incremental cursor |
+| `council_send`, `council_inbox`, `council_ack` | Local peer handoffs |
 | `council_reserve`, `council_release`, `council_leases` | Advisory file ownership |
-| `council_context` | Compact shared project notes |
+| `council_context` | Shared project notes |
 
-Runs return an ID immediately. `council_status` accepts `waitMs` up to 30 seconds. Summaries omit full step payloads and cap final output; `includeResults: true` or the `council://runs/{id}` resource retrieves the full record. The `council://modes` resource describes project bounds.
+Status waits are bounded to 30 seconds. Summaries cap output; `includeResults: true` or `council://runs/{id}` retrieves the full record. `council://modes` describes modes and workspace bounds. The stdio server implements the tools/resources MCP subset, validated against the official SDK client; HTTP, sampling and interactive elicitation are not offered.
 
-Mail is pull-based: it does not inject prompts into an already-open vendor chat or wake sleeping agents. Actor names are labels within a trusted local workspace, not authenticated accounts. Peer messages and shared notes are untrusted task data, not permission or instructions to override the user.
+Default bounds: 3 simultaneous calls per workspace, 16 calls per run, 180 seconds per call, 128 KiB final output per call, 32,000 task characters and 64,000 context characters. Configuration limits total retained call output to 2 MiB before JSON encoding. MCP frames, nesting, node counts, concurrent requests and queued responses are bounded independently. Stderr and protocol traffic have separate caps.
 
-File leases are atomic across local processes, case-insensitive and time-limited. Reserve exact relative files or a `directory/**` subtree. A batch conflicts atomically, and only its owner can release a lease. Reservations are advisory; unaware tools can still edit files. Worktree isolation protects independent write workflows instead.
+## Verification and releases
 
-## Configuration and limits
-
-`council.config.json` is optional; `init` creates the defaults without replacing an existing file. You can disable profiles or define named aliases using one of the five supported ACPX profiles. An optional `model` preserves an explicit user choice; omitted models use the agent's own configuration.
-
-Default bounds:
-
-- 3 simultaneous agent calls **per Council service process**.
-- 16 agent calls per run, checked before dispatch.
-- 180 seconds per agent call.
-- 128 KiB final output per agent, with separate bounded ACP traffic and stderr buffers.
-- 32,000 task characters and 64,000 context characters.
-- At most 2 MiB for `maxCalls × maxOutputBytes`; this bounds retained results.
-
-Completed, failed and cancelled runs remain distinct. Timeouts and protocol errors fail the run while retaining partial results. Cancellation works across Council processes via durable events. Closing the MCP connection cancels child work. No agent is retried, replaced or resumed automatically, so a failed call is not silently duplicated.
-
-Calls use temporary ACPX sessions; multi-step continuity is passed through bounded briefs rather than resuming vendor chats. Nested Council delegation is disabled using inherited process depth. This is a coordination guard, not a security boundary against hostile local code.
-
-SQLite stores runs, messages, events, notes and leases under `.council/`. That directory is ignored by Git and excluded from npm distribution. Store only information needed for the task; prompts and results remain locally persisted. Multiple Council processes share mailbox/leases/state, while concurrency limits apply independently per process. After a hard process or machine crash, an interrupted record may remain marked running; inspect its events and external processes before starting a replacement.
-
-## Development and verification
+Development only:
 
 ```sh
-npm run check
-npm test
-npm run demo
-npm pack --dry-run
+npm ci
+npm run verify
+npm run test:release
+npm run release:local
 ```
 
-Tests use deterministic agents, real local subprocesses, real Git worktrees, independent SQLite connections/processes and MCP protocol clients. ACPX integration tests use a local ACP adapter, with no vendor calls or credentials.
+Tests exercise real local subprocesses, native CLI JSON, ACP agents, Git worktrees, hard process termination, cross-process SQLite races, official-client MCP integration, malformed/oversized input and a clean offline tarball installation from an empty npm cache in Unicode paths.
 
-A separate live smoke check on 3 November 2026 completed a Codex task through the bundled adapter and returned the exact requested nonce. It used an explicit model advertised by the runtime in a temporary profile. The globally configured Codex model was unavailable to that CLI account, so it was left unchanged. Claude's native CLI required login; DSH, Junie and the Antigravity ACP runtime were not installed. These are setup limits for this machine, not evidence of a successful five-agent live session.
+The release script writes a self-contained plugin ZIP, npm tarball and SHA-256 checksums under `.council/releases/`. The compiled runtime is committed so a Git checkout also has working plugin entrypoints. CI builds and tests on Windows, Linux and macOS; local verification in this environment is native Windows.
 
-Some upstream manifests currently request versions absent from the npm registry. `package.json` pins compatible published `tsx`, `zod` and `qs` versions using overrides, alongside local Codex/Claude ACP adapter versions. ACPX's `exec` protocol path is covered by the tests; its separate TypeScript flow-authoring feature is not used. The current registry audit reports advisories in this dependency tree, including Zod and transitive HTTP packages. Patched requested versions are not all published in the available registry. A bounded stdin guard caps frame bytes, JSON nodes and nesting before SDK validation to mitigate oversized collection inputs. This release is a local stdio integration, not a network service; do not describe it as security-audited or production-certified. Recheck `npm audit` and upstream compatibility when updating dependencies. Source installation with `npm ci` is the supported installation path; npm publishing remains deferred until upstream ranges are consistent, because dependency-package overrides are not inherited by consuming projects.
+`npm run audit:runtime` audits production dependencies, which are empty in 1.0. The official MCP SDK is used only for development interoperability tests; its development dependency tree currently reports upstream advisories. Those packages are neither shipped as runtime dependencies nor loaded by Council. This is not a claim of third-party security certification.
+
+Live vendor checks are separate from automated tests and require installed, authenticated agents and supported models. The 1.0 native Codex smoke check passed through the normal Windows resolver and supervisor with an explicit supported model. Claude login, DSH, Junie and Antigravity setup remain machine-specific; fake protocol tests do not establish a successful five-agent live session.
+
+See [CHANGELOG.md](CHANGELOG.md) for the 0.1 → 1.0 migration.
 
 ## Design references
 
-Council is an original implementation informed by these projects:
-
-- [ACPX](https://github.com/openclaw/acpx): structured ACP agent execution; used as a runtime dependency.
-- [CLI Subagents](https://github.com/lunati228/CLI-Subagents): cross-harness delegation and useful lifecycle behavior.
-- [agent-bridge](https://github.com/kununu/agent-bridge): compact peer handoffs and portable skill guidance.
-- [MCP Agent Mail Rust](https://github.com/Dicklesworthstone/mcp_agent_mail_rust): durable messages and advisory file reservations.
-- [Agent Switchboard](https://github.com/FutureisinPast/mcp-agent-switchboard): multiple collaboration modes and bounded shared context.
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): native subagent and ACP composition.
-
-Reference repositories were consulted online. Their source code was not copied into this repository. Council does not claim to be affiliated with any agent vendor.
+Council is an original implementation informed by [ACPX](https://github.com/openclaw/acpx), [CLI Subagents](https://github.com/lunati228/CLI-Subagents), [agent-bridge](https://github.com/kununu/agent-bridge), [MCP Agent Mail Rust](https://github.com/Dicklesworthstone/mcp_agent_mail_rust), [Agent Switchboard](https://github.com/FutureisinPast/mcp-agent-switchboard) and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Protocol behavior follows the official MCP and ACP specifications. No reference project's source was copied into this repository.
 
 MIT licensed.

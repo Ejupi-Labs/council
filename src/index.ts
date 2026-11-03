@@ -6,3 +6,8 @@ export * from './engine.js';
 export * from './service.js';
 export * from './mcp.js';
 export * from './transport.js';
+export * from './schema.js';
+export * from './rpc.js';
+export * from './report.js';
+export * from './workspaces.js';
+export * from './version.js';

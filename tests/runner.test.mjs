@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { AcpxRunner, MockRunner, createRunner } from '../dist/runner.js';
+import { AcpxRunner, NativeRunner, MockRunner, createRunner } from '../dist/runner.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/fake-acpx.mjs', import.meta.url));
 const cwd = fileURLToPath(new URL('..', import.meta.url));
@@ -68,16 +68,15 @@ test('child environments increment Council depth to prevent recursive delegation
   assert.equal(result.status, 'completed'); assert.equal(result.output, '4');
 });
 
-test('installed ACPX executes the real flags against a local ACP adapter with explicit permissions', async () => {
+test('direct ACP executes a local adapter with explicit model and permission handling', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'council-acp-smoke-'));
   try {
     const adapter = fileURLToPath(new URL('./fixtures/fake-acp-adapter.mjs', import.meta.url));
-    await writeFile(join(temporary, '.acpxrc.json'), JSON.stringify({ agents: { codex: { argv: [process.execPath, adapter] } }, defaultPermissions: 'approve-all', mcpServers: [] }));
-    const local = new AcpxRunner(config(), { environment: { ...process.env, COUNCIL_DEPTH: '0' } });
+    const local = new NativeRunner(config({ backend: 'native', agents: { codex: { enabled: true, profile: 'codex', transport: 'acp', command: process.execPath, args: [adapter] } } }), { environment: { ...process.env, COUNCIL_DEPTH: '0' } });
     const read = await local.run(request('A local fixture smoke test; no model calls.', { cwd: temporary, timeoutMs: 15_000 }));
     assert.equal(read.status, 'completed', read.error); assert.match(read.output, /depth=1/);
     const denied = await local.run(request('request-write-permission', { cwd: temporary, timeoutMs: 15_000 }));
-    assert.equal(denied.status, 'failed'); assert.match(denied.output, /"optionId":"deny"/);
+    assert.equal(denied.status, 'failed'); assert.match(denied.error, /permission was denied/);
     const write = await local.run(request('request-write-permission', { cwd: temporary, permission: 'write', model: 'fixture-alternate', timeoutMs: 15_000 }));
     assert.equal(write.status, 'completed', write.error); assert.match(write.output, /"optionId":"allow"/);
   } finally { await rm(temporary, { recursive: true, force: true }); }
@@ -115,10 +114,10 @@ test('ACPX handles unavailable entrypoints and disabled agents without throwing'
   assert.equal((await runner().run(request('hello', { agent: 'off' }))).status, 'failed');
 });
 
-test('doctor finds bundled adapters without invoking agents or requiring npx on PATH', async () => {
+test('doctor checks an external ACPX path without invoking agents', async () => {
   const local = new AcpxRunner(config(), { acpxEntrypoint: fixture, environment: { PATH: '' } });
   const health = await local.doctor();
-  assert.equal(health[0].available, true); assert.match(health[0].detail, /bundled.*adapter found; no npx download needed/);
+  assert.equal(health[0].available, true); assert.match(health[0].detail, /External ACPX executable found/);
   assert.equal(health[1].enabled, false);
 });
 

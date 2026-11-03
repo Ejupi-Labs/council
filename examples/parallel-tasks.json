@@ -1,0 +1,5 @@
+{
+  "codex": "Inspect the data model and query performance. Provide evidence from the repository.",
+  "claude": "Review access controls, validation, and privacy. Provide concrete failure cases.",
+  "junie": "Review integration boundaries and test coverage. Provide an acceptance checklist."
+}

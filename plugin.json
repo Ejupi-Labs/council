@@ -1,8 +1,18 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "council",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Coordinate Codex, Claude Code, DeepSeek Harness, Junie and Antigravity with bounded workflows, peer review and shared project memory.",
   "license": "MIT",
-  "keywords": ["multi-agent", "collaboration", "mcp", "acp", "codex", "claude", "junie", "deepseek", "antigravity"]
+  "keywords": [
+    "multi-agent",
+    "collaboration",
+    "mcp",
+    "acp",
+    "codex",
+    "claude",
+    "junie",
+    "deepseek",
+    "antigravity"
+  ]
 }

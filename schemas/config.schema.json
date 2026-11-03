@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council config",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "native",
+        "acpx",
+        "mock"
+      ],
+      "default": "native"
+    },
+    "stateDir": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "default": ".council"
+    },
+    "maxConcurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8,
+      "default": 3
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 3600000,
+      "default": 180000
+    },
+    "maxOutputBytes": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 2097152,
+      "default": 131072
+    },
+    "maxCalls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 16
+    },
+    "agents": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?!__proto__$|constructor$|prototype$)[a-z][a-z0-9-]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "deepseek-harness",
+              "junie",
+              "antigravity"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "native",
+              "acp"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^[^\\u0000]+$"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000]*$"
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "additionalProperties": false
+      },
+      "default": {
+        "codex": {
+          "enabled": true,
+          "profile": "codex"
+        },
+        "claude": {
+          "enabled": true,
+          "profile": "claude"
+        },
+        "deepseek-harness": {
+          "enabled": true,
+          "profile": "deepseek-harness"
+        },
+        "junie": {
+          "enabled": true,
+          "profile": "junie"
+        },
+        "antigravity": {
+          "enabled": true,
+          "profile": "antigravity"
+        }
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

@@ -5,12 +5,15 @@ export type Permission = 'read' | 'write';
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type ResultStatus = 'completed' | 'failed' | 'cancelled' | 'timeout';
 
-export interface AgentConfig { enabled: boolean; profile: string; model?: string }
+export interface AgentConfig {
+  enabled: boolean; profile: string; model?: string;
+  transport?: 'native' | 'acp'; command?: string; args?: string[];
+}
 export interface CouncilConfig {
   version: 1;
   workspaceRoot: string;
   stateDir: string;
-  backend: 'acpx' | 'mock';
+  backend: 'native' | 'acpx' | 'mock';
   maxConcurrency: number;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -42,6 +45,7 @@ export interface WorkflowStep {
 }
 export interface WorkspaceArtifact {
   agent: string; path: string; patchPath: string; changed: boolean;
+  baseCommit?: string;
 }
 export interface RunRecord {
   id: string; input: WorkflowInput; status: RunStatus;

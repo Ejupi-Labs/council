@@ -1,69 +1,192 @@
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { WorkspaceArtifact } from './types.js';
 
 export interface WorkspaceHandle extends WorkspaceArtifact { cwd: string; baseHead: string }
+interface Manifest { path: string; patchPath: string; agent: string; cwd: string; baseHead: string; gitDir?: string; removed?: boolean }
+export interface CleanupOptions { reviewed: true; discardChanges?: boolean }
 
 function segment(value: string): string {
   const label = value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'workspace';
   return `${label}-${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
 }
+function inside(base: string, path: string): boolean {
+  const suffix = relative(base, path);
+  return Boolean(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
+}
 
-/** Retained detached worktrees: this class never changes the user's checkout. */
+/** Retained detached worktrees with durable base metadata and explicit reviewed cleanup. */
 export class GitWorkspaces {
   private readonly root: string;
   private readonly state: string;
+  private readonly runBases = new Map<string, { repo: string; head: string; suffix: string }>();
 
   constructor(workspaceRoot: string, stateDir: string) {
     this.root = resolve(workspaceRoot);
     this.state = resolve(stateDir);
   }
 
-  private git(cwd: string, args: string[], input?: Buffer): Buffer {
-    const result = spawnSync('git', ['-c', 'core.quotePath=false', '-C', cwd, ...args], {
-      shell: false, windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-      input, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    });
-    if (result.error || result.status !== 0) {
-      const detail = result.error?.message ?? result.stderr?.toString('utf8').trim() ?? 'unknown Git failure';
-      throw new Error(`Git workspace operation failed: ${detail}`);
+  /** Check every existing managed ancestor; junctions and symlinks cannot redirect artifacts. */
+  private async checked(path: string, category: string): Promise<string> {
+    const base = join(this.state, category);
+    const target = resolve(path);
+    if (!inside(base, target)) throw new Error('Workspace artifact path is outside its managed directory.');
+    const components = relative(this.state, target).split(sep);
+    let current = this.state;
+    for (const component of ['', ...components]) {
+      if (component) current = join(current, component);
+      try {
+        if ((await lstat(current)).isSymbolicLink()) throw new Error('Managed workspace paths cannot contain symlinks or junctions.');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
     }
-    return result.stdout;
+    return target;
   }
 
-  create(runId: string, agent: string, slot = agent): WorkspaceHandle {
-    let repo: string;
-    let head: string;
+  private manifestPath(path: string): string {
+    const parts = relative(join(this.state, 'worktrees'), resolve(path)).split(sep);
+    if (parts.length !== 2 || parts.some(part => !/^[a-zA-Z0-9_-]+$/.test(part))) throw new Error('Not a managed Council worktree path.');
+    return join(this.state, 'workspace-manifests', parts[0]!, `${parts[1]!}.json`);
+  }
+
+  private async atomicWrite(path: string, data: string | Buffer, category: string, exclusive = false): Promise<void> {
+    await this.checked(path, category);
+    await mkdir(dirname(path), { recursive: true });
+    await this.checked(path, category);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    let handle;
     try {
-      repo = this.git(this.root, ['rev-parse', '--show-toplevel']).toString('utf8').trim();
-      head = this.git(this.root, ['rev-parse', '--verify', 'HEAD^{commit}']).toString('utf8').trim();
-    } catch {
-      throw new Error('Write workflows require a Git repository with an existing HEAD commit. Commit the project before creating isolated worktrees.');
+      handle = await open(temporary, 'wx', 0o600);
+      await handle.writeFile(data);
+      await handle.sync();
+      await handle.close(); handle = undefined;
+      await this.checked(path, category);
+      if (exclusive) await link(temporary, path);
+      else await rename(temporary, path);
+    } finally {
+      await handle?.close();
+      await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
     }
-    const suffix = relative(resolve(repo), this.root);
-    if (suffix.startsWith('..') || resolve(repo, suffix) !== this.root) {
-      throw new Error('The configured workspace must be inside its Git repository.');
+  }
+
+  private git(cwd: string, args: string[], input?: Buffer, signal?: AbortSignal): Promise<Buffer> {
+    if (signal?.aborted) return Promise.reject(new Error('Git workspace operation cancelled.'));
+    return new Promise((accept, reject) => {
+      const child = spawn('git', ['-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + join(this.state, 'disabled-hooks'), '-C', cwd, ...args], {
+        shell: false, windowsHide: true, detached: process.platform !== 'win32',
+        stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      let diagnostics = '';
+      let failure: Error | undefined;
+      let killerDone: Promise<void> | undefined;
+      const stop = (message: string): void => {
+        if (failure) return;
+        failure = new Error(message);
+        if (!child.pid) return;
+        if (process.platform === 'win32') {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { shell: false, windowsHide: true, stdio: 'ignore', timeout: 5000 });
+          killerDone = new Promise<void>(done => {
+            killer.once('error', () => { child.kill(); done(); });
+            killer.once('close', code => { if (code !== 0) child.kill(); done(); });
+          });
+        } else {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+        }
+      };
+      const abort = (): void => { stop('Git workspace operation cancelled.'); };
+      const timer = setTimeout(() => stop('Git workspace operation timed out.'), 60_000);
+      signal?.addEventListener('abort', abort, { once: true });
+      child.stdout.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 64 * 1024 * 1024) stop('Git workspace output exceeds 64 MiB.');
+        else chunks.push(chunk);
+      });
+      child.stderr.on('data', (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString('utf8')).slice(0, 4096); });
+      child.stdin.on('error', () => { /* Process completion determines the result. */ });
+      child.on('error', error => { failure ??= error; });
+      child.once('close', async code => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        await killerDone;
+        if (failure || code !== 0) reject(failure ?? new Error(`Git workspace operation failed: ${diagnostics.trim() || `exit ${code}`}`));
+        else accept(Buffer.concat(chunks));
+      });
+      child.stdin.end(input);
+    });
+  }
+
+  async create(runId: string, agent: string, slot = agent, signal?: AbortSignal): Promise<WorkspaceHandle> {
+    let base = this.runBases.get(runId);
+    if (!base) {
+      try {
+        const repo = (await this.git(this.root, ['rev-parse', '--show-toplevel'], undefined, signal)).toString('utf8').trim();
+        const head = (await this.git(this.root, ['rev-parse', '--verify', 'HEAD^{commit}'], undefined, signal)).toString('utf8').trim();
+        const suffix = relative(resolve(repo), this.root);
+        if (suffix && !inside(resolve(repo), this.root)) throw new Error('Workspace is outside its Git repository.');
+        base = { repo, head, suffix };
+        this.runBases.set(runId, base);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error('Write workflows require a Git repository with an existing HEAD commit. Commit the project before creating isolated worktrees.');
+      }
     }
     const path = join(this.state, 'worktrees', segment(runId), segment(slot));
     const patchPath = join(this.state, 'patches', segment(runId), `${segment(slot)}.patch`);
-    mkdirSync(dirname(path), { recursive: true });
-    this.git(this.root, ['worktree', 'add', '--detach', path, head]);
-    return { agent, path, patchPath, changed: false, cwd: join(path, suffix), baseHead: head };
+    await this.checked(path, 'worktrees');
+    await this.checked(patchPath, 'patches');
+    await mkdir(dirname(path), { recursive: true });
+    const manifest: Manifest = { agent, path, patchPath, cwd: join(path, base.suffix), baseHead: base.head };
+    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', true);
+    await this.git(this.root, ['worktree', 'add', '--detach', path, base.head], undefined, signal);
+    manifest.gitDir = (await this.git(path, ['rev-parse', '--absolute-git-dir'])).toString('utf8').trim();
+    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests');
+    return { agent, path, patchPath, changed: false, cwd: manifest.cwd, baseHead: base.head, baseCommit: base.head };
   }
 
-  export(handle: WorkspaceHandle): WorkspaceArtifact {
-    // Intent-to-add makes new files appear in a normal binary-capable Git patch.
-    // Passing NUL-separated paths on stdin avoids shell parsing and argv limits.
-    const untracked = this.git(handle.path, ['ls-files', '--others', '--exclude-standard', '-z']);
-    if (untracked.length > 0) {
-      this.git(handle.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked);
-    }
-    const patch = this.git(handle.path, ['diff', '--binary', '--no-ext-diff', '--no-textconv', handle.baseHead, '--']);
-    mkdirSync(dirname(handle.patchPath), { recursive: true });
-    writeFileSync(handle.patchPath, patch);
-    handle.changed = patch.length > 0;
-    return { agent: handle.agent, path: handle.path, patchPath: handle.patchPath, changed: handle.changed };
+  private async verify(artifact: WorkspaceArtifact): Promise<Manifest> {
+    await this.checked(artifact.path, 'worktrees');
+    const manifestFile = await this.checked(this.manifestPath(artifact.path), 'workspace-manifests');
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as Manifest;
+    const expectedPatch = join(this.state, 'patches', ...relative(join(this.state, 'worktrees'), artifact.path).split(sep)) + '.patch';
+    if (manifest.removed || manifest.path !== resolve(artifact.path) || manifest.patchPath !== expectedPatch || artifact.patchPath !== expectedPatch || !/^[a-f0-9]{40,64}$/.test(manifest.baseHead)) throw new Error('Workspace artifact does not match its managed manifest.');
+    if (artifact.baseCommit && artifact.baseCommit !== manifest.baseHead) throw new Error('Workspace base commit does not match its manifest.');
+    await this.checked(expectedPatch, 'patches');
+    const pointer = join(manifest.path, '.git');
+    const metadata = await lstat(pointer);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error('Managed worktree Git metadata must be a regular file.');
+    const match = /^gitdir: (.+)\s*$/.exec((await readFile(pointer, 'utf8')).trim());
+    if (!match || !manifest.gitDir || await realpath(resolve(manifest.path, match[1]!.trim())) !== await realpath(manifest.gitDir)) throw new Error('Managed worktree Git metadata has been redirected.');
+    const registered = (await this.git(this.root, ['worktree', 'list', '--porcelain', '-z'])).toString('utf8').split('\0').filter(item => item.startsWith('worktree ')).map(item => resolve(item.slice(9)));
+    if (!registered.includes(resolve(manifest.path))) throw new Error('Worktree is no longer registered with the original repository.');
+    return manifest;
+  }
+
+  async export(artifact: WorkspaceArtifact): Promise<WorkspaceArtifact> {
+    const manifest = await this.verify(artifact);
+    const untracked = await this.git(manifest.path, ['ls-files', '--others', '--exclude-standard', '-z']);
+    if (untracked.length > 0) await this.git(manifest.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked);
+    const patch = await this.git(manifest.path, ['diff', '--binary', '--no-ext-diff', '--no-textconv', manifest.baseHead, '--']);
+    await this.atomicWrite(manifest.patchPath, patch, 'patches');
+    return { agent: artifact.agent, path: manifest.path, patchPath: manifest.patchPath, changed: patch.length > 0, baseCommit: manifest.baseHead };
+  }
+
+  forgetRun(runId: string): void { this.runBases.delete(runId); }
+
+  async cleanup(artifact: WorkspaceArtifact, options: CleanupOptions): Promise<void> {
+    if (options?.reviewed !== true) throw new Error('Explicit review is required before worktree cleanup.');
+    const manifest = await this.verify(artifact);
+    const patch = await lstat(manifest.patchPath).catch(() => undefined);
+    if (!patch?.isFile() || patch.isSymbolicLink()) throw new Error('Export and review a regular patch file before cleanup.');
+    const current = await this.git(manifest.path, ['diff', '--binary', '--no-ext-diff', '--no-textconv', manifest.baseHead, '--']);
+    const saved = await readFile(manifest.patchPath);
+    if (options.discardChanges !== true && !current.equals(saved)) throw new Error('The worktree changed since patch export. Export and review it again before cleanup.');
+    await this.git(this.root, ['worktree', 'remove', ...(options.discardChanges === true ? ['--force'] : []), manifest.path]);
+    manifest.removed = true;
+    await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests');
   }
 }

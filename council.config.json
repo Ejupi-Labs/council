@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "backend": "acpx",
+  "backend": "native",
   "stateDir": ".council",
   "maxConcurrency": 3,
   "timeoutMs": 180000,

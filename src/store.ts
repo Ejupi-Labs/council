@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord } from './types.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -51,6 +51,15 @@ function overlaps(left: string, right: string): boolean {
   return contains(a, b) || contains(b, a);
 }
 
+function processAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+}
+
+type OwnedRunRow = { document: string; owner_instance: string | null; owner_pid: number | null; cancel_requested: number };
+type InstanceRow = { id: string; pid: number; heartbeat_at: number; slot_limit: number | null };
+
 /** Durable collaboration state shared by all Council processes in one workspace. */
 export class CouncilStore {
   private readonly db: DatabaseSync;
@@ -61,9 +70,10 @@ export class CouncilStore {
     this.db = new DatabaseSync(databasePath);
     try {
       this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-      const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-      if (version.user_version > SCHEMA_VERSION) throw new Error(`Council state schema ${version.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
       this.transaction(() => {
+        // Recheck under the migration lock: another process may have upgraded while opening.
+        const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+        if (version.user_version > SCHEMA_VERSION) throw new Error(`Council state schema ${version.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, document TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -72,7 +82,19 @@ export class CouncilStore {
           CREATE INDEX IF NOT EXISTS messages_inbox ON messages(recipient, created_at);
           CREATE TABLE IF NOT EXISTS leases (id TEXT PRIMARY KEY, owner TEXT NOT NULL, path TEXT NOT NULL, path_key TEXT NOT NULL UNIQUE, run_id TEXT, expires_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS context (key TEXT PRIMARY KEY, value TEXT NOT NULL, author TEXT NOT NULL, updated_at TEXT NOT NULL);
-          PRAGMA user_version = 1;
+        `);
+        if (version.user_version < 2) this.db.exec(`
+          ALTER TABLE runs ADD COLUMN owner_instance TEXT;
+          ALTER TABLE runs ADD COLUMN owner_pid INTEGER;
+          ALTER TABLE runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
+        `);
+        this.db.exec(`
+          CREATE INDEX IF NOT EXISTS runs_owner ON runs(owner_instance);
+          CREATE INDEX IF NOT EXISTS runs_unfinished_owner ON runs(owner_instance) WHERE json_extract(document, '$.status') IN ('queued', 'running');
+          CREATE TABLE IF NOT EXISTS instances (id TEXT PRIMARY KEY, pid INTEGER NOT NULL, registered_at INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL, slot_limit INTEGER);
+          CREATE TABLE IF NOT EXISTS slots (token TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, run_id TEXT NOT NULL, acquired_at INTEGER NOT NULL);
+          CREATE INDEX IF NOT EXISTS slots_instance ON slots(instance_id);
+          PRAGMA user_version = 2;
         `);
       });
       if (process.platform !== 'win32') chmodSync(databasePath, 0o600);
@@ -97,8 +119,14 @@ export class CouncilStore {
   saveRun(run: RunRecord): void {
     text(run.id, 'Run id', 256);
     text(run.updatedAt, 'Run timestamp', 64);
-    this.db.prepare('INSERT INTO runs(id, updated_at, document) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, document = excluded.document')
-      .run(run.id, run.updatedAt, encode(run, MAX_RUN_JSON_BYTES));
+    const document = encode(run, MAX_RUN_JSON_BYTES);
+    this.transaction(() => {
+      const existing = this.ownedRun(run.id);
+      if (existing?.owner_instance) this.assertRunOwner(existing);
+      // Cancellation and owner columns are deliberately absent from the partial-update clause.
+      this.db.prepare('INSERT INTO runs(id, updated_at, document) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, document = excluded.document')
+        .run(run.id, run.updatedAt, document);
+    });
   }
 
   getRun(id: string): RunRecord | undefined {
@@ -170,7 +198,7 @@ export class CouncilStore {
     return this.transaction(() => {
       const now = Date.now();
       this.db.prepare('DELETE FROM leases WHERE expires_at <= ?').run(now);
-      const active = this.readLeases();
+      const active = this.readLeases(now);
       for (const requested of normalized) {
         const conflict = active.find(lease => lease.owner !== owner && lease.paths.some(path => overlaps(path, requested)));
         if (conflict) throw new Error(`Reservation conflict: ${requested} overlaps ${conflict.paths[0]} owned by ${conflict.owner} until ${conflict.expiresAt}`);
@@ -179,7 +207,7 @@ export class CouncilStore {
       return normalized.map(path => {
         const existing = active.find(lease => lease.owner === owner && lease.paths[0]?.toLowerCase() === path.toLowerCase());
         const lease: Lease = { id: existing?.id ?? randomUUID(), owner, paths: [path], expiresAt, ...(runId === undefined ? {} : { runId }) };
-        this.db.prepare('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at')
+        this.db.prepare('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET id = excluded.id, owner = excluded.owner, path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at')
           .run(lease.id, owner, path, path.toLowerCase(), runId ?? null, now + ttlMs);
         return lease;
       });
@@ -194,8 +222,8 @@ export class CouncilStore {
     return this.transaction(() => normalized.reduce((count, path) => count + Number(this.db.prepare('DELETE FROM leases WHERE owner = ? AND path_key = ?').run(owner, path.toLowerCase()).changes), 0));
   }
 
-  private readLeases(): Lease[] {
-    const rows = this.db.prepare('SELECT id, owner, path, run_id, expires_at FROM leases WHERE expires_at > ? ORDER BY path_key').all(Date.now()) as {
+  private readLeases(now = Date.now()): Lease[] {
+    const rows = this.db.prepare('SELECT id, owner, path, run_id, expires_at FROM leases WHERE expires_at > ? ORDER BY path_key').all(now) as {
       id: string; owner: string; path: string; run_id: string | null; expires_at: number;
     }[];
     return rows.map(row => ({ id: row.id, owner: row.owner, paths: [row.path], expiresAt: new Date(row.expires_at).toISOString(), ...(row.run_id === null ? {} : { runId: row.run_id }) }));
@@ -224,6 +252,167 @@ export class CouncilStore {
   listContext(): ContextEntry[] {
     const rows = this.db.prepare('SELECT key, value, author, updated_at FROM context ORDER BY updated_at DESC, key LIMIT 100').all() as { key: string; value: string; author: string; updated_at: string }[];
     return rows.map(row => ({ key: row.key, value: row.value, author: row.author, updatedAt: row.updated_at }));
+  }
+
+  registerInstance(instanceId: string, pid: number): void {
+    text(instanceId, 'Instance id', 128);
+    if (!Number.isSafeInteger(pid) || pid !== process.pid) throw new Error('A Council instance must register its own process PID.');
+    this.transaction(() => {
+      const existing = this.instance(instanceId);
+      if (existing && existing.pid !== pid) throw new Error('This Council instance ID is already registered by another process.');
+      const now = Date.now();
+      this.db.prepare('INSERT INTO instances(id, pid, registered_at, heartbeat_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at')
+        .run(instanceId, pid, now, now);
+    });
+  }
+
+  heartbeat(instanceId: string): boolean {
+    text(instanceId, 'Instance id', 128);
+    return this.db.prepare('UPDATE instances SET heartbeat_at = ? WHERE id = ? AND pid = ?').run(Date.now(), instanceId, process.pid).changes > 0;
+  }
+
+  unregisterInstance(instanceId: string): void {
+    text(instanceId, 'Instance id', 128);
+    this.transaction(() => {
+      const instance = this.instance(instanceId);
+      if (!instance) return;
+      if (instance.pid !== process.pid) throw new Error('Only the owning process can unregister a Council instance.');
+      const active = this.db.prepare("SELECT 1 FROM runs WHERE owner_instance = ? AND json_extract(document, '$.status') IN ('queued', 'running') LIMIT 1").get(instanceId);
+      if (active) {
+        throw new Error('Cannot unregister a Council instance while it owns unfinished runs.');
+      }
+      this.db.prepare('DELETE FROM instances WHERE id = ?').run(instanceId);
+    });
+  }
+
+  claimRun(runId: string, instanceId: string): void {
+    text(runId, 'Run id', 256);
+    text(instanceId, 'Instance id', 128);
+    this.transaction(() => {
+      const instance = this.assertInstance(instanceId);
+      const row = this.ownedRun(runId);
+      if (!row) throw new Error('Cannot claim a run that does not exist.');
+      if (!['queued', 'running'].includes((JSON.parse(row.document) as RunRecord).status)) throw new Error('Cannot claim a run that already reached a terminal state.');
+      if (row.owner_instance && row.owner_instance !== instanceId) {
+        const owner = this.instance(row.owner_instance);
+        if (owner && processAlive(owner.pid)) throw new Error('This run is already owned by a live Council instance.');
+        throw new Error('This run has an orphaned owner; recover it before starting a replacement.');
+      }
+      this.db.prepare('UPDATE runs SET owner_instance = ?, owner_pid = ? WHERE id = ?').run(instanceId, instance.pid, runId);
+    });
+  }
+
+  requestCancellation(runId: string): boolean {
+    text(runId, 'Run id', 256);
+    return this.transaction(() => {
+      const row = this.ownedRun(runId);
+      if (!row || !['queued', 'running'].includes((JSON.parse(row.document) as RunRecord).status) || row.cancel_requested) return false;
+      this.db.prepare('UPDATE runs SET cancel_requested = 1 WHERE id = ?').run(runId);
+      if (!this.legacyCancellation(runId)) this.appendEvent(runId, 'cancel_requested', {});
+      return true;
+    });
+  }
+
+  /** Final completion and a concurrent cancellation request are ordered by one SQLite transaction. */
+  finalizeRun(run: RunRecord): RunRecord {
+    text(run.id, 'Run id', 256);
+    if (['queued', 'running'].includes(run.status)) throw new Error('Only a terminal run can be finalized.');
+    return this.transaction(() => {
+      const row = this.ownedRun(run.id);
+      if (!row) throw new Error('Cannot finalize a run that does not exist.');
+      const existing = JSON.parse(row.document) as RunRecord;
+      if (row.owner_instance) this.assertRunOwner(row);
+      // A previously settled failure/cancellation cannot be rewritten by a stale completion.
+      if (['failed', 'cancelled'].includes(existing.status) && existing.status !== run.status) return existing;
+      const final = structuredClone(run);
+      if (final.status === 'completed' && (row.cancel_requested || this.legacyCancellation(run.id))) {
+        final.status = 'cancelled';
+        final.error = 'Cancellation was requested before workflow completion.';
+      }
+      final.updatedAt = new Date().toISOString();
+      this.db.prepare('UPDATE runs SET document = ?, updated_at = ? WHERE id = ?').run(encode(final, MAX_RUN_JSON_BYTES), final.updatedAt, run.id);
+      return final;
+    });
+  }
+
+  acquireSlot(instanceId: string, runId: string, limit: number): string | undefined {
+    text(instanceId, 'Instance id', 128);
+    text(runId, 'Run id', 256);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 32) throw new Error('The shared concurrency limit must be from 1 to 32.');
+    return this.transaction(() => {
+      this.assertInstance(instanceId);
+      this.recoverDeadOwners();
+      const row = this.ownedRun(runId);
+      if (!row || row.owner_instance !== instanceId) throw new Error('The Council instance does not own this run.');
+      if (!['queued', 'running'].includes((JSON.parse(row.document) as RunRecord).status)) throw new Error('This run is no longer active.');
+      if (row.cancel_requested || this.legacyCancellation(runId)) throw new Error('Cancellation has been requested for this run.');
+      this.db.prepare('UPDATE instances SET slot_limit = ? WHERE id = ?').run(limit, instanceId);
+      const minimum = this.db.prepare('SELECT MIN(slot_limit) AS value FROM instances WHERE slot_limit IS NOT NULL').get() as { value: number };
+      const active = this.db.prepare('SELECT COUNT(*) AS value FROM slots').get() as { value: number };
+      if (active.value >= minimum.value) return undefined;
+      const token = randomUUID();
+      this.db.prepare('INSERT INTO slots(token, instance_id, run_id, acquired_at) VALUES (?, ?, ?, ?)').run(token, instanceId, runId, Date.now());
+      return token;
+    });
+  }
+
+  releaseSlot(token: string, instanceId: string): void {
+    text(token, 'Slot token', 256);
+    text(instanceId, 'Instance id', 128);
+    this.db.prepare('DELETE FROM slots WHERE token = ? AND instance_id = ?').run(token, instanceId);
+  }
+
+  /** Heartbeat age alone is never proof that a process is dead. PID reuse is intentionally conservative. */
+  recoverOrphans(): RunRecord[] { return this.transaction(() => this.recoverDeadOwners()); }
+
+  private instance(instanceId: string): InstanceRow | undefined {
+    return this.db.prepare('SELECT id, pid, heartbeat_at, slot_limit FROM instances WHERE id = ?').get(instanceId) as InstanceRow | undefined;
+  }
+
+  private assertInstance(instanceId: string): InstanceRow {
+    const instance = this.instance(instanceId);
+    if (!instance || instance.pid !== process.pid || !processAlive(instance.pid)) throw new Error('The Council owner instance is not registered to this live process.');
+    return instance;
+  }
+
+  private ownedRun(runId: string): OwnedRunRow | undefined {
+    return this.db.prepare('SELECT document, owner_instance, owner_pid, cancel_requested FROM runs WHERE id = ?').get(runId) as OwnedRunRow | undefined;
+  }
+
+  private assertRunOwner(row: OwnedRunRow): void {
+    if (!row.owner_instance) return;
+    const owner = this.instance(row.owner_instance);
+    if (!owner || owner.pid !== process.pid || owner.pid !== row.owner_pid) throw new Error('This process no longer owns the Council run.');
+  }
+
+  private legacyCancellation(runId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM events WHERE run_id = ? AND type = 'cancel_requested' LIMIT 1").get(runId) !== undefined;
+  }
+
+  private recoverDeadOwners(): RunRecord[] {
+    const instances = this.db.prepare('SELECT id, pid, heartbeat_at, slot_limit FROM instances').all() as InstanceRow[];
+    const alive = new Map(instances.map(instance => [instance.id, processAlive(instance.pid)]));
+    const dead = new Set(instances.filter(instance => !alive.get(instance.id)).map(instance => instance.id));
+    const rows = this.db.prepare("SELECT document, owner_instance, owner_pid, cancel_requested FROM runs WHERE owner_instance IS NOT NULL AND json_extract(document, '$.status') IN ('queued', 'running')").all() as OwnedRunRow[];
+    const recovered: RunRecord[] = [];
+    for (const row of rows) {
+      const run = JSON.parse(row.document) as RunRecord;
+      if (!['queued', 'running'].includes(run.status) || !row.owner_instance || row.owner_pid === null) continue;
+      const ownerAlive = alive.get(row.owner_instance) ?? processAlive(row.owner_pid);
+      if (ownerAlive) continue;
+      dead.add(row.owner_instance);
+      run.status = 'failed';
+      run.error = 'The Council owner process exited before this workflow finished. Inspect retained worktrees before starting a replacement; no task was retried.';
+      run.updatedAt = new Date().toISOString();
+      this.db.prepare('UPDATE runs SET document = ?, updated_at = ? WHERE id = ?').run(encode(run, MAX_RUN_JSON_BYTES), run.updatedAt, run.id);
+      this.appendEvent(run.id, 'run.failed', { reason: 'owner_exited', status: 'failed' });
+      recovered.push(run);
+    }
+    for (const instanceId of dead) {
+      this.db.prepare('DELETE FROM slots WHERE instance_id = ?').run(instanceId);
+      this.db.prepare('DELETE FROM instances WHERE id = ?').run(instanceId);
+    }
+    return recovered;
   }
 
   close(): void { this.db.close(); }

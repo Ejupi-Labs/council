@@ -6,14 +6,27 @@ let pendingPrompt;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   const event = JSON.parse(line);
   if (event.method === 'initialize') {
-    send({ id: event.id, result: { protocolVersion: event.params.protocolVersion, agentCapabilities: {},
+    if (!event.params.clientCapabilities.fs.readTextFile || event.params.clientCapabilities.terminal) throw Error('Only the bounded filesystem capability is supported');
+    send({ id: event.id, result: { protocolVersion: process.env.COUNCIL_TEST_ACP_CASE === 'version' ? 99 : event.params.protocolVersion, agentCapabilities: {},
       agentInfo: { name: 'council-local-fixture', version: '1.0.0' }, authMethods: [] } });
   } else if (event.method === 'session/new') {
+    if (process.env.COUNCIL_TEST_ACP_CASE === 'auth') { send({ id: event.id, error: { code: -32000, message: 'auth_required SECRET_ACCESS_TOKEN=do-not-print' } }); continue; }
     send({ id: event.id, result: { sessionId: 'council-fixture-session', models: {
       currentModelId: 'fixture-default', availableModels: [{ modelId: 'fixture-default', name: 'Fixture default' }, { modelId: 'fixture-alternate', name: 'Fixture alternate' }],
     } } });
   } else if (event.method === 'session/prompt') {
     pendingPrompt = event.id;
+    if (['fs-read', 'fs-write', 'fs-flood', 'fs-session'].includes(process.env.COUNCIL_TEST_ACP_CASE)) {
+      const kind = process.env.COUNCIL_TEST_ACP_CASE;
+      for (let index = 0; index < (kind === 'fs-flood' ? 9 : 1); index++) send({ id: `fixture-file-${index}`, method: kind === 'fs-write' ? 'fs/write_text_file' : 'fs/read_text_file',
+        params: { sessionId: kind === 'fs-session' ? 'wrong-session' : 'council-fixture-session', path: process.env.COUNCIL_TEST_FILE,
+          ...(kind === 'fs-write' ? { content: 'changed by ACP fixture' } : { line: null, limit: null }) } });
+      continue;
+    }
+    if (process.env.COUNCIL_TEST_ACP_CASE === 'unknown-request') {
+      send({ id: 'fs-request', method: 'fs/write_text_file', params: { sessionId: 'council-fixture-session', path: '/not-used', content: 'Never written' } }); continue;
+    }
+    if (process.env.COUNCIL_TEST_ACP_CASE === 'hang') { setInterval(() => {}, 1000); continue; }
     if (!event.params.prompt.some(content => content.type === 'text' && content.text.includes('request-write-permission'))) {
       send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: `Local ACP fixture completed; depth=${process.env.COUNCIL_DEPTH}` } } } });
@@ -21,9 +34,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       continue;
     }
     send({ id: 'fixture-permission', method: 'session/request_permission', params: { sessionId: 'council-fixture-session',
-      toolCall: { toolCallId: 'fake-write', title: 'Write a fixture file', kind: 'edit', status: 'pending' },
-      options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'deny', name: 'Reject once', kind: 'reject_once' }],
+      toolCall: { toolCallId: 'fake-write', title: 'Write a fixture file', kind: process.env.COUNCIL_TEST_ACP_CASE === 'read-permission' ? 'read' : 'edit', status: 'pending' },
+      options: [{ optionId: process.env.COUNCIL_TEST_ACP_CASE === 'question' ? 'interaction_yes' : 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'deny', name: 'Reject once', kind: 'reject_once' }],
     } });
+  } else if (typeof event.id === 'string' && event.id.startsWith('fixture-file-') && event.result) {
+    send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(event.result) } } } });
+    send({ id: pendingPrompt, result: { stopReason: 'end_turn' } });
   } else if (event.id === 'fixture-permission' && event.result) {
     send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: `Local ACP fixture: ${JSON.stringify(event.result.outcome)}; depth=${process.env.COUNCIL_DEPTH}` } } } });

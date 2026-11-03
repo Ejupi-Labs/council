@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council workflow",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "delegate",
+        "review",
+        "debate",
+        "parallel",
+        "pipeline",
+        "council"
+      ]
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32000
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "judge": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "permission": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ],
+      "default": "read"
+    },
+    "context": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 64000
+    },
+    "maxCalls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "assignments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32000
+      }
+    }
+  },
+  "required": [
+    "mode",
+    "task",
+    "agents"
+  ],
+  "additionalProperties": false
+}

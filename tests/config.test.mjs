@@ -14,7 +14,7 @@ function workspace(t) {
 test('configuration defaults and aliases preserve explicit models and bounds', t => {
   const root = workspace(t);
   const config = loadConfig(root);
-  assert.equal(config.backend, 'acpx');
+  assert.equal(config.backend, 'native');
   assert.equal(config.maxCalls * config.maxOutputBytes, 2_097_152);
   writeFileSync(join(root, 'council.config.json'), JSON.stringify({ agents: { reviewer: { enabled: true, profile: 'claude', model: 'user-selected-model' } } }));
   assert.equal(loadConfig(root).agents.reviewer.model, 'user-selected-model');

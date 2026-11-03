@@ -1,5 +1,14 @@
 {
   "name": "council-local",
-  "owner": { "name": "Council contributors" },
-  "plugins": [{ "name": "council", "source": "./", "description": "Collaboration for coding agents", "version": "0.1.0" }]
+  "owner": {
+    "name": "Council contributors"
+  },
+  "plugins": [
+    {
+      "name": "council",
+      "source": "./",
+      "description": "Collaboration for coding agents",
+      "version": "1.0.0"
+    }
+  ]
 }
