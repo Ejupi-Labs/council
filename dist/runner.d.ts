@@ -5,6 +5,7 @@ export interface RunnerOptions {
 export interface AcpxRunnerOptions extends RunnerOptions {
     acpxEntrypoint?: string;
 }
+export declare const MAX_AGENT_FRAME_BYTES: number;
 export declare class NativeRunner implements AgentRunner {
     private readonly config;
     private readonly options;

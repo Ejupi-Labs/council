@@ -1,6 +1,6 @@
 # Council development
 
-Council is a local TypeScript MCP server and CLI. Node 24+ is required for built-in SQLite.
+Council is a local TypeScript MCP server and CLI. Node 24.18.1+ with SQLite 3.51.3+ is required for patched built-in SQLite.
 
 - Keep subprocess invocations shell-free and Windows compatible. Do not inspect or copy vendor credentials.
 - MCP stdout is protocol-only. Send diagnostics to stderr.

@@ -12,7 +12,7 @@ function send(message: unknown): void {
 async function finish(code: number | null, signal: NodeJS.Signals | null): Promise<void> {
   if (finished) return;
   finished = true;
-  if (vendor?.pid && (process.platform !== 'win32' || (vendor.exitCode === null && vendor.signalCode === null))) await killProcessTree(vendor.pid);
+  if (vendor?.pid) await killProcessTree(vendor.pid);
   send({ type: 'closed', code, signal });
   process.stdin.destroy();
   process.stdout.end();
@@ -21,7 +21,7 @@ async function finish(code: number | null, signal: NodeJS.Signals | null): Promi
 }
 
 function stop(): void {
-  if (stopping) return;
+  if (stopping || finished) return;
   stopping = true;
   vendor?.stdin.destroy();
   if (vendor?.pid) void killProcessTree(vendor.pid).then(() => finish(null, 'SIGKILL'));

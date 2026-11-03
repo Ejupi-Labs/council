@@ -9,9 +9,15 @@ export interface WorkflowStore {
         type: string;
         sequence?: number;
     }>;
+    isCancellationRequested?(runId: string): boolean;
     acquireSlot?(instanceId: string, runId: string, limit: number): string | undefined;
     releaseSlot?(token: string, instanceId: string): void;
     finalizeRun?(run: RunRecord): RunRecord;
+}
+/** Retain the last in-memory evidence when the durable terminal write fails. */
+export declare class WorkflowPersistenceError extends Error {
+    readonly run: RunRecord;
+    constructor(run: RunRecord, cause: unknown);
 }
 export declare class WorkflowEngine {
     private readonly config;
@@ -22,6 +28,8 @@ export declare class WorkflowEngine {
     private readonly workspaces;
     constructor(config: CouncilConfig, runner: AgentRunner, store: WorkflowStore, options?: {
         instanceId?: string;
+        artifactTimeoutMs?: number;
+        cancellationArtifactTimeoutMs?: number;
     });
     plan(input: WorkflowInput): WorkflowPlan;
     run(input: WorkflowInput, options?: {

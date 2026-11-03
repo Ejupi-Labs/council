@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ import { loadConfig } from '../dist/config.js';
 import { killProcessTree } from '../dist/process.js';
 
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const execute = promisify(execFile);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -27,9 +29,9 @@ function call(root, args, options = {}) {
 }
 function events(stderr) { return stderr.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line)); }
 
-test('CLI version is 1.0.0 and conflicting or inapplicable arguments fail before starting work', async t => {
+test('CLI version matches the release and conflicting or inapplicable arguments fail before starting work', async t => {
   const root = workspace(t);
-  assert.deepEqual(JSON.parse((await call(root, ['--version'])).stdout), { name: 'council', version: '1.0.0' });
+  assert.deepEqual(JSON.parse((await call(root, ['--version'])).stdout), { name: 'council', version });
   writeFileSync(join(root, 'task.txt'), 'task from a file');
   for (const args of [
     ['plan', '--task', 'inline task', '--task-file', 'task.txt'],
@@ -142,6 +144,6 @@ test('CLI interruption stops the native fake agent and its descendant, preservin
     if (owned?.vendor && alive(owned.vendor)) await killProcessTree(owned.vendor);
     if (owned?.grandchild && alive(owned.grandchild)) await killProcessTree(owned.grandchild);
     await closed;
-    rmSync(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

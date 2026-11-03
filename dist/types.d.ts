@@ -47,6 +47,7 @@ export interface AgentHealth {
     detail: string;
 }
 export interface AgentRunner {
+    /** Enforce timeoutMs, honor cancellation and settle only after owned work is quiescent. */
     run(request: AgentRequest): Promise<AgentResult>;
     doctor(): Promise<AgentHealth[]>;
 }
@@ -73,6 +74,8 @@ export interface WorkspaceArtifact {
     patchPath: string;
     changed: boolean;
     baseCommit?: string;
+    exportStatus?: 'ready' | 'pending' | 'failed';
+    exportError?: string;
 }
 export interface RunRecord {
     id: string;

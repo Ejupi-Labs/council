@@ -8,6 +8,7 @@ export interface ManagedProcessOptions extends ProcessLaunch {
     cwd: string;
     environment?: NodeJS.ProcessEnv;
 }
+export declare const PROCESS_KILL_TIMEOUT_MS = 1000;
 export declare function killProcessTree(pid: number): Promise<void>;
 /** The separate IPC supervisor survives parent death long enough to stop billing work. */
 export declare class ManagedProcess extends EventEmitter {
@@ -19,9 +20,11 @@ export declare class ManagedProcess extends EventEmitter {
     private vendorPid?;
     private outcome?;
     private stopping;
+    private closed;
+    private forcePromise?;
     constructor(options: ManagedProcessOptions);
     kill(_signal?: NodeJS.Signals): boolean;
     forceKill(): Promise<void>;
 }
 /** Resolve executable paths and recognized npm bins without ever evaluating shell text. */
-export declare function resolveLaunch(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv): Promise<ProcessLaunch>;
+export declare function resolveLaunch(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<ProcessLaunch>;

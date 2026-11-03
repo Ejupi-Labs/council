@@ -1,4 +1,5 @@
 import { AcpFiles } from './acp-files.js';
+import { VERSION } from './version.js';
 export const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 export function acpErrorSummary(error) {
     const message = typeof error.message === 'string' ? error.message : '';
@@ -34,7 +35,7 @@ export class AcpProtocol {
     }
     start(control) {
         control.send({ jsonrpc: '2.0', id: 'council-initialize', method: 'initialize', params: {
-                protocolVersion: 1, clientInfo: { name: 'council', version: '1.0.0' },
+                protocolVersion: 1, clientInfo: { name: 'council', version: VERSION },
                 clientCapabilities: { fs: { readTextFile: true, writeTextFile: this.request.permission === 'write' }, terminal: false },
             } });
     }

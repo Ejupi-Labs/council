@@ -12,6 +12,15 @@ if (prompt === 'hang' || prompt === 'tree-hang') {
   }
   setInterval(() => { if (process.env.COUNCIL_TEST_CHATTER === '1') send({ type: 'progress', text: 'Still running.' }); }, 20);
 } else if (prompt === 'malformed') process.stdout.write('{broken');
+else if (prompt === 'invalid-utf8') {
+  send({ type: 'turn.started' });
+  process.stdout.write(Buffer.concat([Buffer.from('{"type":"item.completed","item":{"type":"agent_message","text":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}}\n')]));
+  send({ type: 'turn.completed' });
+} else if (prompt === 'frame-overflow') {
+  send({ type: 'turn.started' });
+  send({ type: 'item.started', item: { type: 'tool_call', output: 'x'.repeat(4 * 1024 * 1024 + 1) } });
+  send({ type: 'turn.completed' });
+}
 else if (claude) {
   if (prompt === 'auth-error') send({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Not logged in SECRET_ACCESS_TOKEN=do-not-print' });
   else if (prompt === 'forbidden-tool') send({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } });

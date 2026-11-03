@@ -91,7 +91,8 @@ test('ACPX timeout kills a hung process tree', async () => {
   const pidFile = join(temporary, 'child.pid');
   try {
     const local = new AcpxRunner(config(), { acpxEntrypoint: fixture, environment: { ...process.env, COUNCIL_TEST_PID_FILE: pidFile } });
-    const result = await local.run(request('tree-hang', { timeoutMs: 700 }));
+    // The total budget includes runtime resolution and supervisor startup on loaded Windows hosts.
+    const result = await local.run(request('tree-hang', { timeoutMs: 5000 }));
     assert.equal(result.status, 'timeout');
     const pid = Number(await readFile(pidFile, 'utf8'));
     await new Promise(resolve => setTimeout(resolve, 100));

@@ -25,11 +25,20 @@ export declare class CouncilMcpServer {
     private queuedBytes;
     private queuedFrames;
     private closePromise?;
+    private pump?;
+    private readonly outputAbort;
     private modeReader?;
     private runReader?;
     constructor(shutdown: () => Promise<void>);
     registerTool(definition: ToolDefinition, handler: ToolHandler): void;
     registerResources(modes: () => unknown, run: (id: string) => unknown): void;
+    metrics(): {
+        connected: boolean;
+        pendingRequests: number;
+        queuedResponseBytes: number;
+        queuedResponseFrames: number;
+        outputIsolated: boolean;
+    };
     connect(input?: Readable, output?: Writable): Promise<void>;
     close(): Promise<void>;
     private send;

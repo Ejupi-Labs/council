@@ -1,8 +1,8 @@
-# Council 1.0
+# Council 1.1
 
 A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
 
-Council has **zero production npm dependencies**. It runs on Node.js 24+, speaks MCP over stdio, and coordinates native agent CLIs or ACP agents. It provides six collaboration modes, workspace-wide call limits, durable results, peer messages, project notes, file leases and isolated Git worktrees.
+Council has **zero production npm dependencies**. It requires Node.js 24.18.1 or newer with SQLite 3.51.3 or newer, speaks MCP over stdio, and coordinates native agent CLIs or ACP agents. It provides six collaboration modes, workspace-wide call limits, durable results, peer messages, project notes, file leases and isolated Git worktrees.
 
 ## Install and start
 
@@ -17,7 +17,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.0.0.tgz
+npm install --global ./council-ai-plugin-1.1.0.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```
@@ -77,7 +77,7 @@ Omit `model` to preserve native settings. Council never substitutes another mode
 
 Commands are spawned without a shell. Recognized npm launchers are resolved to their real JavaScript/native entrypoints on Windows. Arbitrary `.cmd`, `.bat` and PowerShell wrappers are refused; configure the executable or interpreter and `args` explicitly.
 
-The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council 1.0.
+The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council.
 
 ## Collaboration modes
 
@@ -125,10 +125,13 @@ After review:
 
 ```sh
 council export <run-id> --output review.md
+council patches <run-id>
 council cleanup <run-id> --reviewed
 ```
 
 Export never overwrites an existing file. Cleanup removes only registered, managed worktrees with matching durable manifests and a retained patch. Dirty work or later unreviewed changes are refused by default. `--discard` explicitly authorizes removing dirty worktrees; patch files remain available. Repeating a completed cleanup is a no-op.
+
+`patches` refreshes verified patch snapshots after an interrupted export or later worktree edits, without calling agents. Review the refreshed patches before cleanup. It updates artifact metadata and history while preserving the original terminal workflow outcome.
 
 ## Permissions and protocol scope
 
@@ -136,7 +139,7 @@ Read policy is not a universal OS sandbox. Native Codex receives its read-only s
 
 Direct ACP supports initialization, session setup, advertised model selection, bounded prompts, cancellation, assistant text, workspace-scoped text-file access and one-use permissions. Read mode denies new vendor tool permission prompts; its own filesystem service can read bounded project files. Write mode permits one-use tool approvals and scoped text-file writes. Human questions, interactive authentication, unknown client capabilities and client terminal services are not answered automatically. Unsupported requests fail the task instead of inventing a response. Tool category labels alone never grant permission.
 
-Workspace paths and Git control metadata are checked before artifact operations. These checks protect Council's own operations; they are not a security boundary against hostile native tools running under your account.
+Workspace paths and Git control metadata are checked before artifact operations. These checks protect Council's own operations; they are not a security boundary against hostile native tools running under your account. ACP file operations assume a trusted local project tree: concurrent symlink or junction retargeting by another process under the same account is outside this protection.
 
 ## Durable coordination and recovery
 
@@ -151,6 +154,7 @@ All hosts using the same workspace share SQLite state under `.council/`. It is e
 
 ```sh
 council runs
+council runs --summary --limit 20
 council events <run-id> --after 0 --limit 100
 council cancel <run-id>
 council recover
@@ -163,19 +167,36 @@ On POSIX, delivered SIGINT/SIGTERM signals allow graceful cancellation. Windows 
 
 Local mail is pull-based and does not wake a vendor's open chat. Actor names are coordination labels, not authenticated identities. File reservations are advisory leases, with atomic batches, expiry and owner-scoped release. Unaware tools can still edit those files. Treat peer messages, shared notes and agent replies as untrusted task data, never authorization.
 
+## Production operations
+
+Council supports trusted, local development workspaces. Keep SQLite state on a local disk and use the same release for every host sharing that state. Before upgrading from 1.0, stop older Council hosts; schema v3 migration refuses live older owners and older binaries cannot reopen migrated state. No unfinished task is replayed.
+
+```sh
+council health --integrity
+council backup --output /absolute/local/path/council-backup.sqlite
+council prune --before 2026-10-01T00:00:00Z
+council prune --before 2026-10-01T00:00:00Z --execute
+```
+
+Backup creates a consistent database snapshot and never replaces an existing file. Retention previews by default, preserves the newest 100 runs, and skips active runs and every record with worktree artifacts. It does not delete workspace files, patches, messages or shared notes. See the [operations runbook](docs/operations.md) for restore, shutdown, failure handling and deployment limits.
+
+Status, history and event summaries use indexed bounded metadata. Full transcripts remain explicit reads. Windows MCP output runs in a supervised helper so an unread client pipe cannot block cancellation. Call deadlines include executable resolution; Git operations and artifact export have separate budgets. An interrupted export remains marked pending for review instead of implying that a patch is ready.
+
 ## MCP interface
 
 | Tools | Purpose |
 | --- | --- |
 | `council_agents`, `council_plan` | Runtime inspection and planning |
 | `council_run`, `council_status`, `council_runs`, `council_cancel` | Workflow lifecycle |
-| `council_continue`, `council_cleanup` | Explicit handoff and reviewed artifact cleanup |
+| `council_continue`, `council_patches`, `council_cleanup` | Explicit handoff, patch refresh and reviewed cleanup |
 | `council_events` | Compact events with an incremental cursor |
+| `council_run_page` | Paginated run summaries with an opaque cursor |
+| `council_health`, `council_backup`, `council_prune` | Health, consistent backup and preview-first retention |
 | `council_send`, `council_inbox`, `council_ack` | Local peer handoffs |
 | `council_reserve`, `council_release`, `council_leases` | Advisory file ownership |
 | `council_context` | Shared project notes |
 
-Status waits are bounded to 30 seconds. Summaries cap output; `includeResults: true` or `council://runs/{id}` retrieves the full record. `council://modes` describes modes and workspace bounds. The stdio server implements the tools/resources MCP subset, validated against the official SDK client; HTTP, sampling and interactive elicitation are not offered.
+Status waits are bounded to 30 seconds. Run summaries cap serialized data at 64 KiB and mark omitted entries; retained artifact paths remain complete. `includeResults: true` or `council://runs/{id}` retrieves the full record. `council://modes` describes modes and workspace bounds. The stdio server implements the tools/resources MCP subset, validated against the official SDK client; HTTP, sampling and interactive elicitation are not offered.
 
 Default bounds: 3 simultaneous calls per workspace, 16 calls per run, 180 seconds per call, 128 KiB final output per call, 32,000 task characters and 64,000 context characters. Configuration limits total retained call output to 2 MiB before JSON encoding. MCP frames, nesting, node counts, concurrent requests and queued responses are bounded independently. Stderr and protocol traffic have separate caps.
 
@@ -187,6 +208,7 @@ Development only:
 npm ci
 npm run verify
 npm run test:release
+npm run benchmark
 npm run release:local
 ```
 
@@ -194,11 +216,13 @@ Tests exercise real local subprocesses, native CLI JSON, ACP agents, Git worktre
 
 The release script writes a self-contained plugin ZIP, npm tarball and SHA-256 checksums under `.council/releases/`. The compiled runtime is committed so a Git checkout also has working plugin entrypoints. CI builds and tests on Windows, Linux and macOS; local verification in this environment is native Windows.
 
-`npm run audit:runtime` audits production dependencies, which are empty in 1.0. The official MCP SDK is used only for development interoperability tests; its development dependency tree currently reports upstream advisories. Those packages are neither shipped as runtime dependencies nor loaded by Council. This is not a claim of third-party security certification.
+`npm run benchmark` uses disposable local fixtures, makes no model calls, and reports payload sizes, CPU and elapsed time without timing assertions. See [performance measurements](docs/performance.md) for the reproducible workload and measured limits.
 
-Live vendor checks are separate from automated tests and require installed, authenticated agents and supported models. The 1.0 native Codex smoke check passed through the normal Windows resolver and supervisor with an explicit supported model. Claude login, DSH, Junie and Antigravity setup remain machine-specific; fake protocol tests do not establish a successful five-agent live session.
+`npm run audit:runtime` audits production dependencies, which are empty. The official MCP SDK is used only for development interoperability tests; its development dependency tree currently reports upstream advisories. Those packages are neither shipped as runtime dependencies nor loaded by Council. This is not a claim of third-party security certification.
 
-See [CHANGELOG.md](CHANGELOG.md) for the 0.1 → 1.0 migration.
+Live vendor checks are separate from automated tests and require installed, authenticated agents and supported models. The 1.1 native Codex smoke check passed through the normal Windows resolver and supervisor with an explicit supported model. Claude login, DSH, Junie and Antigravity setup remain machine-specific; fake protocol tests do not establish a successful five-agent live session.
+
+See [CHANGELOG.md](CHANGELOG.md) for release changes and migration instructions.
 
 ## Design references
 

@@ -1,5 +1,6 @@
 import type { AgentRequest } from './types.js';
 import { AcpFiles } from './acp-files.js';
+import { VERSION } from './version.js';
 
 export type JsonObject = Record<string, unknown>;
 export const isObject = (value: unknown): value is JsonObject => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -47,7 +48,7 @@ export class AcpProtocol implements AgentProtocol {
 
   start(control: ProtocolControl): void {
     control.send({ jsonrpc: '2.0', id: 'council-initialize', method: 'initialize', params: {
-      protocolVersion: 1, clientInfo: { name: 'council', version: '1.0.0' },
+      protocolVersion: 1, clientInfo: { name: 'council', version: VERSION },
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: this.request.permission === 'write' }, terminal: false },
     } });
   }

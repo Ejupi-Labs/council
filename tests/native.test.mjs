@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { NativeRunner, createRunner } from '../dist/runner.js';
 
 const cwd = fileURLToPath(new URL('..', import.meta.url));
@@ -61,6 +63,38 @@ test('direct ACP rejects an unadvertised model without changing the requested mo
 test('native doctor only inspects executable availability', async () => {
   const health = await new NativeRunner(config({ codex: native('codex'), missing: { enabled: true, profile: 'junie', command: join(cwd, 'not-an-executable.exe') } })).doctor();
   assert.equal(health[0].available, true); assert.match(health[0].detail, /Authentication.*were not tested/); assert.equal(health[1].available, false);
+});
+
+test('the total agent deadline includes executable resolution and reports honest elapsed time', async () => {
+  const original = fs.stat;
+  try {
+    fs.stat = async (...args) => { if (args[0] === process.execPath) await new Promise(resolve => setTimeout(resolve, 1000)); return original(...args); };
+    syncBuiltinESMExports();
+    const started = performance.now();
+    const result = await new NativeRunner(config({ codex: native('codex') })).run(request('codex', 'hello', { timeoutMs: 50 }));
+    assert.equal(result.status, 'timeout'); assert.match(result.error, /total time limit/);
+    assert.ok(performance.now() - started < 700, 'A stalled lookup must not delay the agent deadline.');
+    assert.ok(result.durationMs >= 35 && result.durationMs < 700);
+  } finally { fs.stat = original; syncBuiltinESMExports(); }
+});
+
+test('cancellation interrupts executable resolution before a vendor is launched', async () => {
+  const original = fs.stat;
+  const controller = new AbortController();
+  try {
+    fs.stat = async (...args) => { if (args[0] === process.execPath) await new Promise(resolve => setTimeout(resolve, 1000)); return original(...args); };
+    syncBuiltinESMExports();
+    const started = performance.now();
+    const run = new NativeRunner(config({ codex: native('codex') })).run(request('codex', 'hello', { signal: controller.signal }));
+    setTimeout(() => controller.abort(), 25);
+    assert.equal((await run).status, 'cancelled'); assert.ok(performance.now() - started < 700);
+  } finally { fs.stat = original; syncBuiltinESMExports(); }
+});
+
+for (const scenario of ['invalid-utf8', 'frame-overflow']) test(`agent framing rejects ${scenario} before accepting terminal success`, async () => {
+  const settings = config({ codex: native('codex') }); settings.maxOutputBytes = 1024 * 1024;
+  const result = await new NativeRunner(settings).run(request('codex', scenario));
+  assert.equal(result.status, 'failed'); assert.match(result.error, scenario === 'invalid-utf8' ? /invalid UTF-8/ : /frame exceeded 4 MiB/);
 });
 
 test('ACP read permissions never trust presentation metadata as authorization', async () => {

@@ -11,4 +11,5 @@ export * from './rpc.js';
 export * from './report.js';
 export * from './workspaces.js';
 export * from './version.js';
+export * from './summary.js';
 //# sourceMappingURL=index.js.map

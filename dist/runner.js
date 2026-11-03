@@ -1,8 +1,44 @@
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
-import { StringDecoder } from 'node:string_decoder';
+import { isUtf8 } from 'node:buffer';
 import { AcpProtocol, acpErrorSummary, isObject } from './acp.js';
 import { ManagedProcess, resolveLaunch } from './process.js';
+export const MAX_AGENT_FRAME_BYTES = 4 * 1024 * 1024;
+async function withBudget(request, task) {
+    const started = performance.now();
+    const controller = new AbortController();
+    let timedOut = false;
+    const expire = () => { timedOut = true; controller.abort(); };
+    const timer = setTimeout(expire, Math.min(request.timeoutMs, 2_147_483_647));
+    const cancel = () => controller.abort();
+    request.signal?.addEventListener('abort', cancel, { once: true });
+    if (request.signal?.aborted)
+        cancel();
+    const remaining = () => {
+        const left = request.timeoutMs - (performance.now() - started);
+        if (left <= 0)
+            expire();
+        controller.signal.throwIfAborted();
+        return Math.max(1, Math.ceil(left));
+    };
+    let result;
+    try {
+        result = await task(controller.signal, remaining);
+    }
+    catch (error) {
+        result = failed(request, error instanceof Error ? error.message : 'Unable to resolve the configured agent executable.');
+    }
+    finally {
+        clearTimeout(timer);
+        request.signal?.removeEventListener('abort', cancel);
+    }
+    const durationMs = Math.round(performance.now() - started);
+    if (timedOut)
+        return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
+    if (controller.signal.aborted)
+        return { ...result, status: 'cancelled', durationMs, error: 'Agent request cancelled.' };
+    return { ...result, durationMs };
+}
 function childEnvironment(environment) {
     const depth = Number(environment.COUNCIL_DEPTH ?? 0);
     return { ...environment, COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
@@ -54,8 +90,8 @@ async function runProtocol(launch, protocol, request, config, environment) {
             resolveResult(failed(request, 'Unable to start the agent supervisor.'));
             return;
         }
-        const decoder = new StringDecoder('utf8');
-        let pending = '', output = '';
+        const frame = Buffer.allocUnsafe(MAX_AGENT_FRAME_BYTES);
+        let frameBytes = 0, output = '';
         let outputBytes = 0, wireBytes = 0, stderrBytes = 0;
         let stopReason, failure;
         let forcedStatus;
@@ -159,18 +195,38 @@ async function runProtocol(launch, protocol, request, config, environment) {
                 terminate('failed', 'Agent returned an invalid protocol response.');
             }
         };
+        const readFrame = () => {
+            if (forcedStatus || settled || frameBytes === 0)
+                return;
+            const bytes = frame.subarray(0, frameBytes);
+            if (!isUtf8(bytes)) {
+                terminate('failed', 'Agent protocol frame contains invalid UTF-8.');
+                return;
+            }
+            line(bytes.toString('utf8'));
+        };
         child.stdout.on('data', (chunk) => {
             wireBytes += chunk.length;
             if (wireBytes > maxWireBytes) {
                 terminate('failed', 'Agent protocol traffic exceeded its bounded transport allowance.');
                 return;
             }
-            pending += decoder.write(chunk);
-            let newline;
-            while ((newline = pending.indexOf('\n')) !== -1 && !forcedStatus) {
-                const next = pending.slice(0, newline);
-                pending = pending.slice(newline + 1);
-                line(next);
+            let offset = 0;
+            while (offset < chunk.length && !forcedStatus && !settled) {
+                const newline = chunk.indexOf(0x0a, offset);
+                const end = newline < 0 ? chunk.length : newline;
+                const count = end - offset;
+                if (frameBytes + count > MAX_AGENT_FRAME_BYTES) {
+                    terminate('failed', 'Agent protocol frame exceeded 4 MiB.');
+                    return;
+                }
+                chunk.copy(frame, frameBytes, offset, end);
+                frameBytes += count;
+                if (newline < 0)
+                    break;
+                readFrame();
+                frameBytes = 0;
+                offset = newline + 1;
             }
         });
         child.stderr.on('data', (chunk) => { stderrBytes += chunk.length; if (stderrBytes > 64 * 1024)
@@ -184,9 +240,8 @@ async function runProtocol(launch, protocol, request, config, environment) {
                 finish(forcedStatus, failure);
                 return;
             }
-            pending += decoder.end();
-            if (pending.trim())
-                line(pending);
+            readFrame();
+            frameBytes = 0;
             if (forcedStatus) {
                 finish(forcedStatus, failure);
                 return;
@@ -376,38 +431,42 @@ export class NativeRunner {
         this.config = config;
         this.options = options;
     }
-    async launch(agent, request) {
+    async launch(agent, request, signal) {
         const transport = agent.transport ?? (['codex', 'claude'].includes(agent.profile) ? 'native' : 'acp');
         const environment = this.options.environment ?? process.env;
         if (transport === 'native')
-            return { transport, launch: await resolveLaunch(agent.command ?? agent.profile, [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment) };
+            return { transport, launch: await resolveLaunch(agent.command ?? agent.profile, [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
         const defaults = agent.command ? { command: agent.command, args: agent.args ?? [] } : defaultAcp(agent);
-        return { transport, launch: await resolveLaunch(defaults.command, agent.args ?? defaults.args, request.cwd, environment) };
+        return { transport, launch: await resolveLaunch(defaults.command, agent.args ?? defaults.args, request.cwd, environment, signal) };
     }
     async run(request) {
         const invalid = validateRequest(this.config, request);
         if (invalid)
             return invalid;
         const agent = this.config.agents[request.agent];
-        try {
-            const { launch, transport } = await this.launch(agent, request);
-            const protocol = transport === 'acp' ? new AcpProtocol(request, request.model ?? agent.model) : agent.profile === 'codex' ? new CodexProtocol(request.prompt) : new ClaudeProtocol(request);
-            return await runProtocol(launch, protocol, request, this.config, this.options.environment ?? process.env);
-        }
-        catch (error) {
-            return failed(request, error instanceof Error ? error.message : 'Unable to resolve the configured agent executable.');
-        }
+        return await withBudget(request, async (signal, remaining) => {
+            const scoped = { ...request, signal };
+            const { launch, transport } = await this.launch(agent, scoped, signal);
+            scoped.timeoutMs = remaining();
+            const protocol = transport === 'acp' ? new AcpProtocol(scoped, request.model ?? agent.model) : agent.profile === 'codex' ? new CodexProtocol(request.prompt) : new ClaudeProtocol(scoped);
+            return await runProtocol(launch, protocol, scoped, this.config, this.options.environment ?? process.env);
+        });
     }
     async doctor() {
         return await Promise.all(Object.entries(this.config.agents).map(async ([name, agent]) => {
             if (!agent.enabled)
                 return { agent: name, enabled: false, available: false, detail: 'Disabled in Council configuration.' };
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 5000);
             try {
-                const { launch, transport } = await this.launch(agent, { agent: name, cwd: this.config.workspaceRoot, prompt: '', permission: 'read', timeoutMs: 1000 });
+                const { launch, transport } = await this.launch(agent, { agent: name, cwd: this.config.workspaceRoot, prompt: '', permission: 'read', timeoutMs: 1000 }, controller.signal);
                 return { agent: name, enabled: true, available: true, detail: `Local ${transport} executable found (${basename(launch.command)}). Authentication, model access, and protocol readiness were not tested.` };
             }
             catch (error) {
-                return { agent: name, enabled: true, available: false, detail: error instanceof Error ? error.message : 'Agent executable unavailable.' };
+                return { agent: name, enabled: true, available: false, detail: controller.signal.aborted ? 'Agent executable lookup exceeded its five-second limit.' : error instanceof Error ? error.message : 'Agent executable unavailable.' };
+            }
+            finally {
+                clearTimeout(timer);
             }
         }));
     }
@@ -420,7 +479,7 @@ export class AcpxRunner {
         this.config = config;
         this.options = options;
     }
-    async executable(cwd) { return await resolveLaunch(this.options.acpxEntrypoint ?? 'acpx', [], cwd, this.options.environment ?? process.env); }
+    async executable(cwd, signal) { return await resolveLaunch(this.options.acpxEntrypoint ?? 'acpx', [], cwd, this.options.environment ?? process.env, signal); }
     async run(request) {
         const invalid = validateRequest(this.config, request);
         if (invalid)
@@ -428,23 +487,27 @@ export class AcpxRunner {
         const agent = this.config.agents[request.agent];
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(agent.profile))
             return failed(request, 'Invalid external ACPX agent profile.');
-        try {
-            const launch = await this.executable(request.cwd);
+        return await withBudget(request, async (signal, remaining) => {
+            const scoped = { ...request, signal };
+            const launch = await this.executable(request.cwd, signal);
+            scoped.timeoutMs = remaining();
             const write = request.permission === 'write', model = request.model ?? agent.model;
-            launch.args.push('--format', 'json', '--json-strict', '--cwd', resolve(request.cwd), write ? '--approve-all' : '--deny-all', '--permission-policy', JSON.stringify({ defaultAction: write ? 'approve' : 'deny' }), '--non-interactive-permissions', 'deny', '--timeout', String(request.timeoutMs / 1000), ...(model ? ['--model', model] : []), agent.profile, 'exec', '--file', '-');
-            return await runProtocol(launch, new ExternalAcpxProtocol(request.prompt), request, this.config, this.options.environment ?? process.env);
-        }
-        catch (error) {
-            return failed(request, error instanceof Error ? error.message : 'External ACPX executable unavailable.');
-        }
+            launch.args.push('--format', 'json', '--json-strict', '--cwd', resolve(request.cwd), write ? '--approve-all' : '--deny-all', '--permission-policy', JSON.stringify({ defaultAction: write ? 'approve' : 'deny' }), '--non-interactive-permissions', 'deny', '--timeout', String(scoped.timeoutMs / 1000), ...(model ? ['--model', model] : []), agent.profile, 'exec', '--file', '-');
+            return await runProtocol(launch, new ExternalAcpxProtocol(request.prompt), scoped, this.config, this.options.environment ?? process.env);
+        });
     }
     async doctor() {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
         let available = true;
         try {
-            await this.executable(this.config.workspaceRoot);
+            await this.executable(this.config.workspaceRoot, controller.signal);
         }
         catch {
             available = false;
+        }
+        finally {
+            clearTimeout(timer);
         }
         return Object.entries(this.config.agents).map(([agent, value]) => ({ agent, enabled: value.enabled, available: value.enabled && available,
             detail: !value.enabled ? 'Disabled in Council configuration.' : available ? 'External ACPX executable found. Underlying adapters, authentication, and protocol readiness were not tested.'

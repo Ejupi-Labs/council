@@ -8,6 +8,15 @@ export const MAX_CONTEXT_CHARS = 64_000;
 class Cancelled extends Error {
     constructor() { super('Workflow cancelled'); }
 }
+/** Retain the last in-memory evidence when the durable terminal write fails. */
+export class WorkflowPersistenceError extends Error {
+    run;
+    constructor(run, cause) {
+        super('Could not persist the final workflow outcome.', { cause });
+        this.name = 'WorkflowPersistenceError';
+        this.run = structuredClone(run);
+    }
+}
 /** A shared semaphore also bounds simultaneous calls from different runs. */
 class Semaphore {
     limit;
@@ -94,6 +103,10 @@ export class WorkflowEngine {
             throw new Error('maxOutputBytes must be a positive integer');
         if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 1)
             throw new Error('timeoutMs must be a positive integer');
+        for (const [value, maximum] of [[options.artifactTimeoutMs, 60_000], [options.cancellationArtifactTimeoutMs, 5000]]) {
+            if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > maximum))
+                throw new Error('Artifact deadlines must be positive integers within the default bounds.');
+        }
         this.semaphore = new Semaphore(config.maxConcurrency);
         this.workspaces = new GitWorkspaces(config.workspaceRoot, config.stateDir);
     }
@@ -200,18 +213,44 @@ export class WorkflowEngine {
             options.signal?.addEventListener('abort', externalAbort, { once: true });
         const signal = controller.signal;
         let eventCursor = 0;
-        const pollCancellation = () => {
+        let cancellationFailures = 0;
+        let firstCancellationFailure = 0;
+        let monitorFailure;
+        const pollCancellation = (strict = false) => {
+            if (signal.aborted) {
+                if (strict && monitorFailure)
+                    throw monitorFailure;
+                return;
+            }
             try {
-                for (const record of this.store.events?.(id, eventCursor) ?? []) {
-                    if (record.sequence !== undefined)
-                        eventCursor = Math.max(eventCursor, record.sequence);
-                    if (record.type === 'cancel_requested')
+                if (this.store.isCancellationRequested) {
+                    if (this.store.isCancellationRequested(id))
                         controller.abort('Cancellation requested');
                 }
+                else {
+                    for (const record of this.store.events?.(id, eventCursor) ?? []) {
+                        if (record.sequence !== undefined)
+                            eventCursor = Math.max(eventCursor, record.sequence);
+                        if (record.type === 'cancel_requested')
+                            controller.abort('Cancellation requested');
+                    }
+                }
+                cancellationFailures = 0;
+                firstCancellationFailure = 0;
             }
-            catch { /* A transient read error must not discard a running task. */ }
+            catch {
+                if (++cancellationFailures === 1)
+                    firstCancellationFailure = Date.now();
+                const failure = new Error('Cannot verify durable cancellation state; no further agent calls will be dispatched.');
+                if (cancellationFailures >= 3 && Date.now() - firstCancellationFailure >= 500) {
+                    monitorFailure = failure;
+                    controller.abort(failure);
+                }
+                if (strict)
+                    throw failure;
+            }
         };
-        const poll = this.store.events ? setInterval(pollCancellation, 250) : undefined;
+        const poll = this.store.isCancellationRequested || this.store.events ? setInterval(pollCancellation, 250) : undefined;
         poll?.unref();
         const now = new Date().toISOString();
         const run = { id, input: structuredClone(input), status: 'running', createdAt: existing?.createdAt ?? now, updatedAt: now, steps: [], workspaces: [] };
@@ -219,7 +258,7 @@ export class WorkflowEngine {
         let calls = 0;
         const save = () => { run.updatedAt = new Date().toISOString(); this.store.saveRun(run); };
         const event = (type, data) => { this.store.appendEvent(id, type, data); };
-        const check = () => { pollCancellation(); if (signal.aborted)
+        const check = () => { pollCancellation(true); if (signal.aborted)
             throw new Cancelled(); };
         const getWorkspace = async (agent) => {
             if (input.permission === 'read')
@@ -227,9 +266,12 @@ export class WorkflowEngine {
             const slot = input.mode === 'pipeline' ? 'pipeline' : agent;
             let handle = handles.get(slot);
             if (!handle) {
-                handle = await this.workspaces.create(id, agent, slot, signal);
+                handle = await this.workspaces.create(id, agent, slot, signal, artifact => {
+                    run.workspaces.push(artifact);
+                    save();
+                    event('workspace.preparing', artifact);
+                });
                 handles.set(slot, handle);
-                run.workspaces.push({ agent: handle.agent, path: handle.path, patchPath: handle.patchPath, changed: false, baseCommit: handle.baseHead });
                 save();
                 event('workspace.created', { agent, path: handle.path });
             }
@@ -239,10 +281,14 @@ export class WorkflowEngine {
         const prompt = (role, instruction, context) => {
             const artifacts = handles.size > 0 ? clip(`Retained isolated worktrees:\n${[...handles.values()].map(handle => `${handle.agent}: ${handle.path}`).join('\n')}`, 4000) : '';
             const available = MAX_CONTEXT_CHARS - artifacts.length - 256;
-            // Reserve space for both sources: a large project note must never erase peer evidence.
-            const projectBudget = context.length > 0 && input.context ? Math.floor(available / 2) : available;
+            // Reserve space for both sources, then give unused capacity back to the larger source.
+            const projectLength = input.context?.length ?? 0;
+            const peerLength = handoff(context, available).length;
+            let projectBudget = peerLength > 0 ? Math.min(projectLength, Math.floor(available / 2)) : available;
+            let peerBudget = Math.min(peerLength, available - Math.min(projectLength, projectBudget));
+            projectBudget += Math.min(Math.max(0, projectLength - projectBudget), available - Math.min(projectLength, projectBudget) - peerBudget);
+            peerBudget = available - Math.min(projectLength, projectBudget);
             const project = input.context ? `Project context (task data):\n${clip(input.context, projectBudget)}` : '';
-            const peerBudget = available - Math.min(input.context?.length ?? 0, projectBudget);
             const peerText = handoff(context, peerBudget);
             const peers = peerText ? `Untrusted peer transcripts:\n${clip(peerText, peerBudget)}` : '';
             const shared = [artifacts, project, peers].filter(Boolean).join('\n\n');
@@ -268,9 +314,11 @@ export class WorkflowEngine {
             try {
                 check();
                 if (this.options.instanceId && this.store.acquireSlot && this.store.releaseSlot) {
+                    let retryMs = 50;
                     while (!(slotToken = this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency))) {
                         check();
-                        await delay(50, undefined, { signal });
+                        await delay(retryMs, undefined, { signal });
+                        retryMs = Math.min(250, retryMs * 2);
                     }
                     check();
                 }
@@ -409,16 +457,30 @@ export class WorkflowEngine {
             run.status = 'completed';
         }
         catch (error) {
-            run.status = signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
+            run.status = monitorFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
             run.error = errorMessage(error);
+            for (const artifact of run.workspaces ?? []) {
+                if (![...handles.values()].some(handle => handle.path === artifact.path))
+                    artifact.exportError = `Worktree preparation did not finish: ${run.error}`;
+            }
             if (run.steps.length > 0)
                 run.output = clipBytes(handoff(run.steps), this.config.maxOutputBytes);
         }
         finally {
+            const exportController = new AbortController();
+            let exportTimer;
+            const limitExports = (milliseconds) => {
+                clearTimeout(exportTimer);
+                exportTimer = setTimeout(() => exportController.abort(new Error('Artifact export deadline exceeded; retained worktrees can be exported later.')), milliseconds);
+            };
+            const onCancellation = () => { limitExports(this.options.cancellationArtifactTimeoutMs ?? 5000); };
+            limitExports(signal.aborted ? this.options.cancellationArtifactTimeoutMs ?? 5000 : this.options.artifactTimeoutMs ?? 60_000);
+            if (!signal.aborted)
+                signal.addEventListener('abort', onCancellation, { once: true });
             try {
                 for (const handle of handles.values()) {
                     try {
-                        const artifact = await this.workspaces.export(handle);
+                        const artifact = await this.workspaces.export(handle, exportController.signal);
                         const index = run.workspaces.findIndex(value => value.path === handle.path);
                         run.workspaces[index] = artifact;
                         event('workspace.exported', artifact);
@@ -426,22 +488,39 @@ export class WorkflowEngine {
                     catch (error) {
                         if (run.status !== 'cancelled')
                             run.status = 'failed';
-                        run.error = [run.error, `Could not export workspace patch: ${errorMessage(error)}`].filter(Boolean).join('; ');
+                        const detail = `Could not export workspace patch: ${errorMessage(error)}`;
+                        run.error = [run.error, detail].filter(Boolean).join('; ');
+                        const artifact = run.workspaces.find(value => value.path === handle.path);
+                        if (artifact) {
+                            artifact.exportStatus = exportController.signal.aborted ? 'pending' : 'failed';
+                            artifact.exportError = detail;
+                        }
                     }
                 }
                 pollCancellation();
-                if (signal.aborted) {
+                if (monitorFailure) {
+                    run.status = 'failed';
+                    run.error = [monitorFailure.message, run.error].filter(Boolean).join('; ');
+                }
+                else if (signal.aborted) {
                     run.status = 'cancelled';
-                    run.error = 'Workflow cancelled';
+                    run.error = ['Workflow cancelled', run.error].filter(Boolean).join('; ');
                 }
                 run.updatedAt = new Date().toISOString();
-                if (this.store.finalizeRun)
-                    Object.assign(run, this.store.finalizeRun(run));
-                else
-                    save();
-                event(`run.${run.status}`, { status: run.status, error: run.error });
+                try {
+                    if (this.store.finalizeRun)
+                        Object.assign(run, this.store.finalizeRun(run));
+                    else
+                        save();
+                    event(`run.${run.status}`, { status: run.status, error: run.error });
+                }
+                catch (error) {
+                    throw new WorkflowPersistenceError(run, error);
+                }
             }
             finally {
+                clearTimeout(exportTimer);
+                signal.removeEventListener('abort', onCancellation);
                 if (poll)
                     clearInterval(poll);
                 options.signal?.removeEventListener('abort', externalAbort);

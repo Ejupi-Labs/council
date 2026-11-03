@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { GitWorkspaces } from '../dist/workspaces.js';
+import { killProcessTree } from '../dist/process.js';
 
 function fixture(t, commit = true) {
   const dir = mkdtempSync(join(tmpdir(), 'council-workspaces-'));
@@ -156,4 +157,58 @@ test('cleanup protects clean commits created after the last reviewed patch', asy
   const updated = await manager.export(workspace);
   await manager.cleanup(updated, { reviewed: true });
   assert.equal(existsSync(workspace.path), false);
+});
+
+test('cleanup reconciles interruption after Git removal and before manifest finalization', async t => {
+  const { manager, root, state } = fixture(t);
+  const workspace = await manager.create('cleanup-interrupted', 'codex');
+  const artifact = await manager.export(workspace);
+  const original = manager.atomicWrite.bind(manager);
+  manager.atomicWrite = (path, data, category, ...rest) => category === 'workspace-manifests' && JSON.parse(String(data)).removed
+    ? Promise.reject(new Error('offline interruption after Git removal')) : original(path, data, category, ...rest);
+  await assert.rejects(manager.cleanup(artifact, { reviewed: true }), /offline interruption/);
+  assert.equal(existsSync(artifact.path), false); assert.equal(existsSync(artifact.patchPath), true);
+  const recovered = new GitWorkspaces(root, state);
+  await recovered.cleanup(artifact, { reviewed: true });
+  await recovered.cleanup(artifact, { reviewed: true });
+  assert.equal(existsSync(artifact.patchPath), true);
+});
+
+test('cancellation stops an owned Git checkout filter and leaves its creation manifest', { timeout: 25_000 }, async t => {
+  const { manager, root, dir, git, state } = fixture(t);
+  const script = join(dir, 'stall-filter.cjs'), pidFile = join(dir, 'filter.pid');
+  writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));process.stdin.resume();setInterval(()=>{},1000);`);
+  const command = `"${process.execPath.replaceAll('\\', '/')}" "${script.replaceAll('\\', '/')}"`;
+  git('config', 'filter.council-audit.smudge', command);
+  writeFileSync(join(root, '.gitattributes'), 'base.txt filter=council-audit\n');
+  git('add', '.gitattributes'); git('commit', '--quiet', '-m', 'add local checkout filter');
+  const controller = new AbortController(); let error, ownedPid;
+  const creating = manager.create('cancel-git', 'codex', 'codex', controller.signal).catch(value => { error = value; });
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  try {
+    const readyUntil = Date.now() + 10_000;
+    while (!existsSync(pidFile) && !error && Date.now() < readyUntil) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(error, undefined, error?.message);
+    assert.ok(existsSync(pidFile), 'local Git filter must be active before cancellation');
+    ownedPid = Number(readFileSync(pidFile, 'utf8')); controller.abort(); await creating;
+    assert.ok(error); assert.match(error.message, /cancelled/);
+    const stoppedUntil = Date.now() + 3000;
+    while (alive(ownedPid) && Date.now() < stoppedUntil) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(alive(ownedPid), false);
+    assert.ok(existsSync(join(state, 'workspace-manifests')));
+  } finally { controller.abort(); await creating; if (ownedPid && alive(ownedPid)) await killProcessTree(ownedPid); }
+});
+
+test('preparation callback runs before any managed file or directory is created', async t => {
+  const { manager, state } = fixture(t);
+  let prepared;
+  await assert.rejects(manager.create('intent-first', 'codex', 'codex', undefined, artifact => {
+    prepared = artifact;
+    assert.equal(existsSync(join(state, 'workspace-manifests')), false);
+    assert.equal(existsSync(join(state, 'worktrees')), false);
+    throw new Error('database intent could not be saved');
+  }), /database intent/);
+  assert.ok(prepared?.baseCommit); assert.equal(prepared.exportStatus, 'pending');
+  assert.equal(existsSync(prepared.path), false);
+  assert.equal(existsSync(join(state, 'workspace-manifests')), false);
 });

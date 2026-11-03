@@ -18,7 +18,7 @@ if (packed.version !== VERSION) throw new Error('Release metadata version mismat
 // No platform tools or third-party runtime packages are required.
 const records = [], directory = [];
 let offset = 0;
-for (const file of packed.files.toSorted((a, b) => a.path.localeCompare(b.path))) {
+for (const file of packed.files.toSorted((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)))) {
   const path = file.path.replaceAll('\\', '/');
   if (isAbsolute(path) || path.split('/').some(part => part === '..') || /^(node_modules|\.council|\.serena|tests)\//.test(path)) throw new Error('Unsafe or private release path.');
   const name = Buffer.from(path, 'utf8');

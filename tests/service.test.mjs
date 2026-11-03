@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -122,7 +123,7 @@ test('cleanup requires review, protects dirty work and makes repeated cleanup a 
 });
 
 test('close also drains a worktree maintenance operation before releasing SQLite', async t => {
-  const { create } = fixture(t, true);
+  const { root, create } = fixture(t, true);
   const service = create();
   const run = await service.run(task({ permission: 'write' }));
   const original = GitWorkspaces.prototype.cleanup;
@@ -131,10 +132,151 @@ test('close also drains a worktree maintenance operation before releasing SQLite
   const ready = new Promise(resolve => { release = resolve; });
   GitWorkspaces.prototype.cleanup = async function (...args) { entered(); await ready; return original.apply(this, args); };
   try {
-    const cleaning = service.cleanup(run.id, { reviewed: true }); await started;
+    const cleaning = service.cleanup(run.id, { reviewed: true });
+    const cancelled = assert.rejects(cleaning, error => error.name === 'AbortError');
+    await started;
     let closed = false;
     const closing = service.close().then(() => { closed = true; });
-    await pause(10); assert.equal(closed, false); release();
-    assert.equal((await cleaning).removed.length, 1); await closing;
+    await pause(10); assert.equal(closed, false);
+    assert.equal(service.store.getRun(run.id).id, run.id, 'SQLite remains open while maintenance is pending');
+    assert.ok(existsSync(run.workspaces[0].path));
+    release(); await cancelled; await closing;
+    const reopened = new CouncilStore(join(root, '.council'));
+    try {
+      assert.ok(existsSync(run.workspaces[0].path), 'cancelled cleanup retains the worktree');
+      assert.equal(reopened.getRun(run.id).workspaces[0].path, run.workspaces[0].path);
+      assert.equal(reopened.events(run.id).filter(event => event.type === 'workspace.cleaned').length, 0);
+    } finally { reopened.close(); }
   } finally { release(); GitWorkspaces.prototype.cleanup = original; }
+});
+
+test('local completion wakes a thirty-second summary wait without leaving its timer active', { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'council-local-wake-'));
+  try {
+    const source = `
+import {CouncilService} from ${JSON.stringify(new URL('../dist/service.js', import.meta.url).href)};
+import {loadConfig} from ${JSON.stringify(new URL('../dist/config.js', import.meta.url).href)};
+const runner={doctor:async()=>[],run:async request=>{await new Promise(resolve=>setTimeout(resolve,30));return {agent:request.agent,status:'completed',output:'offline done',durationMs:30};}};
+const service=new CouncilService(loadConfig(${JSON.stringify(root)},{backend:'mock'}),runner);
+try{
+ const run=service.start({mode:'delegate',agents:['codex'],task:'Offline summary wait.',permission:'read'});
+ let summaryReads=0;const original=service.store.getRunSummary.bind(service.store);service.store.getRunSummary=id=>{summaryReads++;return original(id);};
+ const result=await service.waitSummary(run.id,30000);
+ console.log(JSON.stringify({status:result.status,summaryReads}));
+}finally{await service.close();}
+`;
+    const response = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', source], { windowsHide: true, timeout: 10_000, env: { ...process.env, COUNCIL_DEPTH: '0' } });
+    const result = JSON.parse(response.stdout);
+    assert.equal(result.status, 'completed'); assert.ok(result.summaryReads <= 3);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('explicit artifact repair exports pending cancelled work without changing its outcome or calling agents', { timeout: 60_000 }, async t => {
+  const { create } = fixture(t, true);
+  let entered, calls = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const service = create({ doctor: async () => [], run: request => new Promise(resolve => {
+    calls++;
+    writeFileSync(join(request.cwd, 'retained.txt'), 'partial work survives cancellation\n');
+    request.signal.addEventListener('abort', () => resolve({ agent: request.agent, status: 'cancelled', output: 'partial evidence', durationMs: 1 }), { once: true });
+    entered();
+  }) });
+  // Use the engine's existing test deadline override to avoid a five-second fixture delay.
+  service.engine.options.cancellationArtifactTimeoutMs = 40;
+  const original = GitWorkspaces.prototype.export;
+  GitWorkspaces.prototype.export = async (_artifact, signal) => await new Promise((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  let previous;
+  try {
+    const queued = service.start(task({ permission: 'write' })); await started;
+    service.requestCancellation(queued.id); previous = await service.completion(queued.id);
+  } finally { GitWorkspaces.prototype.export = original; }
+  assert.equal(previous.status, 'cancelled'); assert.equal(previous.workspaces[0].exportStatus, 'pending');
+  const repaired = await service.exportArtifacts(previous.id);
+  assert.equal(repaired.runId, previous.id); assert.equal(repaired.artifacts[0].exportStatus, 'ready');
+  assert.equal(repaired.artifacts[0].changed, true); assert.equal(repaired.artifacts[0].exportError, undefined);
+  assert.match(readFileSync(repaired.artifacts[0].patchPath, 'utf8'), /partial work survives cancellation/);
+  const next = service.store.getRun(previous.id);
+  for (const key of ['status', 'input', 'steps', 'output', 'error', 'createdAt']) assert.deepEqual(next[key], previous[key]);
+  assert.equal(next.workspaces[0].exportStatus, 'ready'); assert.equal(calls, 1);
+  assert.equal(service.store.events(previous.id).filter(event => event.type === 'workspace.refreshed').length, 1);
+  assert.deepEqual(service.store.leases(), []);
+});
+
+test('artifact repair rejects active runs and incomplete preparation without creating a checkout', { timeout: 60_000 }, async t => {
+  const { create } = fixture(t, true);
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const service = create({ doctor: async () => [], run: request => new Promise(resolve => {
+    request.signal.addEventListener('abort', () => resolve({ agent: request.agent, status: 'cancelled', output: '', durationMs: 1 }), { once: true });
+    entered();
+  }) });
+  const active = service.start(task()); await started;
+  await assert.rejects(service.exportArtifacts(active.id), /terminal state/);
+  service.requestCancellation(active.id); await service.completion(active.id);
+  const original = GitWorkspaces.prototype.git;
+  GitWorkspaces.prototype.git = async function (cwd, args, ...rest) {
+    if (args[0] === 'worktree' && args[1] === 'add') throw new Error('local incomplete checkout fixture');
+    return original.call(this, cwd, args, ...rest);
+  };
+  let incomplete;
+  try { incomplete = await service.run(task({ permission: 'write' })); }
+  finally { GitWorkspaces.prototype.git = original; }
+  assert.equal(incomplete.status, 'failed'); assert.equal(incomplete.workspaces[0].exportStatus, 'pending');
+  assert.equal(existsSync(incomplete.workspaces[0].path), false);
+  await assert.rejects(service.exportArtifacts(incomplete.id), /does not exist.*never creates a checkout/);
+  assert.equal(existsSync(incomplete.workspaces[0].path), false);
+  assert.equal(service.store.events(incomplete.id).filter(event => event.type === 'workspace.refreshed').length, 0);
+  assert.deepEqual(service.store.leases(), []);
+});
+
+test('artifact repair retains earlier committed exports when a later worktree has redirected Git metadata', { timeout: 60_000 }, async t => {
+  const { root, create } = fixture(t, true);
+  let calls = 0;
+  const service = create({ doctor: async () => [], run: async request => {
+    calls++; return { agent: request.agent, status: 'completed', output: 'offline implementation', durationMs: 1 };
+  } });
+  const previous = await service.run(task({ mode: 'parallel', agents: ['codex', 'claude'], permission: 'write' }));
+  assert.equal(previous.status, 'completed');
+  const [first, second] = previous.workspaces;
+  writeFileSync(join(first.path, 'base.txt'), 'reviewed follow-up in first worktree\n');
+  rmSync(join(second.path, '.git'));
+  writeFileSync(join(second.path, '.git'), `gitdir: ${join(root, '.git')}\n`);
+  await assert.rejects(service.exportArtifacts(previous.id), /redirected/);
+  assert.match(readFileSync(first.patchPath, 'utf8'), /reviewed follow-up in first worktree/);
+  const current = service.store.getRun(previous.id);
+  assert.equal(current.status, 'completed'); assert.equal(current.workspaces[0].changed, true);
+  assert.deepEqual(current.workspaces[1], second); assert.equal(calls, 2);
+  assert.equal(service.store.events(previous.id).filter(event => event.type === 'workspace.refreshed').length, 1);
+  assert.deepEqual(service.store.leases(), []);
+});
+
+test('artifact repair excludes cleanup across services and shutdown drains it before closing SQLite', { timeout: 60_000 }, async t => {
+  const { root, create } = fixture(t, true);
+  const service = create(), other = create();
+  const run = await service.run(task({ permission: 'write' }));
+  const original = GitWorkspaces.prototype.export;
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const ready = new Promise(resolve => { release = resolve; });
+  GitWorkspaces.prototype.export = async function (...args) { entered(); await ready; return original.apply(this, args); };
+  try {
+    const repairing = service.exportArtifacts(run.id);
+    const cancelled = assert.rejects(repairing, error => error.name === 'AbortError');
+    await started;
+    await assert.rejects(other.cleanup(run.id, { reviewed: true }), /Reservation conflict/);
+    let closed = false;
+    const closing = service.close().then(() => { closed = true; });
+    await pause(10); assert.equal(closed, false);
+    assert.equal(service.store.getRun(run.id).id, run.id);
+    release(); await cancelled; await closing;
+    assert.ok(existsSync(run.workspaces[0].path)); assert.ok(existsSync(run.workspaces[0].patchPath));
+    const reopened = new CouncilStore(join(root, '.council'));
+    try {
+      assert.equal(reopened.events(run.id).filter(event => event.type === 'workspace.refreshed').length, 0);
+      assert.deepEqual(reopened.leases(), []);
+    } finally { reopened.close(); }
+  } finally { release(); GitWorkspaces.prototype.export = original; }
 });

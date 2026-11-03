@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.0 — 3 November 2026
+
+### Operational readiness
+
+- Add runtime/storage health, explicit integrity checks, consistent cancellable online backups and preview-first retention through CLI and MCP.
+- Add bounded history pagination while preserving existing CLI full-record commands.
+- Migrate to SQLite schema v3 with atomic run admission, exact instance fencing, immutable terminal workflow outcomes and a workspace cap of 100 active runs.
+- Refuse schema upgrades while an older registered host is alive; stop every old host before upgrading shared state.
+- Degrade and reject new work after ownership or persistence failures; retain an honest in-memory failed outcome when durable storage fails.
+- Track and cancel maintenance before closing state; preserve worktree intents before filesystem side effects and reconcile interrupted cleanup.
+- Add explicit `patches` / `council_patches` repair for retained exports, sharing cleanup leases and preserving terminal workflow outcomes.
+
+### Performance and bounded shutdown
+
+- Persist indexed, bounded run/event summaries and a cancellation flag; polling and scheduling no longer deserialize full live transcripts.
+- Bound SQLite lock waits, statement caching, process lookup and platform kill helpers.
+- Include executable resolution in call deadlines and validate bounded NDJSON frames with strict UTF-8 decoding and linear scanning.
+- Isolate platform stdout writes in an owned output helper with an independent parent-death watchdog.
+- Bound Git and artifact-export work, retain pending export diagnostics, and back off workspace slot contention.
+- Add reproducible offline benchmarks and regression tests for storage load, upgrade contention, maintenance, blocked output and subprocess failure.
+
+### Deployment scope
+
+- Document trusted local project trees, operational restore procedures and custom runner cancellation requirements.
+- ACP path checks do not defend against concurrent ancestor junction/symlink retargeting by a hostile process under the same account. Native tools retain their own process privileges.
+- Keep zero production npm dependencies and ship all operational documentation in the release package.
+- Require Node 24.18.1+ and reject embedded SQLite below 3.51.3 before opening state, avoiding the documented multi-writer WAL reset corruption race.
+
 ## 1.0.0 — 3 November 2026
 
 ### Runtime and installation

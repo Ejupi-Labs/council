@@ -11,6 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL('../', import.meta.url));
+const releaseVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 function npmEntrypoint() {
   const candidates = [
@@ -30,7 +31,7 @@ function removeTemporary(directory) {
   rmSync(target, { recursive: true, force: true });
 }
 
-test('the 1.0 tarball installs fully offline and runs its CLI and MCP server without production dependencies', { timeout: 60_000 }, async t => {
+test('the release tarball installs fully offline and runs its CLI and MCP server without production dependencies', { timeout: 60_000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'council-release-'));
   const consumer = join(root, 'consumer café 日本語 with spaces');
   const workspace = join(root, 'project café 日本語 with spaces');
@@ -51,7 +52,7 @@ test('the 1.0 tarball installs fully offline and runs its CLI and MCP server wit
   });
   const packed = JSON.parse((await runNode([npm, 'pack', '--ignore-scripts', '--json', '--pack-destination', root], repository)).stdout);
   assert.equal(packed.length, 1);
-  assert.equal(packed[0].version, '1.0.0');
+  assert.equal(packed[0].version, releaseVersion);
   const packagedPaths = packed[0].files.map(file => file.path.replaceAll('\\', '/'));
   for (const file of ['dist/cli.js', 'plugin.json', 'mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/council/SKILL.md']) {
     assert.ok(packagedPaths.includes(file), `The release must contain ${file}.`);
@@ -62,7 +63,7 @@ test('the 1.0 tarball installs fully offline and runs its CLI and MCP server wit
   await runNode([npm, 'install', '--prefix', consumer, '--global=false', '--ignore-scripts', '--omit=dev', '--offline', '--no-audit', '--no-fund', tarball]);
   const installedRoot = join(consumer, 'node_modules', 'council-ai-plugin');
   const metadata = JSON.parse(readFileSync(join(installedRoot, 'package.json'), 'utf8'));
-  assert.equal(metadata.version, '1.0.0');
+  assert.equal(metadata.version, releaseVersion);
   assert.equal(Object.keys(metadata.dependencies ?? {}).length, 0);
   assert.equal(Object.keys(metadata.optionalDependencies ?? {}).length, 0);
   for (const manifest of ['plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json']) {
@@ -79,7 +80,7 @@ test('the 1.0 tarball installs fully offline and runs its CLI and MCP server wit
 
   const cli = join(installedRoot, 'dist', 'cli.js');
   const version = JSON.parse((await runNode([cli, '--version'])).stdout);
-  assert.equal(version.version, '1.0.0');
+  assert.equal(version.version, releaseVersion);
   const demo = JSON.parse((await runNode([cli, 'demo'])).stdout);
   assert.equal(demo.backend, 'mock');
   assert.equal(demo.liveAgentCalls, 0);
@@ -103,9 +104,9 @@ test('the 1.0 tarball installs fully offline and runs its CLI and MCP server wit
   const close = async () => { if (!closed) { closed = true; await client.close(); } };
   closeClients.push(close);
   await client.connect(transport);
-  assert.equal(client.getServerVersion().version, '1.0.0');
+  assert.equal(client.getServerVersion().version, releaseVersion);
   const available = (await client.listTools()).tools.map(tool => tool.name);
-  for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel']) assert.ok(available.includes(name));
+  for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel', 'council_health', 'council_run_page', 'council_backup', 'council_prune', 'council_patches']) assert.ok(available.includes(name));
   const call = async (name, input) => {
     const response = await client.callTool({ name, arguments: input });
     assert.notEqual(response.isError, true, `Installed MCP tool ${name} failed: ${response.content?.map(item => item.text ?? '').join(' ')}`);

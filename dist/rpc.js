@@ -2,6 +2,7 @@ import { once } from 'node:events';
 import { BoundedMcpInput } from './transport.js';
 import { parseSchema, ValidationError } from './schema.js';
 import { VERSION } from './version.js';
+import { OutputPump } from './output.js';
 const SUPPORTED_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 /** Local stdio MCP tools/resources subset, verified against the official SDK client. */
 export class CouncilMcpServer {
@@ -17,6 +18,8 @@ export class CouncilMcpServer {
     queuedBytes = 0;
     queuedFrames = 0;
     closePromise;
+    pump;
+    outputAbort = new AbortController();
     modeReader;
     runReader;
     constructor(shutdown) {
@@ -28,11 +31,16 @@ export class CouncilMcpServer {
         this.tools.set(definition.name, { definition, handler });
     }
     registerResources(modes, run) { this.modeReader = modes; this.runReader = run; }
+    metrics() {
+        return { connected: !!this.input && !this.closed, pendingRequests: this.pending.size, queuedResponseBytes: this.queuedBytes, queuedResponseFrames: this.queuedFrames, outputIsolated: !!this.pump };
+    }
     async connect(input = process.stdin, output = process.stdout) {
         if (this.input)
             throw new Error('MCP server is already connected.');
         this.input = input;
         this.output = output;
+        if (output === process.stdout)
+            this.pump = new OutputPump();
         const guard = this.guard = new BoundedMcpInput();
         guard.on('data', (chunk) => {
             for (const line of chunk.toString('utf8').trimEnd().split('\n'))
@@ -57,7 +65,12 @@ export class CouncilMcpServer {
         this.input?.pause();
         for (const controller of this.pending.values())
             controller.abort();
-        this.closePromise = this.shutdown().catch(error => {
+        this.outputAbort.abort();
+        this.closePromise = Promise.allSettled([this.shutdown(), this.pump?.close()]).then(results => {
+            const failure = results.find(result => result.status === 'rejected');
+            if (failure?.status === 'rejected')
+                throw failure.reason;
+        }).catch(error => {
             process.stderr.write(`Council shutdown failed: ${error instanceof Error ? error.message : 'unknown failure'}\n`);
             process.exitCode = 1;
         }).finally(() => { this.guard?.destroy(); });
@@ -80,8 +93,10 @@ export class CouncilMcpServer {
         this.writeQueue = this.writeQueue.then(async () => {
             if (this.closed || !this.output || this.output.destroyed)
                 return;
-            if (!this.output.write(data))
-                await once(this.output, 'drain');
+            if (this.pump)
+                await this.pump.write(data, this.outputAbort.signal);
+            else if (!this.output.write(data))
+                await once(this.output, 'drain', { signal: this.outputAbort.signal });
         }).catch(() => { void this.close(); }).finally(() => { this.queuedBytes -= bytes; this.queuedFrames--; });
     }
     error(id, code, message) { this.send({ jsonrpc: '2.0', id, error: { code, message } }); }

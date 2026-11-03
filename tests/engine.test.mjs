@@ -7,6 +7,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkflowEngine, MAX_CONTEXT_CHARS } from '../dist/engine.js';
 import { CouncilStore } from '../dist/store.js';
+import { GitWorkspaces } from '../dist/workspaces.js';
 
 const agents = ['codex', 'claude', 'junie'];
 function config(root = process.cwd(), overrides = {}) {
@@ -157,6 +158,16 @@ test('maximum project context preserves evidence from every council participant 
   assert.ok(judge.length < MAX_CONTEXT_CHARS + 2000);
 });
 
+test('short peer handoffs return unused context capacity to the project note', async () => {
+  const backend = runner();
+  const context = `${'x'.repeat(50_000)}IMPORTANT_PROJECT_EVIDENCE${'x'.repeat(13_000)}`;
+  const result = await new WorkflowEngine(config(), backend, store()).run(input('pipeline', { context }));
+  assert.equal(result.status, 'completed');
+  assert.ok(backend.calls[1].prompt.includes('IMPORTANT_PROJECT_EVIDENCE'));
+  assert.ok(backend.calls[1].prompt.includes('codex answer'));
+  assert.ok(backend.calls[1].prompt.length < MAX_CONTEXT_CHARS + 2000);
+});
+
 function sharedStores(t) {
   const root = mkdtempSync(join(tmpdir(), 'council-engine-global-'));
   const first = new CouncilStore(join(root, '.council'));
@@ -273,6 +284,50 @@ test('durable cancel_requested event aborts work started by another process', as
   assert.match(result.output, /cancelled externally/);
 });
 
+test('cancellation polling prefers small metadata over event payloads', async () => {
+  const persistence = store(); let metadataReads = 0;
+  persistence.isCancellationRequested = () => { metadataReads++; return false; };
+  persistence.events = () => { throw new Error('Full event payloads must not be polled.'); };
+  const result = await new WorkflowEngine(config(), runner(), persistence).run(input('council'));
+  assert.equal(result.status, 'completed'); assert.ok(metadataReads > 0);
+});
+
+test('a failed cancellation read prevents further dispatch instead of silently ignoring it', async () => {
+  const persistence = store(), backend = runner();
+  persistence.isCancellationRequested = () => { throw new Error('offline injected database error'); };
+  const result = await new WorkflowEngine(config(), backend, persistence).run(input('delegate'));
+  assert.equal(result.status, 'failed'); assert.match(result.error, /Cannot verify durable cancellation/);
+  assert.equal(backend.calls.length, 0);
+});
+
+test('a transient polling error preserves active work while persistent failures stop it', { timeout: 10_000 }, async () => {
+  for (const persistent of [false, true]) {
+    const persistence = store(); let running = false, failures = 0;
+    persistence.isCancellationRequested = () => {
+      if (running && (persistent || failures === 0)) { failures++; throw new Error('offline transient read failure'); }
+      return false;
+    };
+    const backend = runner(request => new Promise(resolve => {
+      running = true;
+      const timer = setTimeout(() => resolve({ agent: request.agent, status: 'completed', output: 'active work completed', durationMs: 650 }), persistent ? 6000 : 650);
+      request.signal.addEventListener('abort', () => { clearTimeout(timer); resolve({ agent: request.agent, status: 'cancelled', output: 'partial evidence retained', durationMs: 1 }); }, { once: true });
+    }));
+    const result = await new WorkflowEngine(config(), backend, persistence).run(input('delegate'));
+    assert.equal(result.status, persistent ? 'failed' : 'completed');
+    if (persistent) { assert.ok(failures >= 3); assert.match(result.error, /Cannot verify durable cancellation/); assert.match(result.output, /partial evidence/); }
+  }
+});
+
+test('global-slot polling backs off while cancellation remains responsive', { timeout: 2000 }, async () => {
+  const persistence = store(), backend = runner(), controller = new AbortController(); let attempts = 0;
+  persistence.acquireSlot = () => { attempts++; return undefined; }; persistence.releaseSlot = () => {};
+  const timer = setTimeout(() => controller.abort(), 500);
+  try {
+    const result = await new WorkflowEngine(config(), backend, persistence, { instanceId: 'offline' }).run(input('delegate'), { signal: controller.signal });
+    assert.equal(result.status, 'cancelled'); assert.ok(attempts <= 5, `expected backed-off polling, received ${attempts} attempts`); assert.equal(backend.calls.length, 0);
+  } finally { clearTimeout(timer); }
+});
+
 function repository(t) {
   const root = mkdtempSync(join(tmpdir(), 'council-engine-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -331,4 +386,51 @@ test('write pipeline continues in one retained workspace', async t => {
   assert.equal(result.status, 'completed', result.error);
   assert.equal(result.workspaces.length, 1);
   assert.equal(backend.calls[0].cwd, backend.calls[1].cwd);
+});
+
+test('cancelled finalization has a bounded artifact budget and retains an exportable worktree', { timeout: 60_000 }, async t => {
+  const { root } = repository(t);
+  const controller = new AbortController();
+  const original = GitWorkspaces.prototype.export;
+  GitWorkspaces.prototype.export = async function (_artifact, signal) {
+    return await new Promise((_resolve, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
+  let result;
+  try {
+    const backend = runner(async request => {
+      writeFileSync(join(request.cwd, 'retained.txt'), 'evidence survives cancellation\n');
+      controller.abort(); return { agent: request.agent, status: 'completed', output: 'partial offline work', durationMs: 1 };
+    });
+    result = await new WorkflowEngine(config(root), backend, store(), { cancellationArtifactTimeoutMs: 40 }).run(input('delegate', { permission: 'write' }), { signal: controller.signal });
+  } finally { GitWorkspaces.prototype.export = original; }
+  assert.equal(result.status, 'cancelled'); assert.equal(result.workspaces[0].exportStatus, 'pending');
+  assert.match(result.error, /deadline exceeded/); assert.match(result.error, /Workflow cancelled/);
+  assert.equal(readFileSync(join(result.workspaces[0].path, 'retained.txt'), 'utf8'), 'evidence survives cancellation\n');
+  const artifact = await new GitWorkspaces(root, join(root, '.council')).export(result.workspaces[0]);
+  assert.equal(artifact.exportStatus, 'ready'); assert.match(readFileSync(artifact.patchPath, 'utf8'), /evidence survives cancellation/);
+});
+
+test('failed worktree creation retains its pending artifact before filesystem effects', async t => {
+  const { root } = repository(t);
+  const original = GitWorkspaces.prototype.git;
+  const persistence = store(), backend = runner();
+  let pending;
+  GitWorkspaces.prototype.git = async function (cwd, args, ...rest) {
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      pending = [...persistence.runs.values()][0].workspaces[0];
+      assert.ok(pending); assert.equal(pending.exportStatus, 'pending');
+      throw new Error('offline checkout failure');
+    }
+    return original.call(this, cwd, args, ...rest);
+  };
+  let result;
+  try { result = await new WorkflowEngine(config(root), backend, persistence).run(input('delegate', { permission: 'write' })); }
+  finally { GitWorkspaces.prototype.git = original; }
+  assert.equal(result.status, 'failed'); assert.equal(result.workspaces.length, 1);
+  assert.equal(result.workspaces[0].exportStatus, 'pending');
+  assert.match(result.workspaces[0].exportError, /preparation did not finish/);
+  assert.equal(backend.calls.length, 0);
 });

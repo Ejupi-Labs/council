@@ -11,7 +11,7 @@ async function finish(code, signal) {
     if (finished)
         return;
     finished = true;
-    if (vendor?.pid && (process.platform !== 'win32' || (vendor.exitCode === null && vendor.signalCode === null)))
+    if (vendor?.pid)
         await killProcessTree(vendor.pid);
     send({ type: 'closed', code, signal });
     process.stdin.destroy();
@@ -21,7 +21,7 @@ async function finish(code, signal) {
         process.disconnect();
 }
 function stop() {
-    if (stopping)
+    if (stopping || finished)
         return;
     stopping = true;
     vendor?.stdin.destroy();

@@ -16,6 +16,9 @@ Usage: council <command> [options]
 Commands:
   init           Create project settings without overwriting existing settings
   doctor         Inspect local runtimes; no model calls or login
+  health         Inspect state sizes, limits and runtime health; optional --integrity
+  backup         Create a consistent local backup with --output <new-file>
+  prune          Preview old run retention with --before <timestamp>; --execute deletes
   connection     Print absolute MCP connection settings for this project
   plan           Preview workflow stages and call bounds without model calls
   run            Execute a workflow; print its ID to stderr and JSON result to stdout
@@ -26,6 +29,7 @@ Commands:
   cancel <id>    Request cancellation across Council processes
   recover        Recover work owned by proven-dead processes; never replay tasks
   export <id>    Export a Markdown report; optional --output <path> (no overwrite)
+  patches <id>   Refresh patch artifacts for terminal work without calling agents
   cleanup <id>   Remove managed worktrees after --reviewed; --discard permits dirty work
   mcp            Serve MCP over stdio
   demo           Run all six modes with local mock agents; zero model calls
@@ -44,6 +48,9 @@ Options:
   --max-calls <n>        Per-run bound within project limits
   --write               Enable isolated worktrees for requested edits
   --json                JSON output (default; export emits Markdown)
+  --summary             Use lightweight summaries for runs/events
+  --cursor <token>      Continue a runs --summary page
+  --keep-latest <n>     Preserve newest runs during pruning (default: 100)
   --version             Print version
   --help                Show help
 
@@ -64,6 +71,8 @@ async function main() {
             'max-calls': { type: 'string' }, write: { type: 'boolean' }, json: { type: 'boolean' },
             after: { type: 'string' }, limit: { type: 'string' }, output: { type: 'string' },
             reviewed: { type: 'boolean' }, discard: { type: 'boolean' },
+            integrity: { type: 'boolean' }, summary: { type: 'boolean' }, cursor: { type: 'string' },
+            before: { type: 'string' }, 'keep-latest': { type: 'string' }, execute: { type: 'boolean' },
             help: { type: 'boolean' }, version: { type: 'boolean' },
         } });
     if (values.version) {
@@ -75,10 +84,10 @@ async function main() {
         process.stdout.write(HELP);
         return;
     }
-    const commands = ['init', 'doctor', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'cleanup', 'mcp', 'demo'];
+    const commands = ['init', 'doctor', 'health', 'backup', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo'];
     if (!commands.includes(command))
         throw new Error(`Unknown command: ${command}`);
-    const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'cleanup'].includes(command);
+    const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup'].includes(command);
     if (positionals.length !== (takesId ? 2 : 1))
         throw new Error(takesId ? `${command} requires exactly one run ID.` : `${command} accepts no positional arguments.`);
     const id = positionals[1];
@@ -88,10 +97,16 @@ async function main() {
         throw new Error('Choose --task or --task-file, not both.');
     const common = ['workspace', 'backend', 'json', 'help', 'version'];
     const workflowOptions = ['mode', 'agents', 'task', 'task-file', 'context-file', 'assignments-file', 'judge', 'rounds', 'max-calls', 'write', 'model'];
-    const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit'] : []), ...(command === 'export' ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
+    const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit', 'summary'] : []), ...(command === 'runs' ? ['limit', 'summary', 'cursor'] : []), ...(command === 'cancel' ? ['summary'] : []), ...(command === 'health' ? ['integrity'] : []), ...(command === 'prune' ? ['before', 'keep-latest', 'execute'] : []), ...(['export', 'backup'].includes(command) ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
     for (const option of Object.keys(values))
         if (!permitted.has(option))
             throw new Error(`--${option} is not supported by ${command}.`);
+    if (command === 'backup' && !values.output)
+        throw new Error('Backup requires --output with a new destination filename.');
+    if (command === 'prune' && !values.before)
+        throw new Error('Prune requires --before with an explicit cutoff timestamp.');
+    if (command === 'runs' && values.cursor && !values.summary)
+        throw new Error('--cursor requires runs --summary.');
     const backend = values.backend === undefined ? undefined : parseBackend(values.backend);
     const workspace = resolve(values.workspace ?? process.env.COUNCIL_WORKSPACE ?? process.cwd());
     if (command === 'init') {
@@ -113,11 +128,31 @@ async function main() {
             process.once(signal, () => { process.exitCode = signal === 'SIGINT' ? 130 : 143; void server.close().catch(fail); });
         return;
     }
+    const stopOperation = (signal) => { process.exitCode = signal === 'SIGINT' ? 130 : 143; void service.close().catch(fail); };
+    const operationInt = () => stopOperation('SIGINT'), operationTerm = () => stopOperation('SIGTERM');
+    if (!['run', 'continue'].includes(command)) {
+        process.once('SIGINT', operationInt);
+        process.once('SIGTERM', operationTerm);
+    }
     try {
         if (command === 'doctor')
             print({ version: VERSION, node: process.version, backend: config.backend, workspace: config.workspaceRoot, concurrencyScope: 'workspace', agents: await service.runner.doctor(), recoveredRuns: service.recoveredRuns.map(run => run.id), note: 'Prerequisite availability does not prove authentication or model access.' });
-        else if (command === 'runs')
-            print(service.store.listRuns());
+        else if (command === 'health') {
+            const health = service.health(values.integrity);
+            print(health);
+            if (health.status === 'degraded')
+                process.exitCode = 1;
+        }
+        else if (command === 'backup')
+            print({ destination: await service.backup(values.output) });
+        else if (command === 'prune')
+            print({ dryRun: !values.execute, ...service.prune({ before: values.before, keepLatest: Number(values['keep-latest'] ?? 100), dryRun: !values.execute }) });
+        else if (command === 'runs') {
+            const limit = Number(values.limit ?? 20);
+            if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+                throw new Error('Run limit must be from 1 to 100.');
+            print(values.summary ? service.runPage(limit, values.cursor) : service.store.listRuns(limit));
+        }
         else if (command === 'show' || command === 'export') {
             const run = service.store.getRun(id);
             if (!run)
@@ -139,15 +174,16 @@ async function main() {
             const after = Number(values.after ?? 0), limit = Number(values.limit ?? 100);
             if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 1000)
                 throw new Error('Event cursor must be non-negative and limit must be from 1 to 1000.');
-            print(service.store.events(id, after).slice(0, limit));
+            print(values.summary ? service.store.compactEvents(id, after, limit) : service.store.events(id, after).slice(0, limit));
         }
         else if (command === 'recover')
             print({ recovered: [...service.recoveredRuns, ...service.store.recoverOrphans()].map(run => ({ id: run.id, status: run.status, error: run.error })) });
         else if (command === 'cancel') {
-            const previous = service.store.getRun(id);
-            const run = service.cancel(id);
-            print({ cancellationRequested: !!previous && ['queued', 'running'].includes(previous.status) && ['queued', 'running'].includes(run.status), run });
+            const request = service.requestCancellation(id);
+            print({ cancellationRequested: request.requested, run: values.summary ? request.run : service.getRun(id) });
         }
+        else if (command === 'patches')
+            print(await service.exportArtifacts(id));
         else if (command === 'cleanup') {
             if (!values.reviewed)
                 throw new Error('Review the worktrees and patches, then provide --reviewed to request cleanup.');
@@ -204,6 +240,8 @@ async function main() {
         }
     }
     finally {
+        process.removeListener('SIGINT', operationInt);
+        process.removeListener('SIGTERM', operationTerm);
         await service.close();
     }
 }
@@ -218,6 +256,7 @@ async function demo(service) {
     if (results.some(run => run.status !== 'completed'))
         process.exitCode = 1;
 }
-function fail(error) { process.stderr.write(`Council: ${error instanceof Error ? error.message : 'Unexpected failure.'}\n`); process.exitCode = 1; }
+function fail(error) { process.stderr.write(`Council: ${error instanceof Error ? error.message : 'Unexpected failure.'}\n`); if (!process.exitCode)
+    process.exitCode = 1; }
 main().catch(fail);
 //# sourceMappingURL=cli.js.map
