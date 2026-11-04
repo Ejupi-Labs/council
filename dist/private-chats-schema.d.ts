@@ -6,3 +6,5 @@ export declare const privateChatWatchDefinition: JsonSchema;
 export declare const privateChatListDefinition: JsonSchema;
 export declare const privateChatActorsDefinition: JsonSchema;
 export declare const privateChatGetDefinition: JsonSchema;
+export declare const privateChatListPageDefinition: JsonSchema;
+export declare const privateChatActorsPageDefinition: JsonSchema;

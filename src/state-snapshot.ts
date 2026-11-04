@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
-import { closeSync, createReadStream, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, createReadStream, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { backupDatabase } from './sqlite-backup.js';
 import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
+import { checkAgentJsonStructure } from './agent-json.js';
+import { assertUniqueObjectKeys } from './control-json.js';
+import { objectSchema, parseSchema, type JsonSchema } from './schema.js';
 import { VERSION } from './version.js';
 
-export const STATE_DATABASES = ['state.db', 'rooms.sqlite', 'billing.sqlite', 'private-chats.sqlite', 'delegation.sqlite'] as const;
+export const STATE_DATABASES = Object.freeze(['state.db', 'rooms.sqlite', 'billing.sqlite', 'private-chats.sqlite', 'delegation.sqlite'] as const);
 type StateDatabaseName = typeof STATE_DATABASES[number];
 
 export interface StateFileHealth {
@@ -45,6 +48,74 @@ function missing(error: unknown): boolean { return (error as NodeJS.ErrnoExcepti
 
 function regularFile(path: string): void {
   if (!lstatSync(path).isFile()) throw new Error('Expected a regular database file without a symbolic link.');
+}
+
+const timestampDefinition: JsonSchema = { type: 'string', minLength: 1, maxLength: 64 };
+const snapshotManifestDefinition = objectSchema({
+  format: { const: 'council-state-snapshot' }, formatVersion: { const: 1 },
+  councilVersion: { type: 'string', minLength: 1, maxLength: 200 },
+  startedAt: timestampDefinition, completedAt: timestampDefinition,
+  consistency: { const: 'per-database' }, artifactsIncluded: { const: false },
+  databases: { type: 'array', minItems: 1, maxItems: STATE_DATABASES.length, items: objectSchema({
+    name: { type: 'string', enum: STATE_DATABASES },
+    bytes: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    sha256: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' },
+    schemaVersion: { type: 'integer', minimum: 0, maximum: 2147483647 },
+    startedAt: timestampDefinition, completedAt: timestampDefinition,
+  }, ['name', 'bytes', 'sha256', 'schemaVersion', 'startedAt', 'completedAt']) },
+  absentDatabases: { type: 'array', maxItems: STATE_DATABASES.length - 1, items: { type: 'string', enum: STATE_DATABASES } },
+}, ['format', 'formatVersion', 'councilVersion', 'startedAt', 'completedAt', 'consistency', 'artifactsIncluded', 'databases', 'absentDatabases']);
+
+/** Return an independent public schema; callers cannot alter verifier invariants. */
+export function stateSnapshotSchema(): JsonSchema { return structuredClone(snapshotManifestDefinition); }
+
+function snapshotTimestamp(value: string): void {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) throw new Error('Snapshot manifest timestamps must use canonical UTC ISO format.');
+}
+
+function parseSnapshotManifest(source: string): StateSnapshotManifest {
+  try { checkAgentJsonStructure(Buffer.from(source)); }
+  catch { throw new Error('Snapshot manifest JSON exceeds the supported structural limit.'); }
+  const value = JSON.parse(source);
+  assertUniqueObjectKeys(source, 'Snapshot manifest');
+  const manifest = parseSchema<StateSnapshotManifest>(snapshotManifestDefinition, value, 'snapshot manifest');
+  if (!manifest.councilVersion.trim()) throw new Error('Snapshot manifest must name a Council version.');
+  snapshotTimestamp(manifest.startedAt); snapshotTimestamp(manifest.completedAt);
+  const names = new Set<StateDatabaseName>();
+  for (const entry of manifest.databases) {
+    if (names.has(entry.name)) throw new Error('Invalid or duplicated database entry in snapshot manifest.');
+    snapshotTimestamp(entry.startedAt); snapshotTimestamp(entry.completedAt);
+    names.add(entry.name);
+  }
+  if (!names.has('state.db')) throw new Error('Snapshot does not contain workflow state.');
+  for (const name of manifest.absentDatabases) {
+    if (names.has(name)) throw new Error('Invalid or duplicated absent database in snapshot manifest.');
+    names.add(name);
+  }
+  if (names.size !== STATE_DATABASES.length) throw new Error('Snapshot manifest must account for every collaboration database.');
+  return manifest;
+}
+
+function readSnapshotManifest(path: string): StateSnapshotManifest {
+  const limit = 64 * 1024, descriptor = openSync(path, 'r');
+  try {
+    const info = fstatSync(descriptor);
+    if (!info.isFile()) throw new Error('Expected a regular snapshot manifest.');
+    if (info.size > limit) throw new Error('Snapshot manifest exceeds 64 KiB.');
+    const buffer = Buffer.alloc(limit + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readSync(descriptor, buffer, offset, buffer.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > limit) throw new Error('Snapshot manifest exceeds 64 KiB.');
+    let source: string;
+    try { source = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, offset)); }
+    catch { throw new Error('Snapshot manifest must contain valid UTF-8 JSON.'); }
+    return parseSnapshotManifest(source);
+  } finally { closeSync(descriptor); }
 }
 
 function inspectDatabase(path: string): { schemaVersion: number; integrity: string[]; journalMode: string } {
@@ -145,13 +216,15 @@ export async function createStateSnapshot(stateDir: string, output: string, sign
     }
     signal?.throwIfAborted();
     manifest.completedAt = new Date().toISOString();
+    // Never publish a completion marker that the strict verifier cannot consume.
+    const validated = parseSnapshotManifest(JSON.stringify(manifest));
     const completion = join(destination, 'manifest.json');
-    writeFileSync(completion, JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    writeFileSync(completion, JSON.stringify(validated, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     published.push(completion);
     const descriptor = openSync(completion, 'r+');
     try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
     signal?.throwIfAborted();
-    return { destination, manifest };
+    return { destination, manifest: validated };
   } catch (error) {
     // Remove only files this operation published. Preserve any unexpected concurrent additions.
     for (const file of published.reverse()) { try { unlinkSync(file); } catch {} }
@@ -166,23 +239,7 @@ export async function verifyStateSnapshot(directory: string, signal?: AbortSigna
   requireSafeSqliteRuntime();
   const root = realpathSync.native(directory), manifestPath = join(root, 'manifest.json');
   regularFile(manifestPath);
-  if (statSync(manifestPath).size > 64 * 1024) throw new Error('Snapshot manifest exceeds 64 KiB.');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as StateSnapshotManifest;
-  if (!manifest || manifest.format !== 'council-state-snapshot' || manifest.formatVersion !== 1 || manifest.consistency !== 'per-database' || manifest.artifactsIncluded !== false ||
-      !Array.isArray(manifest.databases) || !Array.isArray(manifest.absentDatabases) || manifest.databases.length > STATE_DATABASES.length ||
-      typeof manifest.startedAt !== 'string' || !Number.isFinite(Date.parse(manifest.startedAt)) || typeof manifest.completedAt !== 'string' || !Number.isFinite(Date.parse(manifest.completedAt))) throw new Error('Invalid or unsupported Council snapshot manifest.');
-  const names = new Set<string>();
-  for (const entry of manifest.databases) {
-    if (!entry || !STATE_DATABASES.includes(entry.name) || names.has(entry.name) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 ||
-        typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.schemaVersion) || entry.schemaVersion < 0) throw new Error('Invalid or duplicated database entry in snapshot manifest.');
-    names.add(entry.name);
-  }
-  if (!names.has('state.db')) throw new Error('Snapshot does not contain workflow state.');
-  for (const name of manifest.absentDatabases) {
-    if (!STATE_DATABASES.includes(name) || names.has(name)) throw new Error('Invalid or duplicated absent database in snapshot manifest.');
-    names.add(name);
-  }
-  if (names.size !== STATE_DATABASES.length) throw new Error('Snapshot manifest must account for every collaboration database.');
+  const manifest = readSnapshotManifest(manifestPath);
   const issues: string[] = [];
   for (const name of manifest.absentDatabases) {
     try { lstatSync(join(root, name)); issues.push(`${name}: database is present but declared absent.`); }

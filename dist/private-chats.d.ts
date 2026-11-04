@@ -1,5 +1,5 @@
 import type { CouncilService } from './service.js';
-import type { PrivateChat, PrivateChatInput, PrivateChatMessage, PrivateChatPage, PrivateChatPageInput, PrivateChatSendInput, PrivateChatWatchInput, PrivateChatWatchResult } from './private-chats-types.js';
+import type { PrivateChat, PrivateChatInput, PrivateChatMessage, PrivateChatPage, PrivateChatPageInput, PrivateChatSendInput, PrivateChatWatchInput, PrivateChatWatchResult, PrivateChatListPageInput, PrivateChatListPage, PrivateChatActorsPageInput, PrivateChatActorsPage } from './private-chats-types.js';
 export declare class PrivateChatConflict extends Error {
     readonly code = "COUNCIL_PRIVATE_CHAT_CONFLICT";
     readonly status = 409;
@@ -18,6 +18,11 @@ export declare class PrivateChatManager {
     private row;
     private member;
     private cursor;
+    private discoveryScope;
+    private readDiscoveryCursor;
+    private writeDiscoveryCursor;
+    listPage(value: PrivateChatListPageInput): PrivateChatListPage;
+    actorsPage(value?: PrivateChatActorsPageInput): PrivateChatActorsPage;
     private notify;
     create(value: PrivateChatInput): PrivateChat;
     send(value: PrivateChatSendInput): PrivateChatMessage;

@@ -12,7 +12,7 @@ import { billingInputDefinition, billingImportDefinition } from './billing-schem
 import { routingDefinition } from './routing-schema.js';
 import { collaborationSkills } from './skills.js';
 import { delegationConfigureDefinition, delegationReportDefinition, delegationResolveDefinition, delegationWatchDefinition } from './delegation-schema.js';
-import { privateChatCreateDefinition, privateChatSendDefinition, privateChatPageDefinition, privateChatWatchDefinition, privateChatListDefinition } from './private-chats-schema.js';
+import { privateChatCreateDefinition, privateChatSendDefinition, privateChatPageDefinition, privateChatWatchDefinition, privateChatListDefinition, privateChatListPageDefinition, privateChatActorsPageDefinition } from './private-chats-schema.js';
 
 function compactRun(run: RunRecord) {
   return summarizeRun(run);
@@ -153,6 +153,10 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
     input => service.privateChats.list(input.actor, input.roomId));
   tool('council_chat_actors', 'Discover local private-chat participant/task-instance labels from metadata, optionally scoped to a room. This reads no message bodies and grants no execution permission.', objectSchema({ roomId: id }), read,
     input => service.privateChats.actors(input.roomId));
+  tool('council_chat_list_page', 'Read a bounded metadata page of private threads for an exact actor/task-instance label. Follow nextCursor with the same actor and optional room. No message bodies or execution permission; prefer this over an unbounded list.', privateChatListPageDefinition, read,
+    input => service.privateChats.listPage(input as any));
+  tool('council_chat_actors_page', 'Discover a bounded page of exact local private-chat actor labels. Follow nextCursor with the same optional room. Labels are trusted coordination metadata, not authenticated identities. Reads no messages.', privateChatActorsPageDefinition, read,
+    input => service.privateChats.actorsPage(input as any));
   tool('council_chat_history', 'Read complete private pair messages in ascending pages as one of its participant labels. Follow nextCursor with the same chat and actor; no private transcript is injected into room-global context.', privateChatPageDefinition, read,
     input => service.privateChats.page(input as any));
   tool('council_chat_watch', 'Wait in the server for a private thread to receive messages, returning metadata only. Reuse its lastSequence and explicitly read history when needed; yield while waiting instead of model polling. Cancelling the wait does not cancel peer work.', privateChatWatchDefinition, read,

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { link, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { WorkspaceArtifact } from './types.js';
 import { ManagedProcess, ProcessCleanupError } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
@@ -19,6 +20,21 @@ function inside(base: string, path: string): boolean {
   return Boolean(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
+function canonicalStatePath(path: string): string {
+  let ancestor = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    try { return resolve(realpathSync.native(ancestor), ...missing.reverse()); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      missing.push(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+
 /** Retained detached worktrees with durable base metadata and explicit reviewed cleanup. */
 export class GitWorkspaces {
   private readonly root: string;
@@ -27,7 +43,7 @@ export class GitWorkspaces {
 
   constructor(workspaceRoot: string, stateDir: string) {
     this.root = resolve(workspaceRoot);
-    this.state = resolve(stateDir);
+    this.state = canonicalStatePath(stateDir);
   }
 
   private async operation<T>(action: (signal: AbortSignal) => Promise<T>, parent?: AbortSignal): Promise<T> {

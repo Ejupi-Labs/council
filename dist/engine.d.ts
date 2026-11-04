@@ -29,14 +29,18 @@ export declare class WorkflowEngine {
     private readonly options;
     private readonly semaphore;
     private readonly workspaces;
+    private processCleanupFailure?;
     constructor(config: CouncilConfig, runner: AgentRunner, store: WorkflowStore, options?: {
         instanceId?: string;
         artifactTimeoutMs?: number;
         cancellationArtifactTimeoutMs?: number;
         onStateFailure?: (error: Error) => void;
+        onProcessCleanupFailure?: (error: Error) => void;
         assertAgentDispatch?: (agent: string) => void;
         privateChats?: () => Pick<PrivateChatManager, 'create' | 'send' | 'page'>;
     });
+    /** Stop this host after a trusted owned-process cleanup failure. Inspection and a fresh host are required. */
+    fenceProcessCleanup(): void;
     plan(input: WorkflowInput, options?: {
         resolvedSettings?: true;
     }): WorkflowPlan;

@@ -1,4 +1,5 @@
-export declare const STATE_DATABASES: readonly ['state.db', 'rooms.sqlite', 'billing.sqlite', 'private-chats.sqlite', 'delegation.sqlite'];
+import { type JsonSchema } from './schema.js';
+export declare const STATE_DATABASES: readonly ["state.db", "rooms.sqlite", "billing.sqlite", "private-chats.sqlite", "delegation.sqlite"];
 type StateDatabaseName = typeof STATE_DATABASES[number];
 export interface StateFileHealth {
     name: StateDatabaseName;
@@ -29,6 +30,8 @@ export interface StateSnapshotManifest {
     databases: StateSnapshotEntry[];
     absentDatabases: StateDatabaseName[];
 }
+/** Return an independent public schema; callers cannot alter verifier invariants. */
+export declare function stateSnapshotSchema(): JsonSchema;
 /** Inspect known collaboration stores without creating optional feature databases. */
 export declare function inspectStateFiles(stateDir: string, checkIntegrity?: boolean): StateFileHealth[];
 /** Back up all present stores; a durable manifest is published only after every copy verifies. */

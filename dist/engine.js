@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { MODES } from './types.js';
 import { GitWorkspaces } from './workspaces.js';
 import { reasoningEffortError } from './runner.js';
+import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
 import { parseSchema } from './schema.js';
 import { assertUniqueObjectKeys } from './control-json.js';
 import { checkAgentJsonStructure } from './agent-json.js';
@@ -118,9 +119,13 @@ function clip(value, chars) {
     return value.slice(0, Math.max(0, chars - marker.length)) + marker.slice(0, chars);
 }
 function clipBytes(value, bytes) {
-    const data = Buffer.from(value, 'utf8');
+    // UTF-8 requires at least one byte per UTF-16 code unit. A bounded prefix
+    // therefore contains every character that could fit, without encoding an
+    // arbitrarily oversized injected runner result just to discard its tail.
+    const prefix = value.length > bytes ? value.slice(0, bytes) : value;
+    const data = Buffer.from(prefix, 'utf8');
     if (data.length <= bytes)
-        return value;
+        return prefix === value ? value : data.toString('utf8');
     let end = bytes;
     while (end > 0 && (data[end] & 0xc0) === 0x80)
         end--;
@@ -145,6 +150,7 @@ export class WorkflowEngine {
     options;
     semaphore;
     workspaces;
+    processCleanupFailure;
     constructor(config, runner, store, options = {}) {
         this.config = config;
         this.runner = runner;
@@ -164,6 +170,17 @@ export class WorkflowEngine {
         }
         this.semaphore = new Semaphore(config.maxConcurrency);
         this.workspaces = new GitWorkspaces(config.workspaceRoot, config.stateDir);
+    }
+    /** Stop this host after a trusted owned-process cleanup failure. Inspection and a fresh host are required. */
+    fenceProcessCleanup() {
+        if (!this.processCleanupFailure) {
+            // Fence this engine before notifying the host or releasing a call permit.
+            this.processCleanupFailure = new Error(PROCESS_CLEANUP_ERROR);
+            try {
+                this.options.onProcessCleanupFailure?.(this.processCleanupFailure);
+            }
+            catch { /* A notification failure must not lift the dispatch fence. */ }
+        }
     }
     plan(input, options = {}) {
         if (!input || !MODES.includes(input.mode))
@@ -433,7 +450,8 @@ export class WorkflowEngine {
                 evidenceFailure(error);
             }
         };
-        const check = () => { if (dispatchFailure)
+        const check = () => { if (this.processCleanupFailure)
+            throw this.processCleanupFailure; if (dispatchFailure)
             throw dispatchFailure; pollCancellation(true); if (signal.aborted)
             throw new Cancelled(); };
         const getWorkspace = async (agent) => {
@@ -442,11 +460,18 @@ export class WorkflowEngine {
             const slot = input.mode === 'pipeline' ? 'pipeline' : agent;
             let handle = handles.get(slot);
             if (!handle) {
-                handle = await this.workspaces.create(id, agent, slot, signal, artifact => {
-                    run.workspaces.push(artifact);
-                    save();
-                    event('workspace.preparing', artifact);
-                });
+                try {
+                    handle = await this.workspaces.create(id, agent, slot, signal, artifact => {
+                        run.workspaces.push(artifact);
+                        save();
+                        event('workspace.preparing', artifact);
+                    });
+                }
+                catch (error) {
+                    if (error instanceof ProcessCleanupError)
+                        this.fenceProcessCleanup();
+                    throw error;
+                }
                 handles.set(slot, handle);
                 save();
                 event('workspace.created', { agent, path: handle.path });
@@ -583,6 +608,8 @@ export class WorkflowEngine {
             let result;
             let releaseError;
             let protectionFailure;
+            let cleanupDiagnostic;
+            let privateOutput = Boolean(privateTurn);
             const callController = new AbortController();
             const callSignal = AbortSignal.any([signal, callController.signal]);
             const guard = this.options.assertAgentDispatch ? setInterval(() => {
@@ -605,6 +632,9 @@ export class WorkflowEngine {
             guard?.unref();
             const start = Date.now();
             try {
+                // Capture the already-owned peer turn's store while the host is healthy;
+                // a cleanup fence must still allow retaining that turn's private evidence.
+                const privateManager = privateTurn ? this.options.privateChats?.() : undefined;
                 const settings = input.agentSettings?.[agent];
                 const model = options.resolvedSettings ? settings?.model : settings?.model ?? this.config.agents[agent]?.model;
                 const effort = options.resolvedSettings ? settings?.effort : settings?.effort ?? this.config.agents[agent]?.effort;
@@ -632,6 +662,10 @@ export class WorkflowEngine {
                     cwd, permission, timeoutMs: this.config.timeoutMs, signal: callSignal, model, effort,
                     ...(options.resolvedSettings ? { resolvedSettings: true } : {}),
                 });
+                if (result.status === 'failed' && typeof result.error === 'string' && result.error.startsWith(PROCESS_CLEANUP_ERROR)) {
+                    cleanupDiagnostic = clip(result.error, MAX_ERROR_CHARS);
+                    this.fenceProcessCleanup();
+                }
                 const output = String(result.output ?? '');
                 const oversizedOutput = result.status === 'completed' && Buffer.byteLength(output) > this.config.maxOutputBytes;
                 result = {
@@ -643,9 +677,9 @@ export class WorkflowEngine {
                 };
                 if (!['completed', 'failed', 'cancelled', 'timeout'].includes(result.status))
                     result = { ...result, status: 'failed', error: 'Agent returned an invalid status' };
-                if (protectionFailure)
+                if (protectionFailure && !cleanupDiagnostic)
                     result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
-                else if (privateTurn && signal.aborted)
+                else if (privateTurn && signal.aborted && !cleanupDiagnostic)
                     result = { ...result, status: 'cancelled', error: 'Private coordination was cancelled before the reply settled.' };
                 if (privateTurn) {
                     let recursive = privateChatCandidate(output);
@@ -657,17 +691,18 @@ export class WorkflowEngine {
                     }
                     if (recursive)
                         result.status = 'failed';
-                    const manager = this.options.privateChats?.();
+                    const manager = privateManager;
                     if (!manager)
                         throw new Error('Private chat persistence is unavailable.');
                     const reply = manager.send({ chatId: privateTurn.chatId, from: privateTurn.peerActor, runId: id,
                         body: JSON.stringify({ kind: 'reply', requestMessageId: privateTurn.requestMessageId, status: result.status, body: result.output,
-                            ...(recursive ? { error: 'Advisor and private-chat recursion are disabled in a private reply turn.' } : result.error ? { error: result.error } : {}) }) });
+                            ...(cleanupDiagnostic ? { error: PROCESS_CLEANUP_ERROR } : recursive ? { error: 'Advisor and private-chat recursion are disabled in a private reply turn.' } : result.error ? { error: result.error } : {}) }) });
                     result = { agent, status: result.status, durationMs: result.durationMs,
                         output: clipBytes(`[Private coordination reply retained in chat ${privateTurn.chatId}; message ${reply.id}.]`, this.config.maxOutputBytes),
                         ...(result.status !== 'completed' ? { error: recursive ? 'Advisor and private-chat recursion are disabled in a private reply turn.' : 'Private coordination reply did not complete. Inspect its pair chat for retained evidence.' } : {}) };
                 }
                 else if (privateChatCandidate(output)) {
+                    privateOutput = true;
                     result.output = clipBytes('[Private coordination request; raw evidence is excluded from public workflow steps.]', this.config.maxOutputBytes);
                     delete result.error;
                     delete result.stopReason;
@@ -700,7 +735,9 @@ export class WorkflowEngine {
                     releaseError = error;
                 }
             }
-            if (protectionFailure)
+            if (cleanupDiagnostic)
+                result = { ...result, status: 'failed', error: privateOutput ? PROCESS_CLEANUP_ERROR : cleanupDiagnostic };
+            else if (protectionFailure)
                 result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
             const step = { id: stepId, agent, role, result };
             run.steps.push(step);
@@ -859,8 +896,8 @@ export class WorkflowEngine {
             run.status = 'completed';
         }
         catch (error) {
-            run.status = monitorFailure || dispatchFailure || persistenceFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
-            run.error = persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
+            run.status = this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
+            run.error = this.processCleanupFailure?.message ?? persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
             for (const artifact of run.workspaces ?? []) {
                 if (![...handles.values()].some(handle => handle.path === artifact.path))
                     artifact.exportError = `Worktree preparation did not finish: ${run.error}`;
@@ -881,13 +918,23 @@ export class WorkflowEngine {
                 signal.addEventListener('abort', onCancellation, { once: true });
             try {
                 for (const handle of handles.values()) {
+                    if (this.processCleanupFailure)
+                        continue;
                     try {
                         const artifact = await this.workspaces.export(handle, exportController.signal);
+                        // Another workflow may have reported cleanup uncertainty while this
+                        // export was awaiting Git. Do not publish a ready patch afterward.
+                        if (this.processCleanupFailure)
+                            continue;
                         const index = run.workspaces.findIndex(value => value.path === handle.path);
                         run.workspaces[index] = artifact;
                         event('workspace.exported', artifact);
                     }
                     catch (error) {
+                        if (error instanceof ProcessCleanupError)
+                            this.fenceProcessCleanup();
+                        if (this.processCleanupFailure)
+                            continue;
                         if (run.status !== 'cancelled')
                             run.status = 'failed';
                         const detail = `Could not export workspace patch: ${errorMessage(error)}`;
@@ -899,10 +946,15 @@ export class WorkflowEngine {
                         }
                     }
                 }
+                if (this.processCleanupFailure)
+                    for (const artifact of run.workspaces ?? []) {
+                        artifact.exportStatus = 'pending';
+                        artifact.exportError = `${PROCESS_CLEANUP_ERROR} Inspect the retained worktree before exporting its patch.`;
+                    }
                 pollCancellation();
-                if (monitorFailure || dispatchFailure || persistenceFailure) {
+                if (this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure) {
                     run.status = 'failed';
-                    run.error = clip([monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
+                    run.error = clip([this.processCleanupFailure?.message, monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
                 }
                 else if (signal.aborted) {
                     run.status = 'cancelled';

@@ -33,6 +33,7 @@ export declare class RoomStore {
     messagePage(id: string, limit?: number, cursor?: number): {
         messages: RoomMessage[];
         nextCursor: number | null;
+        nextAfter: number;
     };
     recover(id?: string): void;
     close(): void;

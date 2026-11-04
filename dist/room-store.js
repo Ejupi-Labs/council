@@ -318,7 +318,7 @@ export class RoomStore {
     messagePage(id, limit = 100, cursor) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)))
             throw new Error('Invalid message page bounds.');
-        if (!this.row(id))
+        if (!this.has(id))
             throw new Error('Room not found.');
         const messages = [];
         let bytes = 2, lastSequence = null, more = false;
@@ -335,7 +335,7 @@ export class RoomStore {
             bytes += size;
             lastSequence = row.sequence;
         }
-        return { messages, nextCursor: more ? lastSequence : null };
+        return { messages, nextCursor: more ? lastSequence : null, nextAfter: lastSequence ?? cursor ?? 0 };
     }
     recover(id) {
         const query = this.db.prepare(`SELECT id,owner,owner_pid FROM rooms WHERE owner IS NOT NULL${id === undefined ? '' : ' AND id=?'}`);

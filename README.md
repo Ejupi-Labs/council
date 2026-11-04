@@ -17,7 +17,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.3.0-dev.1.tgz
+npm install --global ./council-ai-plugin-1.3.0-dev.2.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```
@@ -159,7 +159,7 @@ Five workers can pursue their tasks while two with overlapping responsibilities 
 
 Enable **Private peer exchanges per task (optional)** when creating a room, or configure explicit workflow `privateChats` peers and request quotas. Managed workers yield an exact `council_private_chat_request` JSON envelope; Council gives the peer a separate read-only reply turn and resumes the sender in its existing workspace. Each request reserves two possible calls. Raw pair turns are kept in the private-chat database and excluded from shared workflow lineage, room history and public advisor prompts. Existing call limits, exact settings, cancellation and subscription protection still apply.
 
-Connected host agents can instead use `council_chat_create`, `council_chat_send`, `council_chat_list`, `council_chat_actors`, `council_chat_history` and `council_chat_watch`. The watch blocks in the server without model polling. Messages do not inject into an already-running vendor session, modify room instructions or approve work. Read the [protocol, scope and examples](docs/private-chats.md).
+Connected host agents can use `council_chat_create`, `council_chat_send`, `council_chat_list_page`, `council_chat_actors_page`, `council_chat_history` and `council_chat_watch`. Discovery pages return complete metadata and a scope-bound continuation cursor without reading message bodies; the existing full-list tools remain available. The watch blocks in the server without model polling. Messages do not inject into an already-running vendor session, modify room instructions or approve work. Read the [protocol, scope and examples](docs/private-chats.md).
 
 ## Human or agent management
 

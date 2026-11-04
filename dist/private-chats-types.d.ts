@@ -46,3 +46,22 @@ export interface PrivateChatWatchResult {
     chat: PrivateChat;
     lastSequence: number;
 }
+export interface PrivateChatListPageInput {
+    actor: string;
+    roomId?: string;
+    limit?: number;
+    cursor?: string;
+}
+export interface PrivateChatListPage {
+    chats: PrivateChat[];
+    nextCursor: string | null;
+}
+export interface PrivateChatActorsPageInput {
+    roomId?: string;
+    limit?: number;
+    cursor?: string;
+}
+export interface PrivateChatActorsPage {
+    actors: string[];
+    nextCursor: string | null;
+}

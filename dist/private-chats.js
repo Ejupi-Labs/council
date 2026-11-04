@@ -1,10 +1,20 @@
-import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseSchema } from './schema.js';
 import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
-import { privateChatActorsDefinition, privateChatCreateDefinition, privateChatGetDefinition, privateChatListDefinition, privateChatPageDefinition, privateChatSendDefinition, privateChatWatchDefinition } from './private-chats-schema.js';
+import { checkAgentJsonStructure } from './agent-json.js';
+import { assertUniqueObjectKeys } from './control-json.js';
+import { privateChatActorsDefinition, privateChatActorsPageDefinition, privateChatCreateDefinition, privateChatGetDefinition, privateChatListDefinition, privateChatListPageDefinition, privateChatPageDefinition, privateChatSendDefinition, privateChatWatchDefinition } from './private-chats-schema.js';
+const METADATA_SHELL_BYTES = Buffer.byteLength('{"id":,"participants":[,],"createdAt":,"messageCount":,"lastSequence":}');
+const METADATA_BYTES_SQL = `${METADATA_SHELL_BYTES}
+  +length(CAST(json_quote(id) AS BLOB))
+  +length(CAST(json_quote(participant_a) AS BLOB))+length(CAST(json_quote(participant_b) AS BLOB))
+  +length(CAST(json_quote(created_at) AS BLOB))
+  +length(CAST(message_count AS TEXT))+length(CAST(last_sequence AS TEXT))
+  +CASE WHEN room_id<>'' THEN 10+length(CAST(json_quote(room_id) AS BLOB)) ELSE 0 END
+  +CASE WHEN last_message_at IS NOT NULL AND last_message_at<>'' THEN 17+length(CAST(json_quote(last_message_at) AS BLOB)) ELSE 0 END`;
 export class PrivateChatConflict extends Error {
     code = 'COUNCIL_PRIVATE_CHAT_CONFLICT';
     status = 409;
@@ -131,6 +141,118 @@ export class PrivateChatManager {
         if (after !== 0 && !this.db.prepare('SELECT 1 FROM private_messages WHERE chat_id=? AND sequence=?').get(chatId, after)) {
             throw new Error('The private message cursor does not belong to this chat. Read its history from cursor zero.');
         }
+    }
+    discoveryScope(kind, actor, roomId) {
+        return createHash('sha256').update(JSON.stringify([realpathSync.native(this.service.config.stateDir), kind, actor ?? null, roomId ?? null])).digest('hex');
+    }
+    readDiscoveryCursor(value, kind, scope) {
+        if (value === undefined)
+            return undefined;
+        try {
+            if (value.length > 1024 || !/^[a-zA-Z0-9_-]+$/.test(value))
+                throw new Error();
+            const bytes = Buffer.from(value, 'base64url'), text = bytes.toString('utf8');
+            if (bytes.toString('base64url') !== value || !Buffer.from(text).equals(bytes))
+                throw new Error();
+            checkAgentJsonStructure(bytes);
+            const parsed = JSON.parse(text);
+            assertUniqueObjectKeys(text, 'Private discovery cursor');
+            const cursor = parseSchema({
+                type: 'object', additionalProperties: false, required: ['version', 'kind', 'scope', 'chatId'],
+                properties: {
+                    version: { type: 'integer', const: 1 }, kind: { type: 'string', enum: ['threads', 'actors'] },
+                    scope: { type: 'string', pattern: '^[a-f0-9]{64}$', minLength: 64, maxLength: 64 },
+                    chatId: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_-]+$' },
+                    side: { type: 'string', enum: ['a', 'b'] },
+                },
+            }, parsed, 'private discovery cursor');
+            if (cursor.kind !== kind || cursor.scope !== scope || (kind === 'actors') !== (cursor.side !== undefined))
+                throw new Error();
+            return cursor;
+        }
+        catch {
+            throw new Error('Invalid private discovery cursor or mismatched participant, room or workspace scope. Start from the first page.');
+        }
+    }
+    writeDiscoveryCursor(kind, scope, chatId, side) {
+        return Buffer.from(JSON.stringify({ version: 1, kind, scope, chatId, ...(side ? { side } : {}) })).toString('base64url');
+    }
+    listPage(value) {
+        this.open();
+        const input = parseSchema(privateChatListPageDefinition, value, 'private thread page');
+        actorLabel(input.actor, 'Private chat actor');
+        if (input.roomId !== undefined)
+            this.service.rooms.observation(input.roomId);
+        const scope = this.discoveryScope('threads', input.actor, input.roomId), cursor = this.readDiscoveryCursor(input.cursor, 'threads', scope);
+        return this.transaction(() => {
+            let createdAt = '', id = '';
+            if (cursor) {
+                const anchor = this.db.prepare('SELECT id,created_at,room_id,(participant_a=? OR participant_b=?) AS member FROM private_chats WHERE id=?')
+                    .get(input.actor, input.actor, cursor.chatId);
+                if (!anchor || !anchor.member || input.roomId !== undefined && anchor.room_id !== input.roomId)
+                    throw new Error('Private discovery cursor is unavailable or outside this scope. Start from the first page.');
+                createdAt = anchor.created_at;
+                id = anchor.id;
+            }
+            const parameters = input.roomId === undefined ? [input.actor, input.actor] : [input.actor, input.actor, input.roomId];
+            const rows = this.db.prepare(`SELECT id,${METADATA_BYTES_SQL} AS bytes FROM private_chats
+        WHERE (participant_a=? OR participant_b=?) ${input.roomId === undefined ? '' : 'AND room_id=?'}
+        AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?`)
+                .all(...parameters, createdAt, createdAt, id, input.limit + 1);
+            const chats = [];
+            let bytes = 2;
+            for (const row of rows.slice(0, input.limit)) {
+                const size = row.bytes + (chats.length ? 1 : 0);
+                if (chats.length && bytes + size > 1024 * 1024)
+                    break;
+                chats.push(metadata(this.row(row.id)));
+                bytes += size;
+                if (bytes >= 1024 * 1024)
+                    break;
+            }
+            return { chats, nextCursor: rows.length > chats.length ? this.writeDiscoveryCursor('threads', scope, chats.at(-1).id) : null };
+        }, false);
+    }
+    actorsPage(value = {}) {
+        this.open();
+        const input = parseSchema(privateChatActorsPageDefinition, value, 'private participant page');
+        if (input.roomId !== undefined)
+            this.service.rooms.observation(input.roomId);
+        const scope = this.discoveryScope('actors', undefined, input.roomId), cursor = this.readDiscoveryCursor(input.cursor, 'actors', scope);
+        return this.transaction(() => {
+            let after = '';
+            if (cursor) {
+                const field = cursor.side === 'a' ? 'participant_a' : 'participant_b';
+                const anchor = this.db.prepare(`SELECT ${field} AS actor,room_id FROM private_chats WHERE id=?`).get(cursor.chatId);
+                if (!anchor || input.roomId !== undefined && anchor.room_id !== input.roomId)
+                    throw new Error('Private discovery cursor is unavailable or outside this scope. Start from the first page.');
+                after = anchor.actor;
+            }
+            const condition = input.roomId === undefined ? '' : 'WHERE room_id=?';
+            const parameters = input.roomId === undefined ? [] : [input.roomId, input.roomId];
+            const rows = this.db.prepare(`SELECT MIN(id||side) AS anchor,length(CAST(json_quote(actor) AS BLOB)) AS bytes FROM (
+        SELECT participant_a AS actor,id,'a' AS side FROM private_chats ${condition}
+        UNION ALL SELECT participant_b AS actor,id,'b' AS side FROM private_chats ${condition})
+        WHERE actor>? COLLATE BINARY GROUP BY actor COLLATE BINARY ORDER BY actor COLLATE BINARY LIMIT ?`)
+                .all(...parameters, after, input.limit + 1);
+            const actors = [];
+            let bytes = 2, last;
+            for (const row of rows.slice(0, input.limit)) {
+                const size = row.bytes + (actors.length ? 1 : 0);
+                if (actors.length && bytes + size > 1024 * 1024)
+                    break;
+                const id = row.anchor.slice(0, -1), side = row.anchor.at(-1), field = side === 'a' ? 'participant_a' : 'participant_b';
+                const payload = this.db.prepare(`SELECT ${field} AS actor FROM private_chats WHERE id=?`).get(id);
+                if (!payload)
+                    throw new Error('Private participant metadata is unavailable in the current storage snapshot.');
+                actors.push(payload.actor);
+                bytes += size;
+                last = { id, side };
+                if (bytes >= 1024 * 1024)
+                    break;
+            }
+            return { actors, nextCursor: rows.length > actors.length ? this.writeDiscoveryCursor('actors', scope, last.id, last.side) : null };
+        }, false);
     }
     notify(chatId) {
         for (const listener of [...this.listeners.get(chatId) ?? []]) {

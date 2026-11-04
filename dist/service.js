@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WorkflowEngine, WorkflowPersistenceError } from './engine.js';
 import { CouncilStore } from './store.js';
 import { createRunner } from './runner.js';
+import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
 import { parseWorkflow } from './config.js';
 import { GitWorkspaces } from './workspaces.js';
 import { summarizeRun } from './summary.js';
@@ -53,6 +54,7 @@ export class CouncilService {
     maintenanceControllers = new Set();
     emergencyResults = new Map();
     fault;
+    faultEvent;
     lastHeartbeatAt = Date.now();
     lastHeartbeatElapsed = performance.now();
     heartbeatContentions = 0;
@@ -155,11 +157,14 @@ export class CouncilService {
             this.engine = new WorkflowEngine(config, this.runner, this.store, {
                 instanceId: this.instanceId,
                 assertAgentDispatch: agent => {
+                    if (this.fault)
+                        throw new Error(this.fault);
                     if (this.billingManager || existsSync(join(this.config.stateDir, 'billing.sqlite')))
                         this.billing.assertSubscriptionAllowed(agent);
                 },
                 privateChats: () => this.privateChats,
                 onStateFailure: () => this.degrade('Council state persistence failed. Inspect storage and restart this host before accepting new work.'),
+                onProcessCleanupFailure: () => this.degrade(`${PROCESS_CLEANUP_ERROR} Inspect remaining processes and retained worktrees, then restart this host before accepting new work.`, 'process.degraded'),
             });
             this.heartbeat = setInterval(() => this.heartbeatTick(), 1000);
             this.heartbeat.unref();
@@ -288,12 +293,23 @@ export class CouncilService {
     hasRun(id) {
         return this.emergencyResults.has(id) || this.store.hasRun(id);
     }
-    degrade(message) {
-        if (!this.fault)
-            process.stderr.write(`${JSON.stringify({ event: 'state.degraded', message })}\n`);
-        this.fault = message;
+    degrade(message, event = 'state.degraded') {
+        // Preserve process uncertainty over later storage faults. Ordinary state
+        // failures may still refine their diagnosis, including failed finalization.
+        if (this.faultEvent !== 'process.degraded') {
+            if (!this.fault || this.faultEvent !== event)
+                process.stderr.write(`${JSON.stringify({ event, message })}\n`);
+            this.fault = message;
+            this.faultEvent = event;
+        }
         for (const job of this.jobs.values())
-            job.controller.abort(message);
+            job.controller.abort(this.fault);
+        for (const controller of this.maintenanceControllers)
+            controller.abort(this.fault);
+    }
+    fenceProcessCleanup() {
+        this.engine.fenceProcessCleanup();
+        this.degrade(`${PROCESS_CLEANUP_ERROR} Inspect remaining processes and retained worktrees, then restart this host before accepting new work.`, 'process.degraded');
     }
     summary(id) {
         const emergency = this.emergencyResults.get(id);
@@ -433,6 +449,8 @@ export class CouncilService {
     backup(path, signal) {
         if (this.closing)
             return Promise.reject(new Error('Council is shutting down.'));
+        if (this.fault)
+            return Promise.reject(new Error(this.fault));
         const controller = new AbortController();
         const work = this.store.backupTo(resolve(this.config.workspaceRoot, path), signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
         return this.trackMaintenance(work, controller);
@@ -441,6 +459,8 @@ export class CouncilService {
     snapshot(path, signal) {
         if (this.closing)
             return Promise.reject(new Error('Council is shutting down.'));
+        if (this.fault)
+            return Promise.reject(new Error(this.fault));
         const controller = new AbortController();
         const work = createStateSnapshot(this.config.stateDir, resolve(this.config.workspaceRoot, path), signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
         return this.trackMaintenance(work, controller);
@@ -451,10 +471,15 @@ export class CouncilService {
         return this.store.prune(options);
     }
     trackMaintenance(work, controller) {
-        this.maintenance.add(work);
+        const guarded = work.catch(error => {
+            if (error instanceof ProcessCleanupError)
+                this.fenceProcessCleanup();
+            throw error;
+        });
+        this.maintenance.add(guarded);
         this.maintenanceControllers.add(controller);
-        void work.finally(() => { this.maintenance.delete(work); this.maintenanceControllers.delete(controller); }).catch(() => { });
-        return work;
+        void guarded.finally(() => { this.maintenance.delete(guarded); this.maintenanceControllers.delete(controller); }).catch(() => { });
+        return guarded;
     }
     runPage(limit = 20, cursor) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100)
@@ -568,6 +593,8 @@ export class CouncilService {
     exportArtifacts(id, signal) {
         if (this.closing)
             return Promise.reject(new Error('Council is shutting down.'));
+        if (this.fault)
+            return Promise.reject(new Error(this.fault));
         const controller = new AbortController();
         return this.trackMaintenance(this.exportArtifactsWork(id, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal), controller);
     }
@@ -593,10 +620,28 @@ export class CouncilService {
                         throw error;
                     throw new Error(`The retained worktree at ${artifact.path} does not exist. Preparation may be incomplete or cleanup may have removed it. Preserve the run record and inspect git worktree list before manual recovery; patch repair never creates a checkout.`);
                 }
-                const exported = await workspaces.export(artifact, signal);
-                signal.throwIfAborted();
-                this.store.updateArtifact(id, exported);
-                artifacts.push(exported);
+                try {
+                    const exported = await workspaces.export(artifact, signal);
+                    if (this.faultEvent === 'process.degraded')
+                        throw new ProcessCleanupError();
+                    signal.throwIfAborted();
+                    this.store.updateArtifact(id, exported);
+                    artifacts.push(exported);
+                }
+                catch (error) {
+                    if (error instanceof ProcessCleanupError || this.faultEvent === 'process.degraded') {
+                        this.fenceProcessCleanup();
+                        const failure = error instanceof ProcessCleanupError ? error : new ProcessCleanupError();
+                        try {
+                            this.store.updateArtifact(id, { ...artifact, exportStatus: 'pending', exportError: `${PROCESS_CLEANUP_ERROR} Inspect the retained worktree before exporting its patch.` });
+                        }
+                        catch {
+                            failure.message = `${PROCESS_CLEANUP_ERROR} Pending artifact metadata could not be persisted; inspect local state.`;
+                        }
+                        throw failure;
+                    }
+                    throw error;
+                }
             }
             return { runId: id, artifacts };
         }
@@ -607,6 +652,8 @@ export class CouncilService {
     cleanup(id, options, signal) {
         if (this.closing)
             return Promise.reject(new Error('Council is shutting down.'));
+        if (this.fault)
+            return Promise.reject(new Error(this.fault));
         const controller = new AbortController();
         return this.trackMaintenance(this.cleanupWork(id, options, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal), controller);
     }
@@ -641,9 +688,17 @@ export class CouncilService {
                     continue;
                 }
                 signal.throwIfAborted();
-                await workspaces.cleanup(artifact, { ...options, signal });
+                try {
+                    await workspaces.cleanup(artifact, { ...options, signal });
+                }
+                catch (error) {
+                    if (error instanceof ProcessCleanupError)
+                        this.fenceProcessCleanup();
+                    throw error;
+                }
                 this.store.appendEvent(id, 'workspace.cleaned', { path: artifact.path, discardedChanges: options.discardChanges === true });
                 removed.push(artifact.path);
+                signal.throwIfAborted();
             }
             return { removed, alreadyRemoved };
         }

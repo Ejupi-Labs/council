@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { link, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ManagedProcess, ProcessCleanupError } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { retryWindowsSharing } from './fs-retry.js';
@@ -12,6 +13,24 @@ function inside(base, path) {
     const suffix = relative(base, path);
     return Boolean(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
+function canonicalStatePath(path) {
+    let ancestor = resolve(path);
+    const missing = [];
+    for (;;) {
+        try {
+            return resolve(realpathSync.native(ancestor), ...missing.reverse());
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+            const parent = dirname(ancestor);
+            if (parent === ancestor)
+                throw error;
+            missing.push(basename(ancestor));
+            ancestor = parent;
+        }
+    }
+}
 /** Retained detached worktrees with durable base metadata and explicit reviewed cleanup. */
 export class GitWorkspaces {
     root;
@@ -19,7 +38,7 @@ export class GitWorkspaces {
     runBases = new Map();
     constructor(workspaceRoot, stateDir) {
         this.root = resolve(workspaceRoot);
-        this.state = resolve(stateDir);
+        this.state = canonicalStatePath(stateDir);
     }
     async operation(action, parent) {
         parent?.throwIfAborted();

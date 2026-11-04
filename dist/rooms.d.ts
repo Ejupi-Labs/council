@@ -28,6 +28,7 @@ export declare class RoomManager {
     messagePage(id: string, limit?: number, cursor?: number): {
         messages: RoomMessage[];
         nextCursor: number | null;
+        nextAfter: number;
     };
     create(value: RoomInput): RoomRecord;
     postMessage(id: string, value: {

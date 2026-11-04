@@ -164,8 +164,8 @@ async function worker(directory, durationMs, ordinal, expected) {
 async function coordinator() {
   const { duration, workerCount } = options(process.argv.slice(2));
   const { CouncilStore, metadata } = await loadRuntime();
-  const temporaryRoot = realpathSync(tmpdir());
-  const directory = realpathSync(mkdtempSync(join(temporaryRoot, 'council-storage-soak-')));
+  const temporaryRoot = realpathSync.native(tmpdir());
+  const directory = realpathSync.native(mkdtempSync(join(temporaryRoot, 'council-storage-soak-')));
   const identity = lstatSync(directory, { bigint: true });
   let observer;
   let failure;
@@ -190,9 +190,9 @@ async function coordinator() {
     const current = lstatSync(directory, { bigint: true });
     assert.ok(current.isDirectory() && !current.isSymbolicLink(), 'Refusing to operate on a replaced storage fixture.');
     assert.equal(current.dev, identity.dev); assert.equal(current.ino, identity.ino);
-    assert.equal(realpathSync(directory), directory, 'Storage fixture path no longer resolves to its original target.');
+    assert.equal(realpathSync.native(directory), directory, 'Storage fixture path no longer resolves to its original target.');
     assert.equal(dirname(directory), temporaryRoot, 'Storage fixture is outside its canonical temporary root.');
-    assert.equal(realpathSync(temporaryRoot), temporaryRoot);
+    assert.equal(realpathSync.native(temporaryRoot), temporaryRoot);
     assert.ok(basename(directory).startsWith('council-storage-soak-'));
   };
   const measure = () => {
@@ -208,7 +208,7 @@ async function coordinator() {
     verifyManagedDirectory();
     assert.equal(dirname(value.path), directory);
     assert.match(basename(value.path), /^checkpoint-\d{6}\.db$/);
-    assert.equal(realpathSync(value.path), value.path);
+    assert.equal(realpathSync.native(value.path), value.path);
     const current = lstatSync(value.path, { bigint: true });
     assert.ok(current.isFile() && !current.isSymbolicLink());
     assert.equal(current.dev, value.dev); assert.equal(current.ino, value.ino);

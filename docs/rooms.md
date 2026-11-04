@@ -34,6 +34,18 @@ Starting commands report success only for their intended outcome: execution must
 
 Set `autoExecute: true` only when the task permissions and scope already authorize execution after approval. A majority cannot expand those permissions. Member model, effort, skill, advisor and private-exchange settings remain subject to the configured call budget and provider access.
 
+## Implement and review one change in the same worktree
+
+For one focused change, the `review` workflow gives read-only reviewers the author's actual isolated worktree, then lets the author address their findings in that same worktree:
+
+```sh
+council run --workspace /absolute/path/to/project --mode review --agents codex,claude --write --task "Implement the reproduced empty-input fix, have the reviewer inspect the changed files and acceptance evidence, then address its concrete findings and run the required checks. Do not merge or publish."
+```
+
+The first selected alias is the author. Later aliases review the changed files without editing them; the author performs the final revision. Inspect the final status, complete reports and patch before accepting changes.
+
+Room dependencies retain separate workflow/worktree evidence. An ACP file service rooted in the original project can block access to another task's retained `.council` files. A dependent reader must report that access limitation honestly. Choose the shared-worktree review workflow when reviewers need direct access to one author's edits; room task graphs remain useful for independently scoped work and its explicit prerequisites.
+
 ## Read the evidence
 
 ```sh
@@ -42,9 +54,13 @@ council show RUN_ID --workspace /absolute/path/to/project
 council export RUN_ID --workspace /absolute/path/to/project --output review.md
 ```
 
-Follow `nextCursor` with `room-history --cursor NUMBER` until it is `null` for the complete ascending history. Pages preserve whole messages and normally use at most 1 MiB for their serialized messages. A single larger message is returned intact on its own page. The routine room preview keeps a bounded suffix; it does not limit the evidence retained for future tasks.
+Follow `nextCursor` with `room-history --cursor NUMBER` until it is `null` for the complete ascending history. Keep `nextAfter` from the last response and pass it as `--cursor` for a later explicit check; an empty check preserves that position. Reuse cursors with the same room. Pages preserve whole messages and normally use at most 1 MiB for their serialized messages. A single larger message is returned intact on its own page. The routine room preview keeps a bounded suffix; it does not limit the evidence retained for future tasks.
+
+In the dashboard, finish loading the history pages, then use **Check newer messages** when needed. New complete messages append without rebuilding earlier messages or moving your reading position. The control makes one explicit read and does not poll or invoke models. Messages stored after the last check appear when you check again.
 
 Read each task's `runId` and inspect its full workflow record. A brief preview or a room's approved decision is insufficient evidence that work passed its acceptance checks. Completed, failed and cancelled results remain distinct, including partial outputs and artifact-export errors.
+
+When a discussion cannot complete, its attention message identifies the workflow and available public failure details. Each failed opinion retains its public error and workflow link alongside any partial output. Inspect that diagnostic before starting another discussion with the same unavailable profile or model. Private pair payloads remain outside shared room diagnostics.
 
 Write tasks use isolated Git worktrees. Their patches and captured base commits are review artifacts. Another task's worktree is separate evidence: its changes are never automatically present in a dependent task's checkout. A reviewer must inspect the referenced patch/files within its tool policy and report blocked access or unverified integration honestly. Council never merges a room's changes automatically. Follow the [artifact inspection and reviewed cleanup procedure](operations.md#retention-and-reviewed-worktree-cleanup) when finished.
 

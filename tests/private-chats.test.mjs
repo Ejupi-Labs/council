@@ -216,3 +216,102 @@ test('private history pages complete UTF-8 messages by bytes and retain one over
   assert.ok(Buffer.byteLength(JSON.stringify(pages[2].messages)) > 1024 * 1024);
   assert.deepEqual(manager.page({ chatId: chat.id, actor: first, after: inserted.at(-1).sequence }), { messages: [], nextCursor: null });
 });
+
+test('thread discovery pages preserve exact actors, scope and stable creation order across updates and hosts', t => {
+  const { manager, peer, room } = fixture(t), actor = ' actor " literal λ ';
+  const chats = Array.from({ length: 7 }, (_, index) => manager.create({ participants: [actor, 'peer-' + index], roomId: room.id }));
+  manager.create({ participants: [actor, 'workspace-peer'] });
+  const unrelated = manager.create({ participants: ['unrelated-a', 'unrelated-b'], roomId: room.id });
+  const expected = manager.list(actor, room.id).map(value => value.id), firstPage = manager.listPage({ actor, roomId: room.id, limit: 2 });
+  assert.equal(firstPage.chats.length, 2); assert.ok(firstPage.nextCursor.length < 512);
+  manager.send({ chatId: chats.at(-1).id, from: actor, body: 'Metadata updates must not reorder a thread.' });
+  const all = [...firstPage.chats]; let cursor = firstPage.nextCursor;
+  const other = peer();
+  while (cursor !== null) { const page = other.listPage({ actor, roomId: room.id, limit: 2, cursor }); all.push(...page.chats); cursor = page.nextCursor; }
+  assert.deepEqual(all.map(value => value.id), expected);
+  assert.equal(new Set(all.map(value => value.id)).size, chats.length);
+  assert.ok(all.every(value => value.participants.includes(actor) && value.roomId === room.id));
+  assert.throws(() => manager.listPage({ actor: actor.trim(), roomId: room.id, cursor: firstPage.nextCursor }), /cursor.*scope/);
+  assert.throws(() => manager.listPage({ actor, cursor: firstPage.nextCursor }), /cursor.*scope/);
+  const decoded = JSON.parse(Buffer.from(firstPage.nextCursor, 'base64url').toString('utf8'));
+  const foreign = Buffer.from(JSON.stringify({ ...decoded, chatId: unrelated.id })).toString('base64url');
+  assert.throws(() => manager.listPage({ actor, roomId: room.id, cursor: foreign }), /unavailable or outside/);
+  const missing = Buffer.from(JSON.stringify({ ...decoded, chatId: 'missing-anchor' })).toString('base64url');
+  assert.throws(() => manager.listPage({ actor, roomId: room.id, cursor: missing }), /unavailable or outside/);
+  const elsewhere = fixture(t);
+  assert.throws(() => elsewhere.manager.listPage({ actor, cursor: firstPage.nextCursor }), /cursor.*scope/);
+});
+
+test('participant discovery deduplicates exact labels in binary order with restartable room-bound cursors', t => {
+  const { manager, peer, room } = fixture(t), owner = 'owner', labels = ['Human', ' Human ', 'a%_', '🦊', '\uE000', 'a"b', 'same actor'];
+  for (const label of labels) manager.create({ participants: [owner, label], roomId: room.id });
+  manager.create({ participants: ['same actor', 'Human'], roomId: room.id });
+  manager.create({ participants: [owner, 'workspace-only'] });
+  const expected = [...new Set([owner, ...labels])].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+  const firstPage = manager.actorsPage({ roomId: room.id, limit: 2 });
+  manager.close(); const reopened = peer();
+  const all = [...firstPage.actors]; let cursor = firstPage.nextCursor;
+  while (cursor !== null) { const page = reopened.actorsPage({ roomId: room.id, limit: 2, cursor }); all.push(...page.actors); cursor = page.nextCursor; }
+  assert.deepEqual(all, expected);
+  assert.throws(() => reopened.actorsPage({ cursor: firstPage.nextCursor }), /cursor.*scope/);
+  assert.throws(() => reopened.listPage({ actor: owner, roomId: room.id, cursor: firstPage.nextCursor }), /cursor.*scope/);
+  assert.deepEqual(reopened.actors(), [...new Set([owner, ...labels, 'workspace-only'])].sort(), 'The existing array API remains complete.');
+});
+
+test('discovery pages bound complete UTF-8 and escaped metadata while long actor anchors keep cursors small', t => {
+  const { manager } = fixture(t), actor = 'owner';
+  const peers = ['λ🛠️'.repeat(60_000), 'é'.repeat(600_000), '\n"\\'.repeat(180_000), 'A short peer.'];
+  const inserted = peers.map(peer => manager.create({ participants: [actor, peer] }));
+  const chats = []; let cursor;
+  do {
+    const page = manager.listPage({ actor, limit: 100, ...(cursor ? { cursor } : {}) });
+    assert.ok(page.chats.length); chats.push(...page.chats);
+    assert.ok(Buffer.byteLength(JSON.stringify(page.chats)) <= 1024 * 1024 || page.chats.length === 1);
+    cursor = page.nextCursor; if (cursor) assert.ok(cursor.length < 512);
+  } while (cursor !== null);
+  assert.deepEqual(new Set(chats.map(value => value.id)), new Set(inserted.map(value => value.id)));
+  const actors = []; cursor = undefined;
+  do {
+    const page = manager.actorsPage({ limit: 100, ...(cursor ? { cursor } : {}) });
+    assert.ok(page.actors.length); actors.push(...page.actors);
+    assert.ok(Buffer.byteLength(JSON.stringify(page.actors)) <= 1024 * 1024 || page.actors.length === 1);
+    cursor = page.nextCursor; if (cursor) assert.ok(cursor.length < 512, 'A large label must not be copied into its cursor.');
+  } while (cursor !== null);
+  assert.deepEqual(new Set(actors), new Set([actor, ...peers]));
+});
+
+test('invalid and deeply nested discovery cursors fail before JSON graph parsing or any storage change', t => {
+  const { manager } = fixture(t);
+  manager.create({ participants: ['owner', 'first'] }); manager.create({ participants: ['owner', 'second'] });
+  const firstPage = manager.listPage({ actor: 'owner', limit: 1 }), decoded = JSON.parse(Buffer.from(firstPage.nextCursor, 'base64url').toString('utf8'));
+  for (const cursor of ['', '=', 'x'.repeat(1025), Buffer.from([0xff]).toString('base64url'), Buffer.from('[]').toString('base64url'),
+    Buffer.from(JSON.stringify({ ...decoded, unknown: true })).toString('base64url'),
+    Buffer.from('{"version":1,"version":1,' + JSON.stringify(decoded).slice(1)).toString('base64url')]) {
+    assert.throws(() => manager.listPage({ actor: 'owner', cursor }));
+  }
+  const raw = JSON.stringify(decoded).slice(0, -1) + ',"extra":' + '['.repeat(70) + '0' + ']'.repeat(70) + '}';
+  const cursor = Buffer.from(raw).toString('base64url'), original = JSON.parse; let fullParses = 0;
+  JSON.parse = function (value, ...args) { if (value === raw) fullParses++; return original.call(this, value, ...args); };
+  try { assert.throws(() => manager.listPage({ actor: 'owner', cursor }), /Invalid private discovery cursor/); }
+  finally { JSON.parse = original; }
+  assert.equal(fullParses, 0);
+  assert.equal(manager.list('owner').length, 2);
+});
+
+test('large private discovery reads only requested metadata and never reads transcript bodies', t => {
+  const { manager } = fixture(t), actor = 'long-history-owner', count = 5000;
+  manager.db.exec('BEGIN IMMEDIATE');
+  try {
+    const insert = manager.db.prepare('INSERT INTO private_chats(id,participant_a,participant_b,room_id,created_at) VALUES(?,?,?,?,?)');
+    for (let index = 0; index < count; index++) insert.run('history-' + String(index).padStart(6, '0'), actor, 'worker-' + String(index).padStart(6, '0'), '', '2026-11-04T12:00:00.000Z');
+    manager.db.exec('COMMIT');
+  } catch (error) { manager.db.exec('ROLLBACK'); throw error; }
+  const prepare = manager.db.prepare;
+  manager.db.prepare = function (sql) { assert.doesNotMatch(sql, /private_messages/i, 'Discovery must never query private transcript storage.'); return prepare.call(this, sql); };
+  try {
+    const threads = manager.listPage({ actor, limit: 7 }), actors = manager.actorsPage({ limit: 7 });
+    assert.equal(threads.chats.length, 7); assert.ok(threads.nextCursor);
+    assert.equal(actors.actors.length, 7); assert.ok(actors.nextCursor);
+    assert.equal(manager.list(actor).length, count);
+  } finally { manager.db.prepare = prepare; }
+});

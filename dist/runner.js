@@ -38,7 +38,7 @@ async function withBudget(request, task) {
         request.signal?.removeEventListener('abort', cancel);
     }
     const durationMs = Math.round(performance.now() - started);
-    if (result.error === PROCESS_CLEANUP_ERROR)
+    if (result.error?.startsWith(PROCESS_CLEANUP_ERROR))
         return { ...result, status: 'failed', durationMs };
     if (timedOut)
         return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
@@ -126,6 +126,12 @@ async function runProtocol(launch, protocol, request, config, environment) {
         let stopReason, failure;
         let forcedStatus;
         let settled = false, closingAfterCompletion = false;
+        const cleanupFailed = () => {
+            const primary = forcedStatus === 'failed' && failure && !failure.startsWith(PROCESS_CLEANUP_ERROR) ? failure : undefined;
+            const existing = failure?.startsWith(PROCESS_CLEANUP_ERROR) ? failure : undefined;
+            forcedStatus = 'failed';
+            failure = (primary ? `${PROCESS_CLEANUP_ERROR} Earlier failure: ${primary}` : existing ?? PROCESS_CLEANUP_ERROR).slice(0, 4096);
+        };
         let graceTimer, forceTimer;
         const finish = (status, error) => {
             if (settled)
@@ -151,8 +157,8 @@ async function runProtocol(launch, protocol, request, config, environment) {
             catch { /* Killing the tree is authoritative. */ }
             child.kill();
             forceTimer = setTimeout(() => {
-                void child.forceKill().catch(() => { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; })
-                    .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => finish('failed', PROCESS_CLEANUP_ERROR));
+                void child.forceKill().catch(cleanupFailed)
+                    .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => { cleanupFailed(); finish('failed', failure); });
             }, 3000);
         };
         const control = {
@@ -283,8 +289,7 @@ async function runProtocol(launch, protocol, request, config, environment) {
         });
         child.on('error', error => {
             if (error instanceof ProcessCleanupError) {
-                forcedStatus = 'failed';
-                failure = PROCESS_CLEANUP_ERROR;
+                cleanupFailed();
                 return;
             }
             terminate('failed', 'Unable to start the configured agent executable. Run council doctor.');

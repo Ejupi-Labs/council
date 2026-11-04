@@ -28,7 +28,7 @@ const evidence = join(repository, '.council', 'refinement');
 mkdirSync(evidence, { recursive: true });
 const session = `${new Date().toISOString().replaceAll(/[:.]/g, '-')}-${values.label}`;
 const log = join(evidence, `soak-${session}.jsonl`);
-const temporaryBase = realpathSync(tmpdir());
+const temporaryBase = realpathSync.native(tmpdir());
 const temporary = mkdtempSync(join(temporaryBase, 'council-soak-'));
 const runtime = join(temporary, 'runtime');
 mkdirSync(runtime);
@@ -190,7 +190,7 @@ try {
   process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
   try { await closeRotation(); }
   catch (error) { failure ??= error; emit('cleanup.failed', { message: error.message, fixture: temporary }); process.exitCode = 1; }
-  const target = resolve(realpathSync(temporary));
+  const target = resolve(realpathSync.native(temporary));
   assert.equal(dirname(target), resolve(temporaryBase)); assert.ok(basename(target).startsWith('council-soak-'));
   if (!failure) rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   const summary = { event: failure ? 'failed' : stopped ? 'stopped' : 'completed', at: new Date().toISOString(), elapsedMs: Math.round(performance.now() - start),

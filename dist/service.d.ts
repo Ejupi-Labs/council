@@ -22,6 +22,7 @@ export declare class CouncilService {
     private readonly maintenanceControllers;
     private readonly emergencyResults;
     private fault?;
+    private faultEvent?;
     private lastHeartbeatAt;
     private lastHeartbeatElapsed;
     private heartbeatContentions;
@@ -102,6 +103,7 @@ export declare class CouncilService {
     /** Test workflow identity without loading complete prompts, results or artifacts. */
     hasRun(id: string): boolean;
     private degrade;
+    private fenceProcessCleanup;
     private summary;
     waitSummary(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunSummary>;
     wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunRecord>;

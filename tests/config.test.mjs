@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, existsSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configSchema, initConfig, loadConfig, parseWorkflow, readJsonFile } from '../dist/config.js';
@@ -96,7 +96,12 @@ test('configuration rejects case-distinct existing state ancestors outside the s
     try { execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'fsutil.exe'), ['file', 'setCaseSensitiveInfo', parent, 'enable'], { windowsHide: true, stdio: 'pipe' }); }
     catch { t.skip('Per-directory NTFS case sensitivity is unavailable.'); return; }
   }
-  const root = join(parent, 'project'), sibling = join(parent, 'PROJECT'); mkdirSync(root); mkdirSync(sibling);
+  const root = join(parent, 'project'), sibling = join(parent, 'PROJECT'); mkdirSync(root);
+  if (existsSync(sibling)) {
+    const lower = statSync(root, { bigint: true }), upper = statSync(sibling, { bigint: true });
+    if (lower.dev === upper.dev && lower.ino === upper.ino) { t.skip('The fixture volume does not support case-distinct sibling directories.'); return; }
+  }
+  mkdirSync(sibling);
   assert.throws(() => loadConfig(root, { stateDir: join(sibling, 'new-state') }), /(?:inside|outside) the workspace/);
   assert.equal(existsSync(join(sibling, 'new-state')), false);
   assert.equal(existsSync(join(root, 'new-state')), false);

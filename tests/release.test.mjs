@@ -58,7 +58,8 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
     'skills/dont-kill-an-ant-with-a-bazooka/SKILL.md', 'skills/council-implementation-review/SKILL.md',
     'skills/council-independent-perspectives/SKILL.md', 'skills/council-advisor/SKILL.md', 'schemas/billing.schema.json', 'schemas/routing.schema.json',
     'skills/council-human-delegate/SKILL.md', 'docs/delegation.md', 'schemas/delegation.schema.json', 'dist/delegation.js', 'dist/dashboard-delegate-ui.js',
-    'schemas/private-chat.schema.json', 'dist/private-chats.js', 'dist/private-chat-protocol.js', 'dist/dashboard-private-chats-ui.js', 'docs/private-chats.md']) {
+    'schemas/private-chat.schema.json', 'dist/private-chats.js', 'dist/private-chat-protocol.js', 'dist/dashboard-private-chats-ui.js', 'docs/private-chats.md',
+    'schemas/state-snapshot.schema.json', 'dist/state-snapshot.js', 'dist/sqlite-backup.js', 'dist/cli-rooms.js', 'docs/rooms.md', 'examples/room-fix.json']) {
     assert.ok(packagedPaths.includes(file), `The release must contain ${file}.`);
   }
   assert.ok(packagedPaths.every(file => !/(^|\/)(?:\.council|\.serena|node_modules|tests)(?:\/|$)/.test(file)), 'Local state, dependencies and test fixtures must not enter the release.');

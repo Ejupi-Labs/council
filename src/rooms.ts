@@ -610,19 +610,22 @@ export class RoomManager {
       const before = this.get(id), run = await this.launch(id, job, this.discussionInput(before, round));
       this.check(id, job);
       const ballots = new Map<string, Ballot>();
-      let invalid: string | undefined;
+      const failures = run.steps.filter(step => step.role === 'worker' && step.result.status !== 'completed')
+        .map(step => `${step.agent} ${step.result.status}${step.result.error ? `: ${step.result.error}` : ''}`);
+      let invalid: string | undefined = run.status === 'completed' ? undefined
+        : `Discussion workflow ${run.id} ${run.status}; no tasks will execute.\n${excerpt(failures.join('; ') || run.error || 'A discussion ballot did not complete.')}`;
       for (const member of voters(before)) {
         const steps = run.steps.filter(step => step.agent === member.agent && step.role === 'worker');
         const step = steps[0];
         if (run.status !== 'completed' || steps.length !== 1 || !step || step.result.status !== 'completed') {
-          invalid = 'A discussion ballot failed or did not complete; no task will execute.';
-          if (step) this.own(id, room => { room.messages.push(message(member.agent, 'opinion', `${step.result.status}: ${step.result.output}`, run.id)); });
+          invalid ??= `${member.agent} did not return one completed ballot in discussion workflow ${run.id}; no tasks will execute.`;
+          if (step) this.own(id, room => { room.messages.push(message(member.agent, 'opinion', `${step.result.status}: ${step.result.output}${step.result.error ? `\n\nError: ${step.result.error}` : ''}`, run.id)); });
           continue;
         }
         let ballot: Ballot;
         try { ballot = this.ballot(step.result.output, before); }
         catch (error) {
-          invalid = `Invalid ballot from ${member.agent}: ${error instanceof Error ? error.message : 'Invalid JSON ballot.'}`;
+          invalid ??= `Invalid ballot from ${member.agent} in discussion workflow ${run.id}: ${error instanceof Error ? error.message : 'Invalid JSON ballot.'}`;
           this.own(id, room => { room.messages.push(message(member.agent, 'opinion', `Invalid ballot: ${step.result.output}`, run.id)); });
           continue;
         }

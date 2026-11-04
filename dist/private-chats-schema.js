@@ -18,4 +18,10 @@ export const privateChatWatchDefinition = objectSchema({
 export const privateChatListDefinition = objectSchema({ actor: text, roomId: id }, ['actor']);
 export const privateChatActorsDefinition = objectSchema({ roomId: id });
 export const privateChatGetDefinition = objectSchema({ chatId: id, actor: text }, ['chatId', 'actor']);
+const discoveryPage = {
+    limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+    cursor: { type: 'string', minLength: 1, maxLength: 1024, pattern: '^[a-zA-Z0-9_-]+$' },
+};
+export const privateChatListPageDefinition = objectSchema({ actor: text, roomId: id, ...discoveryPage }, ['actor']);
+export const privateChatActorsPageDefinition = objectSchema({ roomId: id, ...discoveryPage });
 //# sourceMappingURL=private-chats-schema.js.map

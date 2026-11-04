@@ -106,6 +106,17 @@ export async function serveDashboard(service: CouncilService, rooms: RoomManager
       const authorization = Buffer.from(request.headers.authorization ?? '');
       if (authorization.length !== tokenBytes.length || !timingSafeEqual(authorization, tokenBytes)) throw new HttpError(401, 'Open the complete dashboard link to authorize this session.');
       if (request.method !== 'GET' && request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+      if (pathname === '/api/private-chats/page' || pathname === '/api/private-chats/actors/page') {
+        if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+        const actors = pathname === '/api/private-chats/actors/page';
+        for (const key of url.searchParams.keys()) if (!(actors ? ['roomId', 'limit', 'cursor'] : ['actor', 'roomId', 'limit', 'cursor']).includes(key) || url.searchParams.getAll(key).length !== 1) throw new HttpError(400, 'Use one exact actor, optional room, page limit and cursor.');
+        const rawLimit = url.searchParams.get('limit');
+        if (rawLimit !== null && (!/^[1-9]\d*$/.test(rawLimit) || !Number.isSafeInteger(Number(rawLimit)))) throw new HttpError(400, 'Private discovery page limits must be positive safe integers.');
+        const input = { ...(url.searchParams.has('roomId') ? { roomId: url.searchParams.get('roomId')! } : {}),
+          ...(rawLimit !== null ? { limit: Number(rawLimit) } : {}), ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}) };
+        json(response, 200, actors ? service.privateChats.actorsPage(input) : service.privateChats.listPage({ ...input, actor: url.searchParams.get('actor') ?? '' }));
+        return;
+      }
       if (pathname === '/api/private-chats/actors' || pathname === '/api/private-chats') {
         if (pathname.endsWith('/actors') && request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
         if (request.method === 'POST') json(response, 201, service.privateChats.create(await readObject(request) as any));

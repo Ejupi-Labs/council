@@ -115,9 +115,9 @@ test('verification detects altered or missing databases and rejects unsafe or in
   const path = join(snapshot.destination, 'manifest.json');
   const manifest = JSON.parse(readFileSync(path, 'utf8'));
   manifest.databases[0].name = '../outside.sqlite'; writeFileSync(path, JSON.stringify(manifest));
-  await assert.rejects(verifyStateSnapshot(snapshot.destination), /Invalid or duplicated database/);
+  await assert.rejects(verifyStateSnapshot(snapshot.destination), /snapshot manifest/);
   delete manifest.databases[0]; writeFileSync(path, JSON.stringify(manifest));
-  await assert.rejects(verifyStateSnapshot(snapshot.destination), /Invalid or duplicated database/);
+  await assert.rejects(verifyStateSnapshot(snapshot.destination), /snapshot manifest/);
 });
 
 test('health includes optional database failures and refuses incomplete all-store backups', async t => {

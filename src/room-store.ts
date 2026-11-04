@@ -266,9 +266,9 @@ export class RoomStore {
     return row.cancel_requested === 1;
   }
 
-  messagePage(id: string, limit = 100, cursor?: number): { messages: RoomMessage[]; nextCursor: number | null } {
+  messagePage(id: string, limit = 100, cursor?: number): { messages: RoomMessage[]; nextCursor: number | null; nextAfter: number } {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0))) throw new Error('Invalid message page bounds.');
-    if (!this.row(id)) throw new Error('Room not found.');
+    if (!this.has(id)) throw new Error('Room not found.');
     const messages: RoomMessage[] = [];
     let bytes = 2, lastSequence: number | null = null, more = false;
     const rows = this.db.prepare('SELECT sequence,document FROM room_messages WHERE room_id=? AND sequence>? ORDER BY sequence LIMIT ?')
@@ -279,7 +279,7 @@ export class RoomStore {
       if (messages.length >= limit || messages.length > 0 && bytes + size > MESSAGE_PAGE_BYTES) { more = true; break; }
       messages.push(JSON.parse(document) as RoomMessage); bytes += size; lastSequence = row.sequence as number;
     }
-    return { messages, nextCursor: more ? lastSequence : null };
+    return { messages, nextCursor: more ? lastSequence : null, nextAfter: lastSequence ?? cursor ?? 0 };
   }
 
   recover(id?: string): void {

@@ -17,13 +17,13 @@ const changed = 'changed by ACP fixture';
 const processResources = () => process.getActiveResourcesInfo().filter(name => /Process/i.test(name)).length;
 
 function fixture(t, filenames, chooseFile) {
-  const temporaryBase = realpathSync(tmpdir());
+  const temporaryBase = realpathSync.native(tmpdir());
   const temporary = mkdtempSync(join(temporaryBase, 'council-service-acp-worktree-'));
   const root = join(temporary, 'project café 日本語'); mkdirSync(root);
   let service;
   t.after(async () => {
     await service?.close();
-    const target = realpathSync(temporary);
+    const target = realpathSync.native(temporary);
     assert.equal(dirname(target), temporaryBase); assert.ok(basename(target).startsWith('council-service-acp-worktree-'));
     rmSync(target, { recursive: true, force: true });
   });
@@ -33,7 +33,7 @@ function fixture(t, filenames, chooseFile) {
     windowsHide: true, encoding: 'utf8', env: environment, timeout: 15_000,
   });
   git('init', '--quiet');
-  assert.equal(realpathSync(git('rev-parse', '--show-toplevel').trim()), realpathSync(root));
+  assert.equal(realpathSync.native(git('rev-parse', '--show-toplevel').trim()), realpathSync.native(root));
   for (const [key, value] of [['user.name', 'Offline ACP Worktree Test'], ['user.email', 'offline@example.invalid'], ['commit.gpgsign', 'false'], ['core.autocrlf', 'false'], ['core.attributesFile', attributes], ['core.fsmonitor', 'false'], ['gc.auto', '0'], ['maintenance.auto', 'false']]) git('config', key, value);
   writeFileSync(join(root, '.gitignore'), '.council/\n');
   const originals = Object.fromEntries(filenames.map(filename => [filename, `Original ${filename}.\n`]));

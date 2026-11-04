@@ -123,6 +123,62 @@ test('MCP private-chat membership errors remain explicit and cancelled long watc
   assert.equal(wire.service.rooms.get(wire.room.id).revision, wire.room.revision); assert.equal(wire.calls(), 0);
 });
 
+test('bounded private discovery pages cross MCP and HTTP without reading message bodies or changing scope', { timeout: 15000 }, async t => {
+  const wire = await fixture(t);
+  const ids = [];
+  for (let i = 0; i < 7; i++) {
+    const chat = wire.service.privateChats.create({ participants: [first, 'peer:' + i], roomId: wire.room.id });
+    wire.service.privateChats.send({ chatId: chat.id, from: first, body: 'PRIVATE_DISCOVERY_BODY:' + i });
+    ids.push(chat.id);
+  }
+  wire.service.privateChats.create({ participants: [first, third] });
+  const toolList = (await wire.request('tools/list', {})).tools;
+  for (const name of ['council_chat_list_page', 'council_chat_actors_page']) {
+    assert.equal(toolList.find(tool => tool.name === name)?.annotations.readOnlyHint, true);
+  }
+  let page = await wire.call('council_chat_list_page', { actor: first, roomId: wire.room.id, limit: 2 });
+  const seen = [...page.chats];
+  assert.equal(page.chats.length, 2); assert.equal(typeof page.nextCursor, 'string');
+  const savedCursor = page.nextCursor;
+  while (page.nextCursor) {
+    const response = await wire.http('/api/private-chats/page?' + new URLSearchParams({ actor: first, roomId: wire.room.id, limit: '2', cursor: page.nextCursor }));
+    assert.equal(response.status, 200); page = await response.json(); seen.push(...page.chats);
+  }
+  assert.deepEqual(seen.map(chat => chat.id).sort(), ids.sort());
+  assert.ok(seen.every(chat => chat.messageCount === 1));
+  assert.equal(JSON.stringify(seen).includes('PRIVATE_DISCOVERY_BODY:'), false);
+  const wrongActor = await wire.request('tools/call', { name: 'council_chat_list_page', arguments: { actor: second, roomId: wire.room.id, cursor: savedCursor } });
+  assert.equal(wrongActor.isError, true);
+  assert.equal((await wire.http('/api/private-chats/page?' + new URLSearchParams({ actor: first, cursor: savedCursor }))).status, 400);
+  let actors = await wire.call('council_chat_actors_page', { roomId: wire.room.id, limit: 3 });
+  const labels = [...actors.actors];
+  while (actors.nextCursor) {
+    const response = await wire.http('/api/private-chats/actors/page?' + new URLSearchParams({ roomId: wire.room.id, limit: '3', cursor: actors.nextCursor }));
+    assert.equal(response.status, 200); actors = await response.json(); labels.push(...actors.actors);
+  }
+  assert.deepEqual(labels, ['peer:0', 'peer:1', 'peer:2', 'peer:3', 'peer:4', 'peer:5', 'peer:6', first].sort());
+  assert.equal(wire.calls(), 0);
+});
+
+test('private discovery HTTP routes reject ambiguous bounds and preserve exact actor labels', { timeout: 15000 }, async t => {
+  const wire = await fixture(t), actor = ' run:exact:actor ';
+  wire.service.privateChats.create({ participants: [actor, second] });
+  for (const path of ['/api/private-chats/page', '/api/private-chats/actors/page']) {
+    assert.equal((await wire.http(path, { authorization: '' })).status, 401);
+    assert.equal((await wire.http(path, { method: 'POST', body: {} })).status, 405);
+    const base = path.endsWith('/actors/page') ? '?' : '?actor=' + encodeURIComponent(actor) + '&';
+    for (const query of ['limit=0', 'limit=101', 'limit=-1', 'limit=01', 'limit=1e1', 'limit=9007199254740992', 'limit=2&limit=3', 'cursor=', 'unexpected=1', 'roomId=&roomId=other']) {
+      assert.equal((await wire.http(path + base + query)).status, 400, path + ':' + query);
+    }
+  }
+  assert.equal((await wire.http('/api/private-chats/actors/page?actor=' + encodeURIComponent(actor))).status, 400);
+  const exact = await wire.http('/api/private-chats/page?actor=' + encodeURIComponent(actor));
+  assert.equal(exact.status, 200); assert.equal((await exact.json()).chats.length, 1);
+  const trimmed = await wire.http('/api/private-chats/page?actor=' + encodeURIComponent(actor.trim()));
+  assert.equal(trimmed.status, 200); assert.deepEqual((await trimmed.json()).chats, []);
+  assert.equal(wire.calls(), 0);
+});
+
 test('disconnecting an authenticated HTTP private watch releases the server wait without dispatching peer work', { timeout: 15000 }, async t => {
   const wire = await fixture(t), chat = await wire.call('council_chat_create', { participants: [first, second] });
   const original = wire.service.privateChats.watch.bind(wire.service.privateChats); let entered, aborted;

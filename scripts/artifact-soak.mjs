@@ -19,7 +19,7 @@ for (let index = 0; index < argumentsList.length; index++) {
 }
 
 const startedAt = new Date().toISOString(), started = performance.now();
-const temporaryBase = realpathSync(tmpdir());
+const temporaryBase = realpathSync.native(tmpdir());
 const temporary = mkdtempSync(join(temporaryBase, 'council-artifact-soak-'));
 const runtime = join(temporary, 'runtime');
 const workspace = join(temporary, 'project café 日本語');
@@ -48,7 +48,7 @@ function digest(directory) {
   return hash.digest('hex');
 }
 function checkedTemporary(path) {
-  const target = realpathSync(path);
+  const target = realpathSync.native(path);
   if (dirname(target) !== temporaryBase || !basename(target).startsWith('council-artifact-soak-')) throw new Error('Refusing to remove an unexpected fixture path.');
   return target;
 }
@@ -109,7 +109,7 @@ try {
     });
   }
   await git(workspace, ['init', '--quiet']);
-  assert.equal(realpathSync((await git(workspace, ['rev-parse', '--show-toplevel'])).toString('utf8').trim()), realpathSync(workspace));
+  assert.equal(realpathSync.native((await git(workspace, ['rev-parse', '--show-toplevel'])).toString('utf8').trim()), realpathSync.native(workspace));
   for (const [key, value] of [['user.name', 'Offline Artifact Soak'], ['user.email', 'offline@example.invalid'], ['commit.gpgsign', 'false'], ['core.fsmonitor', 'false'], ['gc.auto', '0'], ['maintenance.auto', 'false'], ['core.attributesFile', attributes]]) await git(workspace, ['config', key, value]);
   writeFileSync(join(workspace, '.gitignore'), '.council/\n'); writeFileSync(join(workspace, 'base.txt'), 'original checkout remains unchanged\n');
   await git(workspace, ['add', '.']); await git(workspace, ['commit', '--quiet', '-m', 'offline fixture base']);

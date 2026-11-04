@@ -49,7 +49,7 @@ test('room pages bound serialized UTF-8 bytes while retaining every complete mes
   assert.ok(pages >= 3);
   assert.deepEqual(collected, history);
   const end = store.messagePage('main', 100, Number.MAX_SAFE_INTEGER);
-  assert.deepEqual(end, { messages: [], nextCursor: null });
+  assert.deepEqual(end, { messages: [], nextCursor: null, nextAfter: Number.MAX_SAFE_INTEGER });
 });
 
 test('latest room previews keep a byte-bounded complete suffix and mutations preserve omitted evidence', t => {

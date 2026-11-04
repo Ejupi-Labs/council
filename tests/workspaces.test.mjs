@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { GitWorkspaces } from '../dist/workspaces.js';
@@ -548,7 +548,12 @@ test('case-distinct filesystem roots cannot borrow a sibling repository through 
     catch { t.skip('Per-directory NTFS case sensitivity is unavailable.'); return; }
   }
   const root = join(dir, 'project'), outside = join(dir, 'PROJECT'), state = join(dir, 'state');
-  mkdirSync(root); mkdirSync(outside);
+  mkdirSync(root);
+  if (existsSync(outside)) {
+    const lower = statSync(root, { bigint: true }), upper = statSync(outside, { bigint: true });
+    if (lower.dev === upper.dev && lower.ino === upper.ino) { t.skip('The fixture volume does not support case-distinct sibling directories.'); return; }
+  }
+  mkdirSync(outside);
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
   git('init', '--quiet'); git('config', 'user.name', 'Offline Case Test'); git('config', 'user.email', 'offline@example.invalid');
   git('config', 'commit.gpgsign', 'false'); git('config', 'core.autocrlf', 'false');
@@ -563,4 +568,19 @@ test('case-distinct filesystem roots cannot borrow a sibling repository through 
   assert.equal(prepared, false); assert.equal(existsSync(state), false);
   assert.deepEqual(readdirSync(outside).sort(), ['.git', 'unrelated.txt']);
   assert.equal(readFileSync(join(root, 'base.txt'), 'utf8'), 'committed content\n');
+});
+
+test('a direct SDK state alias with missing descendants publishes canonical artifacts that remain repairable after reopening', { timeout: 30000 }, async t => {
+  const { root, dir, git } = fixture(t), actual = join(dir, 'state'), alias = join(dir, 'alias');
+  mkdirSync(actual); symlinkSync(actual, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const requested = join(alias, 'p', 's'), canonical = join(realpathSync.native(actual), 'p', 's');
+  const manager = new GitWorkspaces(root, requested), workspace = await manager.create('direct-state-alias', 'codex');
+  assert.ok(workspace.path.startsWith(join(canonical, 'worktrees')));
+  writeFileSync(join(workspace.cwd, 'base.txt'), 'State aliases retain actual Git registration identity.\n');
+  const first = await manager.export(workspace);
+  const repaired = await new GitWorkspaces(root, canonical).export(first);
+  git('apply', '--check', repaired.patchPath);
+  assert.equal(readFileSync(join(root, 'base.txt'), 'utf8'), 'committed content\n');
+  await new GitWorkspaces(root, requested).cleanup(repaired, { reviewed: true, discardChanges: true });
+  assert.equal(existsSync(workspace.path), false);
 });

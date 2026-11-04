@@ -1,5 +1,23 @@
 # Council verification record
 
+## 1.3 development checkpoint — 4 November 2026, 20:48 UTC
+
+Version `1.3.0-dev.2` passed the complete local suite: **977 total, 974 passed, three platform skips, zero failures**, in 258.8 seconds on Windows ARM64, Node 24.18.1 and SQLite 3.53.1. TypeScript checks, seven CI-helper tests, both workflow lint checks and the updated skill validator passed. The runtime dependency audit found zero vulnerabilities. This remains an overnight development checkpoint; final release qualification and hosted results are separate.
+
+The earlier full pass found one fault-priority regression: a generic initial storage fault obscured the more specific terminal-persistence diagnosis. The corrected rule lets ordinary storage errors refine that diagnosis while preserving process-cleanup uncertainty over later errors. The focused operations, engine and maintenance suite passed 34 checks before the full repeat.
+
+Cleanup tests use deterministic gated runners and Git helpers, not live orphan processes. They verify failed precedence over cancellation, local queued-dispatch refusal, retained private reply evidence with public redaction, typed Git create/export/cleanup failures, idempotent host fencing, aborted maintenance, pending retained worktrees and an export completing during a concurrent cleanup fault. The affected host refuses further work; this checkpoint does not implement a durable foreign-host barrier or establish the cause of an earlier macOS cleanup failure.
+
+Snapshot format checks reject invalid UTF-8, duplicate or unknown fields, excessive JSON graphs, noncanonical timestamps and a manifest growing beyond its bounded 64 KiB descriptor read. The producer validates the same strict published schema before publishing completion, including a malformed source-schema regression. An official SDK client still verifies all five stores over the real stdio entrypoint.
+
+Private discovery tests cover 5,000 threads, complete byte-bounded metadata, exact actor labels, scope-bound cursors, restarts and matching MCP/HTTP routes. The shipped UI loads explicit pages independently and preserves drafts through retries and reordered replies. A separate real-browser offline fixture loaded 50 then 25 private threads, retained its selected conversation and unsent draft, and loaded 126 complete room messages followed by one manually checked newer message. Browser warnings/errors and provider calls were both zero; the owned server stopped normally. This was functional browser verification, not a claim of responsive visual certification.
+
+All five endurance harnesses passed under a real Windows 8.3 TEMP alias. Short service and storage repeats exercised 118 workflows/287 fake calls and 231 durable terminal runs respectively; the artifact case exported two patches. The earlier five-file alias qualification passed 104/104 with identical compiled digests before and after. These are bounded path/lifecycle checks, not hour-long qualification of this checkpoint.
+
+Two supporting one-hour captures on earlier immutable builds also completed: coordination covered 50,139 runs, 72,423 fake calls and 119 all-store snapshots; the real-process room harness covered 7,300 scenarios, 36,500 fake calls and 2,920 worker exits. Both verified drain, storage bounds and fixture removal. Their recorded build fingerprints predate this version, so they are not final `1.3.0` evidence.
+
+Hosted [run 41901631519](https://github.com/Ejupi-Labs/council/actions/runs/41901631519) on the previous checkpoint passed Ubuntu and completed Windows/macOS tests with actionable failures. Direct SDK state aliases, fixture canonicalization, case-insensitive-volume assumptions and preserved protocol diagnostics are corrected here. The next hosted run must verify these changes on its own commit; no cross-platform pass is inferred from local results.
+
 ## 1.3 development checkpoint — 4 November 2026, 19:24 UTC
 
 Version `1.3.0-dev.1` is a development checkpoint. The continuing overnight refinement and final release qualification are separate from this record. The two remote feature commits through `0903738` were integrated by a clean fast-forward before changes began.

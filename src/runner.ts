@@ -33,7 +33,7 @@ async function withBudget(request: AgentRequest, task: (signal: AbortSignal, rem
   catch (error) { result = failed(request, error instanceof Error ? error.message : 'Unable to resolve the configured agent executable.'); }
   finally { clearTimeout(timer); request.signal?.removeEventListener('abort', cancel); }
   const durationMs = Math.round(performance.now() - started);
-  if (result.error === PROCESS_CLEANUP_ERROR) return { ...result, status: 'failed', durationMs };
+  if (result.error?.startsWith(PROCESS_CLEANUP_ERROR)) return { ...result, status: 'failed', durationMs };
   if (timedOut) return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
   if (controller.signal.aborted) return { ...result, status: 'cancelled', durationMs, error: 'Agent request cancelled.' };
   return { ...result, durationMs };
@@ -102,6 +102,12 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
     let stopReason: string | undefined, failure: string | undefined;
     let forcedStatus: ResultStatus | undefined;
     let settled = false, closingAfterCompletion = false;
+    const cleanupFailed = (): void => {
+      const primary = forcedStatus === 'failed' && failure && !failure.startsWith(PROCESS_CLEANUP_ERROR) ? failure : undefined;
+      const existing = failure?.startsWith(PROCESS_CLEANUP_ERROR) ? failure : undefined;
+      forcedStatus = 'failed';
+      failure = (primary ? `${PROCESS_CLEANUP_ERROR} Earlier failure: ${primary}` : existing ?? PROCESS_CLEANUP_ERROR).slice(0, 4096);
+    };
     let graceTimer: ReturnType<typeof setTimeout> | undefined, forceTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (status: ResultStatus, error?: string): void => {
       if (settled) return;
@@ -118,8 +124,8 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
       try { protocol.cancel?.(control); } catch { /* Killing the tree is authoritative. */ }
       child.kill();
       forceTimer = setTimeout(() => {
-        void child.forceKill().catch(() => { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; })
-          .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => finish('failed', PROCESS_CLEANUP_ERROR));
+        void child.forceKill().catch(cleanupFailed)
+          .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => { cleanupFailed(); finish('failed', failure); });
       }, 3000);
     };
     const control: ProtocolControl = {
@@ -189,7 +195,7 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
       catch { terminate('failed', 'Agent returned invalid protocol diagnostics.'); }
     });
     child.on('error', error => {
-      if (error instanceof ProcessCleanupError) { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; return; }
+      if (error instanceof ProcessCleanupError) { cleanupFailed(); return; }
       terminate('failed', 'Unable to start the configured agent executable. Run council doctor.');
     });
     child.once('close', async (code: number | null, signal: NodeJS.Signals | null) => {
