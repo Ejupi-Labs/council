@@ -1,12 +1,13 @@
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configSchema, initConfig, loadConfig, parseWorkflow, readJsonFile } from '../dist/config.js';
 
 function workspace(t) {
-  const root = mkdtempSync(join(tmpdir(), 'council-config-'));
+  const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-config-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -63,4 +64,40 @@ test('assignment-file readers can explicitly preserve JSON larger than the confi
   assert.throws(() => readJsonFile(filename), /1 MiB/);
   assert.equal(readJsonFile(filename, Infinity).codex, assignment);
   assert.throws(() => readJsonFile(filename, 0), /positive integer/);
+});
+
+test('configuration canonicalizes selected directory aliases and existing contained state ancestors without creating state', t => {
+  const parent = workspace(t), root = join(parent, 'actual-project'), alias = join(parent, 'selected-alias');
+  mkdirSync(root); mkdirSync(join(root, 'actual-state'));
+  symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  symlinkSync(join(root, 'actual-state'), join(root, 'state-alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  const config = loadConfig(alias, { stateDir: 'state-alias/new-state' });
+  assert.equal(config.workspaceRoot, realpathSync.native(root));
+  assert.equal(config.stateDir, join(realpathSync.native(join(root, 'actual-state')), 'new-state'));
+  assert.equal(existsSync(config.stateDir), false);
+  symlinkSync(root, join(root, 'root-alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => loadConfig(root, { stateDir: 'root-alias' }), /directory inside the workspace/);
+});
+
+test('Windows 8.3 workspace and state aliases resolve to native canonical paths', { skip: process.platform !== 'win32' }, t => {
+  const parent = workspace(t), root = join(parent, 'canonical-workspace-directory'), alias = join(parent, 'CANONI~1');
+  mkdirSync(root);
+  const state = join(root, 'stateparent-directory'), stateAlias = join(root, 'STATEP~1'); mkdirSync(state);
+  if (!existsSync(alias) || !existsSync(stateAlias)) { t.skip('This volume does not create the expected Windows 8.3 aliases.'); return; }
+  const config = loadConfig(alias, { stateDir: 'STATEP~1/new-state' });
+  assert.equal(config.workspaceRoot, realpathSync.native(root));
+  assert.equal(config.stateDir, join(realpathSync.native(state), 'new-state'));
+  assert.equal(existsSync(config.stateDir), false);
+});
+
+test('configuration rejects case-distinct existing state ancestors outside the selected filesystem root', t => {
+  const parent = workspace(t);
+  if (process.platform === 'win32') {
+    try { execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'fsutil.exe'), ['file', 'setCaseSensitiveInfo', parent, 'enable'], { windowsHide: true, stdio: 'pipe' }); }
+    catch { t.skip('Per-directory NTFS case sensitivity is unavailable.'); return; }
+  }
+  const root = join(parent, 'project'), sibling = join(parent, 'PROJECT'); mkdirSync(root); mkdirSync(sibling);
+  assert.throws(() => loadConfig(root, { stateDir: join(sibling, 'new-state') }), /(?:inside|outside) the workspace/);
+  assert.equal(existsSync(join(sibling, 'new-state')), false);
+  assert.equal(existsSync(join(root, 'new-state')), false);
 });

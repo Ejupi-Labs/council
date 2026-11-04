@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -21,7 +21,7 @@ const workflow = { mode: 'delegate', agents: ['codex'], task: 'Assess the offlin
 const cutoff = '2025-01-01T00:00:00.000Z';
 
 function workspace(t) {
-  const root = mkdtempSync(join(tmpdir(), 'council-operations-'));
+  const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-operations-'));
   const cleanups = [];
   t.after(async () => {
     for (const cleanup of cleanups.toReversed()) await cleanup();

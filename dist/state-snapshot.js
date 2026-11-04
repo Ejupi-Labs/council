@@ -115,9 +115,9 @@ export async function createStateSnapshot(stateDir, output, signal) {
     requireSafeSqliteRuntime();
     if (typeof output !== 'string' || !output.trim() || output.includes('\0') || Buffer.byteLength(output) > 4096)
         throw new Error('Snapshot destination must be non-empty text of at most 4096 UTF-8 bytes.');
-    const requested = resolve(output), parent = realpathSync(dirname(requested));
+    const requested = resolve(output), parent = realpathSync.native(dirname(requested));
     const destination = join(parent, basename(requested));
-    const source = realpathSync(stateDir);
+    const source = realpathSync.native(stateDir);
     const inventory = inspectStateFiles(source);
     const problem = inventory.find(entry => entry.error);
     if (problem)
@@ -181,7 +181,7 @@ export async function createStateSnapshot(stateDir, output, signal) {
 export async function verifyStateSnapshot(directory, signal) {
     signal?.throwIfAborted();
     requireSafeSqliteRuntime();
-    const root = realpathSync(directory), manifestPath = join(root, 'manifest.json');
+    const root = realpathSync.native(directory), manifestPath = join(root, 'manifest.json');
     regularFile(manifestPath);
     if (statSync(manifestPath).size > 64 * 1024)
         throw new Error('Snapshot manifest exceeds 64 KiB.');

@@ -130,6 +130,12 @@ export class RoomStore {
 
   has(id: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM rooms WHERE id=?').get(id)); }
 
+  /** A cache invalidator for this connection, not a durable cursor or shared revision. */
+  changeToken(): string {
+    const row = this.db.prepare('SELECT CAST(total_changes() AS TEXT) AS writes, CAST(data_version AS TEXT) AS version FROM pragma_data_version').get() as { writes: string; version: string };
+    return `${row.writes}:${row.version}`;
+  }
+
   observation(id: string): RoomObservation | undefined {
     const row = this.db.prepare(`SELECT id, status, revision,
       json_extract(document, '$.title') AS title, COALESCE(json_extract(document, '$.instructionRevision'), 0) AS instruction_revision,

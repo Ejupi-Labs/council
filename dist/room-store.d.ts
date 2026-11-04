@@ -11,6 +11,8 @@ export declare class RoomStore {
     /** Read coordination state without fetching or decoding any chat history. */
     metadata(id: string): Omit<RoomRecord, 'messages'> | undefined;
     has(id: string): boolean;
+    /** A cache invalidator for this connection, not a durable cursor or shared revision. */
+    changeToken(): string;
     observation(id: string): RoomObservation | undefined;
     list(limit?: number): RoomSummary[];
     mutate(id: string, change: (room: RoomRecord) => void, options?: {

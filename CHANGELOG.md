@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Canonicalize Windows short paths, directory aliases and native Git roots while checking physical ancestor identities; reject case-sensitive sibling repositories that lexical containment can confuse. Keep temporary fixtures and cleanup boundaries canonical across platforms, and drain reader tests after early writer failure instead of hanging CI.
+- Bound inner advisor/private/ballot JSON before parsing while preserving ordinary opaque task output. Keep large room dashboards connected through bounded refresh notifications, skip idle summary scans, and reject obsolete or aborted list responses.
 - Add a complete terminal room workflow: create, inspect, discuss, execute, pause/resume, read complete paged history, add guidance/tasks, wait and recover. Foreground owners remain alive until stable outcomes; failed, cancelled, undecided or phase-incomplete execution exits nonzero. Add practical diagnosis/fix and retained-evidence recipes.
 - Back up all present collaboration databases into a new verifiable snapshot directory, with pinned per-database copies, sealed journal mode, SHA-256, integrity checks and a final completion manifest. Reject unmanifested journals and declared-absent files on verification; inventory every present store in health without initializing optional features. Retain the explicit workflow-only backup command.
 - Keep whole messages and reports in byte-bounded pages, project compact room summaries/observations in SQLite, cache identical preflight context, and scope foreign room-owner recovery to the room being awaited.

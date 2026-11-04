@@ -152,10 +152,19 @@ export class GitWorkspaces {
         if (signal?.aborted || error instanceof ProcessCleanupError) throw error;
         throw new Error('Write workflows require a Git repository with an existing HEAD commit. Commit the project before creating isolated worktrees.');
       }
-      const [repo, head] = metadata.trim().split(/\r?\n/);
-      if (!repo || !/^[a-f0-9]{40,64}$/.test(head ?? '')) throw new Error('Git did not return a repository and base commit.');
-      const suffix = relative(resolve(repo), this.root);
-      if (suffix && !inside(resolve(repo), this.root)) throw new Error('Workspace is outside its Git repository.');
+      const [reportedRepo, head] = metadata.trim().split(/\r?\n/);
+      if (!reportedRepo || !/^[a-f0-9]{40,64}$/.test(head ?? '')) throw new Error('Git did not return a repository and base commit.');
+      // Git and Node may spell the same directory differently (8.3 paths,
+      // junctions or /var aliases). Compare native canonical paths, then the
+      // actual repository ancestor so case-sensitive NTFS siblings stay apart.
+      const [repo, root] = await Promise.all([realpath(reportedRepo), realpath(this.root)]);
+      signal.throwIfAborted();
+      const suffix = relative(repo, root);
+      if (suffix && !inside(repo, root)) throw new Error('Workspace is outside its Git repository.');
+      const ancestor = resolve(root, ...suffix.split(sep).filter(Boolean).map(() => '..'));
+      const [repositoryIdentity, ancestorIdentity] = await Promise.all([lstat(repo, { bigint: true }), lstat(ancestor, { bigint: true })]);
+      signal.throwIfAborted();
+      if (repositoryIdentity.dev !== ancestorIdentity.dev || repositoryIdentity.ino !== ancestorIdentity.ino) throw new Error('Workspace is outside its Git repository.');
       if (suffix) {
         let kind: string;
         try { kind = (await this.git(this.root, ['cat-file', '-t', `${head}:${suffix.split(sep).join('/')}`], undefined, signal)).toString('utf8').trim(); }

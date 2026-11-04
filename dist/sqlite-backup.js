@@ -10,9 +10,9 @@ export async function backupDatabase(sourcePath, path, signal) {
         throw new Error('Backup destination must be non-empty text of at most 4096 UTF-8 bytes');
     }
     const requested = resolve(path);
-    const parent = realpathSync(dirname(requested));
+    const parent = realpathSync.native(dirname(requested));
     const destination = join(parent, basename(requested));
-    const source = realpathSync(sourcePath);
+    const source = realpathSync.native(sourcePath);
     const key = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
     if ([source, `${source}-wal`, `${source}-shm`, `${source}-journal`].map(key).includes(key(destination)))
         throw new Error('A backup cannot replace the active Council database or its journal files.');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -14,7 +14,7 @@ test('coordination endurance inputs reject ambiguous or unbounded runs before st
 });
 
 test('coordination evidence fingerprints runtime contents and measures actual nested fixture bytes', t => {
-  const parent = realTemporaryParent(), directory = mkdtempSync(join(parent, 'council-coordination-harness-test-'));
+  const parent = realTemporaryParent(), directory = realpathSync.native(mkdtempSync(join(parent, 'council-coordination-harness-test-')));
   t.after(() => { assert.equal(dirname(resolve(directory)), parent); assert.ok(basename(directory).startsWith('council-coordination-harness-test-')); rmSync(directory, { recursive: true, force: true }); });
   mkdirSync(join(directory, 'dist')); writeFileSync(join(directory, 'package.json'), '{"version":"test"}'); writeFileSync(join(directory, 'dist', 'sample.js'), 'export const value = 1;');
   const first = runtimeDigest(directory), measured = fixtureUsage(directory);
@@ -22,7 +22,7 @@ test('coordination evidence fingerprints runtime contents and measures actual ne
   writeFileSync(join(directory, 'dist', 'sample.js'), 'export const value = 2;'); assert.notEqual(runtimeDigest(directory), first);
 });
 
-function realTemporaryParent() { return resolve(tmpdir()); }
+function realTemporaryParent() { return realpathSync.native(tmpdir()); }
 
 test('interruption drains both SQLite hosts while close failures remain failed', { timeout: 30000 }, t => {
   for (const injectCloseFailure of [false, true]) {

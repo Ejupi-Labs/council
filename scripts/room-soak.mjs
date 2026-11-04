@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fixtureUsage, runtimeDigest } from './coordination-soak.mjs';
 
-const filename = fileURLToPath(import.meta.url), repository = resolve(dirname(filename), '..');
+const filename = realpathSync.native(fileURLToPath(import.meta.url)), repository = resolve(dirname(filename), '..');
 const FIXTURE_BYTES = 128 * 1024 * 1024;
 const scenarios = ['pause-resume', 'changed-instructions', 'cancel', 'task-failure', 'owner-exit'];
 
@@ -217,7 +217,7 @@ export async function roomSoak(options, signal) {
   signal?.addEventListener('abort', externalStop, { once: true }); if (signal?.aborted) externalStop();
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const started = performance.now(), counts = Object.fromEntries(scenarios.map(name => [name, 0]));
-  const temporaryBase = realpathSync(tmpdir()), temporary = mkdtempSync(join(temporaryBase, 'council-room-soak-')), runtime = join(temporary, 'runtime');
+  const temporaryBase = realpathSync.native(tmpdir()), temporary = realpathSync.native(mkdtempSync(join(temporaryBase, 'council-room-soak-'))), runtime = join(temporary, 'runtime');
   let cycles = 0, fakeAgentCalls = 0, peakBytes = 0, fixtures = 0, workersStarted = 0, workersExited = 0, runtimeHash, harnessHash, version, failure;
   let nextCheckpoint = options.checkpointMs;
   try {
@@ -243,7 +243,7 @@ export async function roomSoak(options, signal) {
     const api = await import(pathToFileURL(join(runtime, 'dist', 'index.js')).href);
     do {
       controller.signal.throwIfAborted();
-      const fixture = mkdtempSync(join(temporary, 'fixture-')), project = join(fixture, 'project');
+      const fixture = realpathSync.native(mkdtempSync(join(temporary, 'fixture-'))), project = join(fixture, 'project');
       mkdirSync(project); fixtures++;
       let service, workers = [], fixtureFailure;
       const ledger = [];
@@ -279,7 +279,7 @@ export async function roomSoak(options, signal) {
         try { assert.equal(db.prepare('PRAGMA quick_check').get().quick_check, 'ok'); if (name === 'state.db') assert.equal(db.prepare('SELECT COUNT(*) AS count FROM instances').get().count, 0); }
         finally { db.close(); }
       }
-      const resolved = realpathSync(fixture); assert.equal(dirname(resolved), realpathSync(temporary)); assert.ok(basename(resolved).startsWith('fixture-')); assert.ok(!lstatSync(fixture).isSymbolicLink());
+      const resolved = realpathSync.native(fixture); assert.equal(dirname(resolved), realpathSync.native(temporary)); assert.ok(basename(resolved).startsWith('fixture-')); assert.ok(!lstatSync(fixture).isSymbolicLink());
       rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } while (performance.now() - started < options.durationMs);
   } catch (error) { failure = error; }
@@ -288,7 +288,7 @@ export async function roomSoak(options, signal) {
   let fixtureRemoved = false;
   if (!failure) {
     try {
-      const resolved = realpathSync(temporary); assert.equal(dirname(resolved), temporaryBase); assert.ok(basename(resolved).startsWith('council-room-soak-')); assert.ok(!lstatSync(temporary).isSymbolicLink());
+      const resolved = realpathSync.native(temporary); assert.equal(dirname(resolved), temporaryBase); assert.ok(basename(resolved).startsWith('council-room-soak-')); assert.ok(!lstatSync(temporary).isSymbolicLink());
       rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); fixtureRemoved = true;
     } catch (error) { failure = error; }
   }
@@ -302,7 +302,7 @@ export async function roomSoak(options, signal) {
   return summary;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === filename) {
+if (process.argv[1] && existsSync(resolve(process.argv[1])) && realpathSync.native(resolve(process.argv[1])) === filename) {
   try {
     if (process.argv[2] === '--worker') await workerMain(process.argv[3], process.argv[4]);
     else { const result = await roomSoak(roomSoakOptions(process.argv.slice(2))); if (result.status !== 'completed') process.exitCode = 130; }

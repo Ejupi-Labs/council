@@ -8,6 +8,7 @@ export declare class RoomManager {
     private readonly owner;
     private readonly jobs;
     private readonly listeners;
+    private publicationVersion;
     private readonly emergency;
     private closing;
     private fault?;
@@ -16,6 +17,8 @@ export declare class RoomManager {
     constructor(service: CouncilService);
     subscribe(listener: (room: RoomRecord) => void): () => void;
     list(limit?: number): RoomSummary[];
+    /** Connection-local refresh signal, including emergency outcomes that could not commit. */
+    changeToken(): string;
     get(id: string): RoomRecord;
     metadata(id: string): Omit<RoomRecord, 'messages'>;
     observation(id: string): RoomObservation;

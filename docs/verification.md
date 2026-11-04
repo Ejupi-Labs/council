@@ -20,6 +20,18 @@ Cross-platform qualification of this development checkpoint is pending. The pre-
 
 ## Earlier verification
 
+### Native paths and efficient room updates — 4 November 2026, 19:55 UTC
+
+The second local development pass completed **925 tests: 922 passed, three platform skips, zero failures**, in 188.9 seconds. TypeScript checks, the generated build, both workflow lint checks and seven CI-helper tests passed. The runtime dependency audit remains clean. This is still a development checkpoint; hosted CI results are recorded separately when available.
+
+Actual directory aliases and Windows short paths now identify the same workspace, state directory and Git root. Physical ancestor identities still reject case-sensitive sibling folders that a lexical comparison could confuse. Real junction and nested-project regressions include applicable patch export and reviewed cleanup. Six added filesystem cases passed in a child using a real Windows 8.3 temporary path; the ACP and coordination harness suites also passed under such an alias. Temporary fixture paths are canonicalized rather than changing production timeouts or CI environment settings.
+
+A reproduced CI test hang is bounded by actual task outcome and cancellation: an independent reader no longer waits indefinitely when its prerequisite writer fails before dispatch. The original failure remains visible, dependent tasks remain undispatched and owned resources drain. Independent OS jobs now finish without matrix fail-fast cancelling the remaining diagnostics. Hosted macOS runner capacity remains an infrastructure question, separate from these tested fixes.
+
+Advisor, private and room-ballot control JSON is bounded before full parsing. Deep and wide rejected ballots went from three raw parses to zero, retain their complete unapproved evidence and never authorize task execution. Ordinary task JSON remains complete without orchestration materializing its graph.
+
+Large legitimate room boards previously exceeded the SSE queue bound and disconnected clients. A small refresh notification now retrieves the complete metadata through an ordinary authenticated read. Connection-scoped refreshes reject stale or aborted responses. Idle dashboards use a scalar local/foreign-change token, including emergency publications, instead of rebuilding unchanged room summaries every 750 ms. Actual HTTP and shipped-script cases cover continued updates, foreign commits and response ordering. A separate Windows fixture with 24 rooms and eight large tasks each measured 50 summary scans reduced to one, about 3.41 seconds versus 75 ms under concurrent load; exact summaries and foreign invalidation were verified. These timings are not an SLA.
+
 This record describes local release verification on 3–4 November 2026. Council targets trusted local workspaces under one operating-system account. These results establish the behavior of the tested builds and fixtures; they do not certify a hosted service, an OS sandbox or every vendor account configuration.
 
 ## Subscription protection and private peer chats — 4 November 2026

@@ -6,6 +6,7 @@ import { GitWorkspaces } from './workspaces.js';
 import { reasoningEffortError } from './runner.js';
 import { parseSchema } from './schema.js';
 import { assertUniqueObjectKeys } from './control-json.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 import { skillInstructions, validateSkills } from './skills.js';
 import { privateChatCandidate, privateChatRequest } from './private-chat-protocol.js';
 /** Legacy sizing constants retained for callers; these no longer limit workflow inputs. */
@@ -21,22 +22,25 @@ function record(value, label) {
 function advisorRequest(output) {
     const fence = /^\s*```(?:json)?[ \t]*\r?\n/i.exec(output);
     const candidate = fence ? output.slice(fence[0].length).replace(/\r?\n```[ \t\r\n]*$/, '') : output;
+    // An exact envelope can only begin with its control key. Do not parse or
+    // allocate an arbitrary task result merely to discover it is ordinary data.
+    const key = /^\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/.exec(candidate)?.[1];
+    if (!key)
+        return undefined;
+    try {
+        if (JSON.parse(key) !== 'council_advisor_request')
+            return undefined;
+    }
+    catch {
+        return undefined;
+    }
+    checkAgentJsonStructure(Buffer.from(candidate));
     let value;
     try {
         value = JSON.parse(candidate);
     }
     catch {
-        const key = /^\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/.exec(candidate)?.[1];
-        let intended = false;
-        if (key) {
-            try {
-                intended = JSON.parse(key) === 'council_advisor_request';
-            }
-            catch { /* Ordinary text has no valid control key. */ }
-        }
-        if (intended)
-            throw new Error('Advisor coordination requires exactly one complete request envelope; the task is incomplete.');
-        return undefined;
+        throw new Error('Advisor coordination requires exactly one complete request envelope; the task is incomplete.');
     }
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'council_advisor_request'))
         return undefined;

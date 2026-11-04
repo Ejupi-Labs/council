@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -20,8 +20,22 @@ function ballotData(request) {
 function approve(data, assignee = data.members[0].agent, overrides = {}) {
   return JSON.stringify({ vote: 'approve', rationale: 'The bounded task has clear acceptance evidence.', assignments: Object.fromEntries(data.tasks.map(task => [task.id, assignee])), ...overrides });
 }
+
+function dependencyGate() {
+  let release;
+  const ready = new Promise(resolve => { release = error => resolve({ error }); });
+  return { release, async wait(signal) {
+    signal.throwIfAborted();
+    let abort;
+    const cancelled = new Promise(resolve => { abort = () => resolve({ error: signal.reason }); signal.addEventListener('abort', abort, { once: true }); });
+    try {
+      const result = await Promise.race([ready, cancelled]); signal.throwIfAborted();
+      if (result.error) throw result.error;
+    } finally { signal.removeEventListener('abort', abort); }
+  } };
+}
 function fixture(t, handler, { git = false, ...overrides } = {}) {
-  const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'council-rooms-'));
+  const parent = realpathSync.native(tmpdir()), root = mkdtempSync(join(parent, 'council-rooms-'));
   if (git) {
     const invoke = (...args) => execFileSync('git', ['-C', root, ...args], { windowsHide: true, stdio: 'pipe' });
     invoke('init', '--quiet'); invoke('config', 'user.name', 'Offline Room Test'); invoke('config', 'user.email', 'offline@example.invalid');
@@ -179,22 +193,57 @@ test('room task advisors inherit their own settings and remain read-only while t
 });
 
 test('task execution respects dependency order, parallel slots and original read/write permissions', { timeout: 60000 }, async t => {
-  const events = []; let running = 0, peak = 0, writerStarted;
-  const writerReady = new Promise(resolve => { writerStarted = resolve; });
+  const events = []; let running = 0, peak = 0;
+  const writerReady = dependencyGate();
   const { manager, requests } = fixture(t, async request => {
     const data = ballotData(request); if (data) return complete(request, approve(data));
     const id = /Room task (task-\d+)/.exec(request.prompt)[1]; events.push(`start:${id}`); running++; peak = Math.max(peak, running);
-    if (id === 'task-1') writerStarted();
-    if (id === 'task-2') await writerReady;
-    await delay(15); running--; events.push(`end:${id}`); return complete(request, 'x'.repeat(4000));
+    const signal = AbortSignal.any([request.signal, t.signal]);
+    try {
+      if (id === 'task-1') writerReady.release();
+      if (id === 'task-2') await writerReady.wait(signal);
+      await delay(15, undefined, { signal }); return complete(request, 'x'.repeat(4000));
+    } finally { running--; events.push(`end:${id}`); }
   }, { git: true });
   const room = manager.create(input({ members: [member('codex')], tasks: [task('Writer', { permission: 'write' }), task('Independent reader'), task('Dependent reader', { dependsOn: ['task-1', 'task-2'] })] }));
-  manager.startDiscussion(room.id); const result = await manager.wait(room.id);
-  assert.equal(result.status, 'completed'); assert.equal(peak, 2);
+  const unsubscribe = manager.subscribe(value => {
+    if (value.id !== room.id) return;
+    const writer = value.tasks[0];
+    if (writer.status === 'failed' || writer.status === 'cancelled') writerReady.release(new Error(`Writer did not start: ${writer.error ?? writer.status}`));
+  });
+  t.after(unsubscribe);
+  manager.startDiscussion(room.id); const result = await manager.wait(room.id, 600000, t.signal);
+  assert.equal(result.status, 'completed', result.error); assert.equal(peak, 2);
   assert.ok(events.indexOf('start:task-3') > events.indexOf('end:task-1')); assert.ok(events.indexOf('start:task-3') > events.indexOf('end:task-2'));
   const writer = requests.find(request => request.permission === 'write'); assert.ok(writer.cwd.includes('worktrees'));
   assert.ok(result.tasks.every(task => task.resultPreview.length <= 2000));
   assert.ok(result.tasks.every(task => task.resultPreview.includes('Preview truncated')));
+});
+
+test('writer preparation failure releases an admitted reader gate and preserves the original room failure', { timeout: 10000 }, async t => {
+  const writerReady = dependencyGate(), readerEntered = dependencyGate();
+  let readerDrained = false;
+  const { manager, service, requests } = fixture(t, async request => {
+    const data = ballotData(request); if (data) return complete(request, approve(data));
+    readerEntered.release();
+    try { await writerReady.wait(AbortSignal.any([request.signal, t.signal])); return complete(request, 'Unexpected reader completion.'); }
+    finally { readerDrained = true; }
+  }, { git: true });
+  const failure = new Error('Injected writer preparation failure before fake-agent dispatch.');
+  service.engine.workspaces.create = async (_run, _agent, _slot, signal) => {
+    await readerEntered.wait(AbortSignal.any([signal, t.signal])); throw failure;
+  };
+  const room = manager.create(input({ members: [member('codex')], tasks: [task('Writer', { permission: 'write' }), task('Admitted reader'), task('Dependent task', { dependsOn: ['task-1', 'task-2'] })] }));
+  const unsubscribe = manager.subscribe(value => {
+    if (value.id === room.id && ['failed', 'cancelled'].includes(value.tasks[0].status)) writerReady.release(new Error(value.tasks[0].error));
+  });
+  t.after(unsubscribe);
+  manager.startDiscussion(room.id);
+  const result = await manager.wait(room.id, 10000, t.signal);
+  assert.equal(result.status, 'failed'); assert.match(result.error, /Injected writer preparation failure/);
+  assert.equal(readerDrained, true); assert.deepEqual(result.tasks.map(task => task.status), ['failed', 'failed', 'cancelled']);
+  assert.equal(requests.filter(request => !ballotData(request)).length, 1, 'Only the admitted independent reader reached the fake runner.');
+  assert.equal(service.health().state.counts.activeRuns, 0); assert.equal(service.health().state.counts.slots, 0);
 });
 
 test('failed tasks leave the room failed and never dispatch their dependent tasks', async t => {

@@ -73,7 +73,9 @@ export function readJsonFile(filename, maxBytes = 1_048_576) {
 }
 function escapes(path) { return path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path); }
 export function loadConfig(workspace = process.cwd(), overrides = {}) {
-    const workspaceRoot = realpathSync(resolve(workspace));
+    // The legacy sync implementation preserves Windows 8.3 spellings. Use the
+    // same native canonicalization as async filesystem operations and Git.
+    const workspaceRoot = realpathSync.native(resolve(workspace));
     if (!statSync(workspaceRoot).isDirectory())
         throw new Error('Workspace must be a directory.');
     const filename = resolve(workspaceRoot, 'council.config.json');
@@ -82,15 +84,25 @@ export function loadConfig(workspace = process.cwd(), overrides = {}) {
         throw new ValidationError('Project configuration must be a JSON object.');
     const { workspaceRoot: _workspace, stateDir: overrideState, ...settings } = overrides;
     const parsed = configSchema.parse({ ...raw, ...settings, ...(overrideState ? { stateDir: overrideState } : {}) });
-    const stateDir = resolve(workspaceRoot, parsed.stateDir);
-    const pathInside = relative(workspaceRoot, stateDir);
+    const requestedState = resolve(workspaceRoot, parsed.stateDir);
+    const pathInside = relative(workspaceRoot, requestedState);
     if (!pathInside || escapes(pathInside))
         throw new Error('stateDir must be a directory inside the workspace.');
-    let ancestor = stateDir;
+    let ancestor = requestedState;
     while (!existsSync(ancestor))
         ancestor = resolve(ancestor, '..');
-    if (escapes(relative(workspaceRoot, realpathSync(ancestor))))
+    const canonicalAncestor = realpathSync.native(ancestor), ancestorSuffix = relative(workspaceRoot, canonicalAncestor);
+    if (escapes(ancestorSuffix))
         throw new Error('stateDir resolves outside the workspace.');
+    // path.relative folds Windows casing even inside a case-sensitive directory.
+    // Verify the physical root selected by that lexical prefix before accepting it.
+    const selectedAncestor = resolve(canonicalAncestor, ...ancestorSuffix.split(sep).filter(Boolean).map(() => '..'));
+    const rootIdentity = statSync(workspaceRoot, { bigint: true }), ancestorIdentity = statSync(selectedAncestor, { bigint: true });
+    if (rootIdentity.dev !== ancestorIdentity.dev || rootIdentity.ino !== ancestorIdentity.ino)
+        throw new Error('stateDir resolves outside the workspace.');
+    const stateDir = resolve(canonicalAncestor, relative(ancestor, requestedState));
+    if (!relative(workspaceRoot, stateDir))
+        throw new Error('stateDir must be a directory inside the workspace.');
     return { ...parsed, workspaceRoot, stateDir };
 }
 export function initConfig(workspace = process.cwd(), backend = 'native') {

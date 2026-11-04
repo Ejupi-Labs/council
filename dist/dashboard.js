@@ -89,6 +89,7 @@ export async function serveDashboard(service, rooms, options = {}) {
     const clients = new Set();
     let host = '', origin = '', closed = false, polling = false;
     let closePromise;
+    let roomToken = typeof rooms.changeToken === 'function' ? rooms.changeToken() : undefined;
     let snapshot = JSON.stringify(await rooms.list());
     let delegateSnapshot = '';
     const json = (response, status, value) => {
@@ -400,13 +401,19 @@ export async function serveDashboard(service, rooms, options = {}) {
         if (closed || polling || clients.size === 0)
             return;
         polling = true;
-        void Promise.resolve().then(() => rooms.list()).then(value => {
-            const next = JSON.stringify(value);
+        void Promise.resolve().then(async () => {
+            const token = typeof rooms.changeToken === 'function' ? rooms.changeToken() : undefined;
+            return { token, next: token === undefined || token !== roomToken ? JSON.stringify(await rooms.list()) : undefined };
+        }).then(({ token, next }) => {
             if (closed)
                 return;
-            if (next !== snapshot) {
+            // Capture the token before reading the list, so a concurrent commit cannot be hidden.
+            roomToken = token;
+            if (next !== undefined && next !== snapshot) {
                 snapshot = next;
-                const frame = `event: rooms\ndata: ${next}\n\n`;
+                const complete = `event: rooms\ndata: ${next}\n\n`;
+                const frame = Buffer.byteLength(complete) > SSE_QUEUE_LIMIT
+                    ? 'event: rooms-refresh\ndata: {}\n\n' : complete;
                 for (const client of clients)
                     writeEvent(client, frame);
             }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RoomStore } from './room-store.js';
 import { assertUniqueObjectKeys } from './control-json.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 import { objectSchema, parseSchema, type JsonSchema } from './schema.js';
 import { REASONING_EFFORTS, type RunRecord, type WorkflowInput, type WorkspaceArtifact } from './types.js';
 import { BUILT_IN_SKILL_IDS, validateSkills } from './skills.js';
@@ -67,6 +68,7 @@ export class RoomManager {
   private readonly owner = randomUUID();
   private readonly jobs = new Map<string, Job>();
   private readonly listeners = new Set<(room: RoomRecord) => void>();
+  private publicationVersion = 0n;
   private readonly emergency = new Map<string, RoomRecord>();
   private closing = false;
   private fault?: string;
@@ -82,6 +84,9 @@ export class RoomManager {
       taskCount: room.tasks.length, completedTasks: room.tasks.filter(task => task.status === 'completed').length,
       callsUsed: room.callsUsed, maxCalls: room.maxCalls, revision: room.revision, updatedAt: room.updatedAt } : summary;
   }); }
+
+  /** Connection-local refresh signal, including emergency outcomes that could not commit. */
+  changeToken(): string { return `${this.store.changeToken()}:${this.publicationVersion}`; }
   get(id: string): RoomRecord {
     if (typeof id !== 'string' || !id || id.length > 100) throw new Error('Room not found (404).');
     const room = this.emergency.get(id) ?? this.store.get(id);
@@ -341,7 +346,10 @@ export class RoomManager {
     delete room.decision;
     for (const task of room.tasks) if (task.status === 'assigned') { task.status = 'pending'; delete task.assignee; }
   }
-  private publish(room: RoomRecord): void { for (const listener of this.listeners) { try { listener(structuredClone(room)); } catch { /* A disconnected UI cannot alter room persistence. */ } } }
+  private publish(room: RoomRecord): void {
+    this.publicationVersion++;
+    for (const listener of this.listeners) { try { listener(structuredClone(room)); } catch { /* A disconnected UI cannot alter room persistence. */ } }
+  }
   private change(id: string, action: (room: RoomRecord) => void, options?: Parameters<RoomStore['mutate']>[2], beforePublish?: (room: RoomRecord) => void): RoomRecord {
     const room = this.store.mutate(id, action, options);
     const job = this.jobs.get(id); if (job) job.snapshot = structuredClone(room);
@@ -563,6 +571,7 @@ export class RoomManager {
     const source = output.trim();
     const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(source);
     const json = fenced ? fenced[1]! : source;
+    checkAgentJsonStructure(Buffer.from(json));
     let value: unknown;
     try { value = JSON.parse(json); } catch { throw new Error('Agent did not return one complete JSON ballot.'); }
     assertUniqueObjectKeys(json, 'Ballot');

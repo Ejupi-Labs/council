@@ -28,18 +28,23 @@ for (const boundary of ['task-result', 'budget-refund']) {
     const room = manager.create({ title: 'Uncertain persistence acknowledgment', brief: 'Preserve uncertain evidence and stop new admission.',
       members: [{ agent: 'codex', role: 'worker', advisor: 'claude', advisorMaxRequests: 2 }, { agent: 'claude', role: 'advisor' }],
       tasks: [1, 2].map(index => ({ title: 'Task ' + index, brief: 'Return complete offline evidence without requesting advice.', permission: 'read' })) });
-    let failed = false;
+    let failed = false, tokenAtFault;
     manager.store.mutate = function (id, change, options) {
       if (failed) throw new Error('Injected room writer outage after acknowledgment loss.');
       const before = this.metadata(id), result = mutate.call(this, id, change, options);
       const atBoundary = boundary === 'task-result' ? result.tasks[0].status === 'completed'
         : before.tasks[0].status === 'running' && result.callsUsed < before.callsUsed;
-      if (atBoundary) { failed = true; throw new Error('Injected lost room commit acknowledgment.'); }
+      if (atBoundary) {
+        tokenAtFault = { store: this.changeToken(), manager: manager.changeToken() };
+        failed = true; throw new Error('Injected lost room commit acknowledgment.');
+      }
       return result;
     };
     manager.startDiscussion(room.id);
     const retained = await manager.wait(room.id), durable = manager.store.list(1)[0], summary = manager.list(1)[0];
     assert.equal(failed, true); assert.equal(retained.status, 'failed'); assert.match(retained.error, /persistence failed/);
+    assert.equal(manager.store.changeToken(), tokenAtFault.store, 'The failed writer cannot commit another durable room change.');
+    assert.notEqual(manager.changeToken(), tokenAtFault.manager, 'The emergency publication must still invalidate cached room lists.');
     if (boundary === 'task-result') assert.notEqual(durable.completedTasks, retained.tasks.filter(task => task.status === 'completed').length);
     else assert.notEqual(durable.callsUsed, retained.callsUsed);
     assert.deepEqual(summary, { id: retained.id, backend: retained.backend, title: retained.title, status: retained.status,

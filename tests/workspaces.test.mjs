@@ -6,14 +6,14 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { GitWorkspaces } from '../dist/workspaces.js';
 import { killProcessTree, ManagedProcess, ProcessCleanupError } from '../dist/process.js';
 
 function fixture(t, commit = true) {
-  const dir = mkdtempSync(join(tmpdir(), 'council-workspaces-'));
+  const dir = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-workspaces-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, 'repo');
   mkdirSync(root);
@@ -507,4 +507,60 @@ test('Git retains a rejected force cleanup instead of swallowing it behind cance
 
 test('Git preflight preserves unverified cleanup diagnostics instead of claiming HEAD is absent', async t => {
   await injectedCleanupFailure(t, { cancel: false });
+});
+
+test('a selected workspace junction keeps the same Git identity and exports an applicable reviewed patch', { timeout: 30000 }, async t => {
+  const { root, dir, state, git } = fixture(t), alias = join(dir, 'selected-alias');
+  symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const manager = new GitWorkspaces(alias, state), workspace = await manager.create('actual-directory-alias', 'codex');
+  writeFileSync(join(workspace.cwd, 'base.txt'), 'Changed through the isolated alias workspace.\n');
+  const artifact = await manager.export(workspace);
+  assert.match(readFileSync(artifact.patchPath, 'utf8'), /\+Changed through the isolated alias workspace/);
+  git('apply', '--check', artifact.patchPath);
+  assert.equal(readFileSync(join(root, 'base.txt'), 'utf8'), 'committed content\n');
+  await new GitWorkspaces(alias, state).cleanup(artifact, { reviewed: true, discardChanges: true });
+  assert.equal(existsSync(workspace.path), false);
+});
+
+test('a nested committed project selected through a real directory alias retains its canonical suffix', { timeout: 30000 }, async t => {
+  const { root, dir, state, git } = fixture(t), nested = join(root, 'nested'), alias = join(dir, 'nested-alias');
+  mkdirSync(nested); writeFileSync(join(nested, 'project.txt'), 'Original nested evidence.\n');
+  git('add', '.'); git('commit', '--quiet', '-m', 'nested project');
+  symlinkSync(nested, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const manager = new GitWorkspaces(alias, state), workspace = await manager.create('nested-directory-alias', 'codex');
+  assert.equal(workspace.cwd, join(workspace.path, 'nested'));
+  writeFileSync(join(workspace.cwd, 'project.txt'), 'Changed nested evidence.\n');
+  const artifact = await manager.export(workspace);
+  git('apply', '--check', artifact.patchPath);
+  assert.match(readFileSync(artifact.patchPath, 'utf8'), /a\/nested\/project.txt/);
+  assert.equal(readFileSync(join(nested, 'project.txt'), 'utf8'), 'Original nested evidence.\n');
+  await manager.cleanup(artifact, { reviewed: true, discardChanges: true });
+});
+
+test('case-distinct filesystem roots cannot borrow a sibling repository through a case-folded containment check', { timeout: 30000 }, async t => {
+  const parent = realpathSync.native(tmpdir()), dir = mkdtempSync(join(parent, 'council-case-workspaces-'));
+  t.after(() => {
+    assert.equal(dirname(realpathSync.native(dir)), parent); assert.ok(basename(dir).startsWith('council-case-workspaces-'));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  if (process.platform === 'win32') {
+    try { execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'fsutil.exe'), ['file', 'setCaseSensitiveInfo', dir, 'enable'], { windowsHide: true, stdio: 'pipe' }); }
+    catch { t.skip('Per-directory NTFS case sensitivity is unavailable.'); return; }
+  }
+  const root = join(dir, 'project'), outside = join(dir, 'PROJECT'), state = join(dir, 'state');
+  mkdirSync(root); mkdirSync(outside);
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
+  git('init', '--quiet'); git('config', 'user.name', 'Offline Case Test'); git('config', 'user.email', 'offline@example.invalid');
+  git('config', 'commit.gpgsign', 'false'); git('config', 'core.autocrlf', 'false');
+  writeFileSync(join(root, 'base.txt'), 'committed content\n'); git('add', '.'); git('commit', '--quiet', '-m', 'case fixture');
+  git('config', 'core.worktree', root);
+  writeFileSync(join(outside, '.git'), 'gitdir: ' + join(root, '.git') + '\n');
+  writeFileSync(join(outside, 'unrelated.txt'), 'Keep the selected unrelated folder intact.\n');
+  const reported = execFileSync('git', ['-C', outside, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', windowsHide: true }).trim();
+  assert.equal(realpathSync.native(reported), realpathSync.native(root));
+  let prepared = false;
+  await assert.rejects(new GitWorkspaces(outside, state).create('case-distinct-root', 'codex', 'codex', undefined, () => { prepared = true; }), /outside its Git repository/);
+  assert.equal(prepared, false); assert.equal(existsSync(state), false);
+  assert.deepEqual(readdirSync(outside).sort(), ['.git', 'unrelated.txt']);
+  assert.equal(readFileSync(join(root, 'base.txt'), 'utf8'), 'committed content\n');
 });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -11,7 +11,7 @@ import { once } from 'node:events';
 import { CouncilStore } from '../dist/store.js';
 
 function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'council-store-'));
+  const directory = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-store-'));
   const stores = [];
   const cleanups = [];
   const open = () => { const store = new CouncilStore(directory); stores.push(store); return store; };

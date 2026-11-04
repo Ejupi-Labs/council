@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RoomStore } from './room-store.js';
 import { assertUniqueObjectKeys } from './control-json.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 import { objectSchema, parseSchema } from './schema.js';
 import { REASONING_EFFORTS } from './types.js';
 import { BUILT_IN_SKILL_IDS, validateSkills } from './skills.js';
@@ -65,6 +66,7 @@ export class RoomManager {
     owner = randomUUID();
     jobs = new Map();
     listeners = new Set();
+    publicationVersion = 0n;
     emergency = new Map();
     closing = false;
     fault;
@@ -83,6 +85,8 @@ export class RoomManager {
                 callsUsed: room.callsUsed, maxCalls: room.maxCalls, revision: room.revision, updatedAt: room.updatedAt } : summary;
         });
     }
+    /** Connection-local refresh signal, including emergency outcomes that could not commit. */
+    changeToken() { return `${this.store.changeToken()}:${this.publicationVersion}`; }
     get(id) {
         if (typeof id !== 'string' || !id || id.length > 100)
             throw new Error('Room not found (404).');
@@ -421,12 +425,15 @@ export class RoomManager {
                 delete task.assignee;
             }
     }
-    publish(room) { for (const listener of this.listeners) {
-        try {
-            listener(structuredClone(room));
+    publish(room) {
+        this.publicationVersion++;
+        for (const listener of this.listeners) {
+            try {
+                listener(structuredClone(room));
+            }
+            catch { /* A disconnected UI cannot alter room persistence. */ }
         }
-        catch { /* A disconnected UI cannot alter room persistence. */ }
-    } }
+    }
     change(id, action, options, beforePublish) {
         const room = this.store.mutate(id, action, options);
         const job = this.jobs.get(id);
@@ -729,6 +736,7 @@ export class RoomManager {
         const source = output.trim();
         const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(source);
         const json = fenced ? fenced[1] : source;
+        checkAgentJsonStructure(Buffer.from(json));
         let value;
         try {
             value = JSON.parse(json);

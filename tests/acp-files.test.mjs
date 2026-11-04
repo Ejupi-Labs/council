@@ -1,19 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 import { AcpFiles, MAX_ACP_FILE_BYTES } from '../dist/acp-files.js';
 
+const temporaryBase = realpathSync.native(tmpdir());
+
 function fixture(t) {
-  const temporary = mkdtempSync(join(tmpdir(), 'council-acp-files-'));
+  const temporary = realpathSync.native(mkdtempSync(join(temporaryBase, 'council-acp-files-')));
   const root = join(temporary, 'project'); mkdirSync(root);
   const outside = join(temporary, 'outside'); mkdirSync(outside);
-  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  t.after(() => { assert.equal(dirname(temporary), temporaryBase); assert.ok(basename(temporary).startsWith('council-acp-files-')); rmSync(temporary, { recursive: true, force: true }); });
   return { root, outside, files: new AcpFiles(root, 'write'), reader: new AcpFiles(root, 'read') };
 }
 
@@ -65,8 +67,8 @@ test('an explicitly configured root junction still maps to its selected canonica
 });
 
 test('case-sensitive NTFS siblings cannot escape the selected root through a case-folded prefix', { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
-  const parent = mkdtempSync(join(tmpdir(), 'council-acp-case-sensitive-'));
-  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const parent = realpathSync.native(mkdtempSync(join(temporaryBase, 'council-acp-case-sensitive-')));
+  t.after(() => { assert.equal(dirname(parent), temporaryBase); assert.ok(basename(parent).startsWith('council-acp-case-sensitive-')); rmSync(parent, { recursive: true, force: true }); });
   try {
     execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'fsutil.exe'), ['file', 'setCaseSensitiveInfo', parent, 'enable'], { windowsHide: true, stdio: 'pipe' });
   } catch { t.skip('Per-directory NTFS case sensitivity is unavailable for this volume or user.'); return; }
@@ -203,7 +205,12 @@ for (const operation of ['read', 'write']) test(`cancellation interrupts delayed
     syncBuiltinESMExports();
     const work = operation === 'read' ? files.read({ path }, controller.signal) : files.write({ path, content: 'must not be written' }, controller.signal);
     observed = work.then(() => ({ completed: true }), error => ({ error }));
-    await started;
+    const waiting = new AbortController();
+    try {
+      await Promise.race([started,
+        observed.then(() => { throw new Error('File operation settled before reaching its canonical-path metadata gate.'); }),
+        delay(2000, undefined, { signal: waiting.signal }).then(() => { throw new Error('Canonical-path metadata gate was not reached within two seconds.'); })]);
+    } finally { waiting.abort(); }
     controller.abort();
     const settled = await Promise.race([observed, delay(200).then(() => ({ stalled: true }))]);
     assert.equal(settled.error?.name, 'AbortError', 'Metadata cancellation must settle without waiting for its filesystem reply.');

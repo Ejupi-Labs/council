@@ -55,8 +55,8 @@ export function runtimeDigest(directory) {
 }
 
 function removeOwned(path, parent, prefix) {
-  const target = realpathSync(path);
-  assert.equal(dirname(target), realpathSync(parent));
+  const target = realpathSync.native(path);
+  assert.equal(dirname(target), realpathSync.native(parent));
   assert.ok(basename(target).startsWith(prefix));
   assert.ok(!lstatSync(path).isSymbolicLink());
   rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -69,7 +69,7 @@ function gate() {
 }
 
 export async function coordinationSoak(options) {
-  const temporaryBase = realpathSync(tmpdir()), temporary = realpathSync(mkdtempSync(join(temporaryBase, 'council-coordination-soak-')));
+  const temporaryBase = realpathSync.native(tmpdir()), temporary = realpathSync.native(mkdtempSync(join(temporaryBase, 'council-coordination-soak-')));
   const runtime = join(temporary, 'runtime'), snapshots = join(temporary, 'snapshots');
   const evidenceDir = join(repository, '.council', 'refinement'); mkdirSync(evidenceDir, { recursive: true }); mkdirSync(snapshots);
   const stamp = new Date().toISOString().replaceAll(/[:.]/g, '-'), log = join(evidenceDir, `coordination-soak-${stamp}.jsonl`);

@@ -1,7 +1,16 @@
 import { parseSchema } from './schema.js';
 import { assertUniqueObjectKeys } from './control-json.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 /** Only an entire exact envelope yields control; examples and surrounding prose remain ordinary output. */
 export function privateChatRequest(output) {
+    if (!privateChatCandidate(output))
+        return undefined;
+    try {
+        checkAgentJsonStructure(Buffer.from(output));
+    }
+    catch {
+        throw new Error('Private chat request must contain only valid peer, message and context fields.');
+    }
     let value;
     try {
         value = JSON.parse(output);
@@ -34,13 +43,12 @@ export function privateChatCandidate(output) {
     // malformed formatting cannot turn the pair's evidence into a public result.
     const fence = /^\s*```(?:json)?[ \t]*\r?\n/i.exec(output);
     const candidate = fence ? output.slice(fence[0].length) : output;
-    try {
-        const value = JSON.parse(candidate);
-        return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'council_private_chat_request'));
-    }
-    catch { /* A cut-off envelope can still contain private evidence. */ }
+    // Scan keys without materializing a possibly hostile inner JSON graph. This
+    // also recognizes later root keys when a malformed envelope is cut off.
     const root = /^\s*\{/.exec(candidate);
     if (!root)
+        return false;
+    if (!candidate.includes('council_private_chat_request') && !candidate.includes('\\'))
         return false;
     let depth = 1;
     for (let index = root[0].length; index < candidate.length && depth > 0; index++) {

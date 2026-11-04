@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,13 +26,13 @@ function npmEntrypoint() {
 
 function removeTemporary(directory) {
   const target = resolve(directory);
-  const withinTemp = relative(resolve(tmpdir()), target);
+  const withinTemp = relative(realpathSync.native(tmpdir()), target);
   assert.ok(withinTemp && !withinTemp.startsWith('..') && !isAbsolute(withinTemp), 'Release cleanup must stay inside the temporary directory.');
   rmSync(target, { recursive: true, force: true });
 }
 
 test('the release tarball installs fully offline and runs its CLI and MCP server without production dependencies', { timeout: 60_000 }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'council-release-'));
+  const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-release-'));
   const consumer = join(root, 'consumer café 日本語 with spaces');
   const workspace = join(root, 'project café 日本語 with spaces');
   mkdirSync(consumer);
