@@ -12,6 +12,7 @@ export * from './report.js';
 export * from './workspaces.js';
 export * from './version.js';
 export * from './summary.js';
+export * from './state-snapshot.js';
 export * from './rooms-types.js';
 export * from './rooms-schema.js';
 export * from './rooms.js';

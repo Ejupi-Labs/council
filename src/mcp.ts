@@ -1,4 +1,6 @@
 import { CouncilService } from './service.js';
+import { resolve } from 'node:path';
+import { verifyStateSnapshot } from './state-snapshot.js';
 import { CouncilMcpServer } from './rpc.js';
 import { objectSchema, type JsonSchema } from './schema.js';
 import { workflowDefinition } from './config.js';
@@ -95,8 +97,12 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
     input => ({ ...service.health(input.integrity), transport: server.metrics() }));
   tool('council_run_page', 'Read a bounded page of persisted run summaries. Continue with nextCursor; full transcripts remain available through run resources.', objectSchema({ limit: integer(1, 100, 20), cursor: text(1, 1024) }), read,
     input => service.runPage(input.limit, input.cursor));
-  tool('council_backup', 'Create a consistent local SQLite backup without replacing existing files. Contains private local prompts/results; choose an appropriate local destination.', objectSchema({ destination: text(1, 4096) }, ['destination']), write,
+  tool('council_backup', 'Back up only workflow state (state.db) to a new file. Use council_snapshot to include rooms, billing, private chats and delegation. Contains private local prompts/results; choose an appropriate local destination.', objectSchema({ destination: text(1, 4096) }, ['destination']), write,
     async (input, signal) => ({ destination: await service.backup(input.destination, signal) }));
+  tool('council_snapshot', 'Back up every present collaboration database to a new local directory, with integrity checks, SHA-256 and a completion manifest. Each database is consistent individually; repository files and worktree artifacts require a separate matching copy. Never replaces an existing directory.', objectSchema({ destination: text(1, 4096) }, ['destination']), write,
+    (input, signal) => service.snapshot(input.destination, signal));
+  tool('council_verify_snapshot', 'Verify a completed local state snapshot against its manifest, checksums and SQLite integrity without restoring it or opening project state. Stop every host before a manual restore.', objectSchema({ directory: text(1, 4096) }, ['directory']), read,
+    (input, signal) => verifyStateSnapshot(resolve(service.config.workspaceRoot, input.directory), signal));
   tool('council_prune', 'Preview retention by default. Explicit execute permanently deletes up to 1000 old terminal read-only run records and their events. Active work, latest retained runs and all worktree-backed records are protected; files and messages are untouched.', objectSchema({ before: text(1, 64), keepLatest: integer(0, 100_000, 100), execute: boolean(false) }, ['before']), { ...write, destructiveHint: true },
     input => service.prune({ before: input.before, keepLatest: input.keepLatest, dryRun: !input.execute }));
   tool('council_continue', 'Start a new explicitly requested workflow using complete previous-run evidence as context. Does not resume a vendor process or replay unfinished writes.', objectSchema({ previousId: id, workflow: workflowDefinition }, ['previousId', 'workflow']), { ...write, openWorldHint: true },
@@ -169,7 +175,7 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
   tool('council_delegate_watch', 'Wait inside the server for a mandate change, report/reply, project guidance, or a monitored room reaching an actionable state. Routine active-room progress does not wake the model. Reuse the returned cursor; yield while waiting. This does not invoke models or push into disconnected vendor chats.', delegationWatchDefinition, read,
     (input, signal) => service.delegation.watch(input as any, signal));
   tool('council_rooms', 'List compact project rooms without loading chat history or invoking models.', objectSchema({ limit: integer(1, 100, 20) }), read,
-    input => service.rooms.list().slice(0, input.limit));
+    input => service.rooms.list(input.limit));
   tool('council_room_create', 'Create a durable project room with explicit member weights, model/effort settings, bounded discussion and task permissions. No model calls until started.', roomDefinition, write,
     input => compactRoom(service.rooms.create(input as any)));
   tool('council_room_status', 'Read a compact room state, optionally waiting in the server until its current discussion/execution settles. Chat history is a separate explicit read.',

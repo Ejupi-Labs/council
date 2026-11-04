@@ -240,3 +240,40 @@ test('rooms opt into private coordination only for task execution and preserve g
   assert.equal(privateHistory.bodies.length, 2); assert.equal(privateHistory.chats[0].roomId, room.id);
   assert.equal(service.privateChats.list(`run:${run.id}:alpha`, room.id)[0].id, privateHistory.chats[0].id);
 });
+
+test('private control candidates redact fenced responses and cut-off later keys without consuming ordinary examples', () => {
+  const exact = envelope();
+  for (const output of [
+    '```json\n' + exact + '\n```',
+    '```\n' + exact + '\n```',
+    '  ```JSON\r\n' + exact + '\r\n```',
+    '```json\n{"other":true,"council_private_chat_request":{"message":"PRIVATE_QUESTION cut off',
+    '{"other":{"nested":[1,2,{"value":"not a key"}]},"council_private_chat_request":{"message":"PRIVATE_QUESTION cut off',
+    '{"other":"quoted \\"council_private_chat_request\\" is data","council\\u005fprivate_chat_request":{"message":"PRIVATE_QUESTION cut off',
+  ]) {
+    assert.equal(privateChatCandidate(output), true, output);
+    assert.equal(privateChatRequest(output), undefined);
+  }
+  for (const output of [
+    'Example: ' + exact,
+    'This is an example.\n```json\n' + exact + '\n```',
+    '{"example":{"council_private_chat_request":{"message":"Ordinary example"}}}',
+    '{"example":{"council_private_chat_request":{"message":"Ordinary cut-off example',
+    '{"description":"council_private_chat_request: ordinary prose"}',
+    '{"other":[{"council_private_chat_request":"not at the root"}]}',
+  ]) assert.equal(privateChatCandidate(output), false, output);
+});
+
+test('mistaken Markdown or a cut-off later private key cannot complete or publish pair evidence', async t => {
+  for (const output of [
+    '```json\n' + envelope() + '\n```',
+    '{"other":true,"council_private_chat_request":{"peer":"bravo","message":"PRIVATE_QUESTION cut off',
+  ]) {
+    const { service, calls } = fixture(t, request => answer(request.agent, output));
+    const run = await service.run({ mode: 'delegate', task: 'Complete the assigned investigation.', agents: ['alpha'], permission: 'read',
+      privateChats: { alpha: { peers: ['bravo'], maxRequests: 1 } } });
+    assert.equal(run.status, 'failed');
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(JSON.stringify(run), /PRIVATE_QUESTION|PRIVATE_CONTEXT/);
+  }
+});

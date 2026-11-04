@@ -1,9 +1,12 @@
 {
   "name": "council-ai-plugin",
-  "version": "1.2.0",
+  "version": "1.3.0-dev.1",
   "description": "Dependency-free local collaboration for Codex, Claude Code, DeepSeek Harness, Junie and Antigravity.",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/Ejupi-Labs/council#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/Ejupi-Labs/council.git" },
+  "bugs": { "url": "https://github.com/Ejupi-Labs/council/issues" },
   "engines": {
     "node": ">=24.18.1"
   },
@@ -45,7 +48,9 @@
     "benchmark": "npm run build && node scripts/benchmark.mjs",
     "soak": "npm run build && node --expose-gc scripts/soak.mjs",
     "soak:storage": "npm run build && node scripts/storage-soak.mjs",
-    "soak:artifacts": "npm run build && node scripts/artifact-soak.mjs"
+    "soak:artifacts": "npm run build && node scripts/artifact-soak.mjs",
+    "soak:coordination": "npm run build && node scripts/coordination-soak.mjs",
+    "soak:rooms": "npm run build && node scripts/room-soak.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

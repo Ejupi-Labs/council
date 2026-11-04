@@ -30,6 +30,8 @@ export declare class CouncilStore {
         data: unknown;
     }>): void;
     getRun(id: string): RunRecord | undefined;
+    /** Read only the indexed identity; callers do not need a workflow transcript. */
+    hasRun(id: string): boolean;
     listRuns(limit?: number): RunRecord[];
     getRunSummary(id: string): RunSummary | undefined;
     listRunSummaries(limit?: number, before?: {

@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RoomStore } from './room-store.js';
+import { assertUniqueObjectKeys } from './control-json.js';
 import { objectSchema, parseSchema, type JsonSchema } from './schema.js';
 import { REASONING_EFFORTS, type RunRecord, type WorkflowInput, type WorkspaceArtifact } from './types.js';
 import { BUILT_IN_SKILL_IDS, validateSkills } from './skills.js';
 import type { CouncilService } from './service.js';
-import type { RoomDecision, RoomInput, RoomMember, RoomMessage, RoomRecord, RoomSummary, RoomTask, RoomTaskInput } from './rooms-types.js';
+import type { RoomDecision, RoomInput, RoomMember, RoomMessage, RoomObservation, RoomRecord, RoomSummary, RoomTask, RoomTaskInput } from './rooms-types.js';
 
 const text = (maximum?: number): JsonSchema => ({ type: 'string', minLength: 1, ...(maximum === undefined ? {} : { maxLength: maximum }), pattern: '^[^\\u0000]+$' });
 const taskSchema = objectSchema({ title: text(200), brief: text(), permission: { type: 'string', enum: ['read', 'write'] },
@@ -59,28 +60,6 @@ function displayedWeight(units: bigint, exponent: number): number | string {
   return Number.isFinite(number) ? number : scientific;
 }
 /** JSON.parse validates grammar first; reject ambiguous keys before trusting a ballot. */
-function rejectDuplicateKeys(source: string): void {
-  const objects: Set<string>[] = [];
-  for (let index = 0; index < source.length; index++) {
-    if (source[index] === '{') objects.push(new Set());
-    else if (source[index] === '}') objects.pop();
-    else if (source[index] === '"') {
-      const start = index;
-      while (++index < source.length) {
-        if (source[index] === '\\') index++;
-        else if (source[index] === '"') break;
-      }
-      let next = index + 1;
-      while (/\s/.test(source[next] ?? '')) next++;
-      if (source[next] === ':') {
-        const key = JSON.parse(source.slice(start, index + 1)) as string;
-        const scope = objects.at(-1)!;
-        if (scope.has(key)) throw new Error('Ballot contains duplicate JSON object keys.');
-        scope.add(key);
-      }
-    }
-  }
-}
 
 /** A durable human-managed task board; provider calls use the existing workflow service. */
 export class RoomManager {
@@ -97,9 +76,11 @@ export class RoomManager {
   constructor(private readonly service: CouncilService) { this.store = new RoomStore(service.config.stateDir); }
 
   subscribe(listener: (room: RoomRecord) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  list(): RoomSummary[] { return this.store.list().map(summary => {
+  list(limit = 1000): RoomSummary[] { return this.store.list(limit).map(summary => {
     const room = this.emergency.get(summary.id);
-    return room ? { ...summary, status: room.status, revision: room.revision, updatedAt: room.updatedAt } : summary;
+    return room ? { id: room.id, backend: room.backend, title: room.title, status: room.status,
+      taskCount: room.tasks.length, completedTasks: room.tasks.filter(task => task.status === 'completed').length,
+      callsUsed: room.callsUsed, maxCalls: room.maxCalls, revision: room.revision, updatedAt: room.updatedAt } : summary;
   }); }
   get(id: string): RoomRecord {
     if (typeof id !== 'string' || !id || id.length > 100) throw new Error('Room not found (404).');
@@ -115,9 +96,27 @@ export class RoomManager {
     const { messages: _messages, ...metadata } = room as RoomRecord;
     return structuredClone(metadata);
   }
+
+  observation(id: string): RoomObservation {
+    if (typeof id !== 'string' || !id || id.length > 100) throw new Error('Room not found (404).');
+    const saved = this.emergency.get(id);
+    const value = saved ? { id: saved.id, title: saved.title, status: saved.status, revision: saved.revision,
+      instructionRevision: saved.instructionRevision ?? 0, taskCount: saved.tasks.length,
+      completedTasks: saved.tasks.filter(task => task.status === 'completed').length,
+      failedTasks: saved.tasks.filter(task => task.status === 'failed' || task.status === 'cancelled').length,
+      callsUsed: saved.callsUsed, maxCalls: saved.maxCalls, ...(saved.error ? { error: saved.error } : {}),
+      ...(saved.pauseRequested ? { pauseRequested: true } : {}) } : this.store.observation(id);
+    if (!value) throw new Error(`Room not found (404): ${id}`);
+    return structuredClone(value);
+  }
+
+  private assertExists(id: string): void {
+    if (typeof id !== 'string' || !id || id.length > 100) throw new Error('Room not found (404).');
+    if (!this.emergency.has(id) && !this.store.has(id)) throw new Error(`Room not found (404): ${id}`);
+  }
   /** Reconcile a proven-dead owner without reading history or replaying work. */
-  recover(id: string): void { this.metadata(id); this.store.recover(id); }
-  messagePage(id: string, limit = 100, cursor?: number) { this.get(id); return this.store.messagePage(id, limit, cursor); }
+  recover(id: string): void { this.assertExists(id); this.store.recover(id); }
+  messagePage(id: string, limit = 100, cursor?: number) { this.assertExists(id); return this.store.messagePage(id, limit, cursor); }
 
   create(value: RoomInput): RoomRecord {
     this.available();
@@ -263,7 +262,7 @@ export class RoomManager {
     for (;;) {
       await delay(Math.max(1, Math.min(100, deadline - performance.now())), undefined, { signal: cancellation });
       cancellation.throwIfAborted();
-      this.store.recover();
+      this.store.recover(id);
       const room = this.get(id);
       if (!active(room) || performance.now() >= deadline) return room;
     }
@@ -460,24 +459,24 @@ export class RoomManager {
     return Object.fromEntries(room.members.filter(member => agents.includes(member.agent)).map(member => [member.agent,
       { ...(member.model ? { model: member.model } : {}), ...(member.effort ? { effort: member.effort } : {}), ...(member.skills !== undefined ? { skills: [...member.skills] } : {}) }]));
   }
-  private taskInput(room: RoomRecord, task: RoomTask, member: RoomMember): WorkflowInput {
+  private taskInput(room: RoomRecord, task: RoomTask, member: RoomMember, sharedContext?: string): WorkflowInput {
     this.validatePrerequisiteEvidence(room, task);
     const peers = room.privateChatMaxRequests ? room.members.filter(candidate => candidate.agent !== member.agent).map(candidate => candidate.agent) : [];
     const names = [member.agent, ...(member.advisor ? [member.advisor] : []), ...peers];
     return { mode: 'delegate', agents: [member.agent], permission: task.permission,
       task: `Room task ${task.id}: ${task.title}\n\n${task.brief}\n\nComplete only this project-manager task. Preserve its stated permission and report verification evidence.`
         + ((task.dependsOn?.length ?? 0) > 0 ? `\n\nPrerequisite tasks: ${task.dependsOn!.join(', ')}. Their complete reports and retained workflow/worktree/patch references are in shared context. Prerequisite worktrees are separate evidence and are never merged into your current workspace automatically. Do not edit those worktrees or assume their changes are already present. Inspect the referenced evidence within your permission and tool policy, and verify the actual files you rely on. If a sandbox or file policy blocks access, report that limitation and the unverified work as incomplete; do not claim it was inspected or integrated.` : ''),
-      context: this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, names),
+      context: sharedContext ?? this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, names),
       ...(member.advisor ? { advisors: { [member.agent]: { agent: member.advisor, maxRequests: member.advisorMaxRequests ?? 1 } } } : {}),
       ...(peers.length ? { privateChats: { [member.agent]: { peers, maxRequests: room.privateChatMaxRequests! } } } : {}) };
   }
-  private discussionInput(room: RoomRecord, round: number): WorkflowInput {
+  private discussionInput(room: RoomRecord, round: number, sharedContext?: string): WorkflowInput {
     const members = voters(room), tasks = pending(room);
     const data = { roomId: room.id, round, members: members.map(({ agent, role, weight }) => ({ agent, role, weight })),
       tasks: tasks.map(({ id, title, permission, dependsOn }) => ({ id, title, permission, dependsOn: dependsOn ?? [] })) };
     return { mode: 'parallel', agents: members.map(member => member.agent), permission: 'read',
       task: `Discuss the project manager's pending tasks without changing files or permissions. Independently vote and propose assignments.\nROOM_BALLOT_DATA_BEGIN\n${JSON.stringify(data)}\nROOM_BALLOT_DATA_END\nReturn exactly one JSON object, optionally in one json code fence: {"vote":"approve"|"revise"|"abstain","rationale":"your complete evidence and dissent","assignments":{"task-id":"voting-agent-alias"}}. Approve requires an assignment for EVERY pending task; all aliases and task IDs must come from the data. Rationale must be nonempty. No other fields or surrounding prose.`,
-      context: this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, members.map(member => member.agent)) };
+      context: sharedContext ?? this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, members.map(member => member.agent)) };
   }
   private context(room: RoomRecord): string {
     const history: RoomMessage[] = [];
@@ -526,12 +525,15 @@ export class RoomManager {
       const prerequisite = room.tasks.find(candidate => candidate.id === dependency);
       if (!prerequisite || prerequisite.status === 'failed' || prerequisite.status === 'cancelled') throw new Error(`Task ${task.id} has an unavailable prerequisite ${dependency}. Create a new task plan before starting provider work.`);
     }
-    let required = discussion ? this.cost(this.discussionInput(room, nextRound)) * (room.rounds - nextRound + 1) : 0;
+    // One synchronous preflight shares immutable context across candidate plans.
+    // Actual dispatch still reads fresh state and checks the instruction revision.
+    const sharedContext = this.context(room);
+    let required = discussion ? this.cost(this.discussionInput(room, nextRound, sharedContext)) * (room.rounds - nextRound + 1) : 0;
     // Manual discussion stops at ready; execution is admitted and budgeted separately.
     for (const task of !discussion || room.autoExecute ? pending(room) : []) {
       const candidates = !discussion && task.assignee ? members.filter(member => member.agent === task.assignee) : members;
       if (!candidates.length) throw new Error('Task has no valid voting-member assignee.');
-      required += Math.max(...candidates.map(member => this.cost(this.taskInput(room, task, member))));
+      required += Math.max(...candidates.map(member => this.cost(this.taskInput(room, task, member, sharedContext))));
     }
     if (room.callsUsed + required > room.maxCalls) throw new Error(`Room requires up to ${required} further calls, exceeding its remaining call budget ${room.maxCalls - room.callsUsed}.`);
   }
@@ -563,7 +565,7 @@ export class RoomManager {
     const json = fenced ? fenced[1]! : source;
     let value: unknown;
     try { value = JSON.parse(json); } catch { throw new Error('Agent did not return one complete JSON ballot.'); }
-    rejectDuplicateKeys(json);
+    assertUniqueObjectKeys(json, 'Ballot');
     const ballot = parseSchema<Ballot>(ballotSchema, value, 'ballot'); nonempty(ballot.rationale, 'Ballot rationale');
     const taskIds = new Set(pending(room).map(task => task.id)), aliases = new Set(voters(room).map(member => member.agent));
     for (const [task, agent] of Object.entries(ballot.assignments)) if (!taskIds.has(task) || !aliases.has(agent)) throw new Error('Ballot assignment names an unknown task or voting member.');
@@ -699,7 +701,7 @@ export class RoomManager {
       this.assertInstructions(room, job);
       if (room.tasks.some(task => task.status !== 'completed')) throw new Error('Not every room task completed.');
       room.status = 'completed'; delete room.error;
-      room.messages.push(message('system', 'system', 'All room tasks completed. Workflow records contain full verification evidence; write changes remain in isolated worktrees for review.'));
+      room.messages.push(message('system', 'system', 'All room tasks completed. Workflow records retain the reported results and checks; review them before accepting changes. Write changes remain in isolated worktrees.'));
     }, true);
   }
 }

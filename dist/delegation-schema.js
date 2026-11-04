@@ -10,6 +10,7 @@ export const delegationConfigureDefinition = delegationDefinition;
 export const delegationReportDefinition = objectSchema({
     author: text(1), kind: { type: 'string', enum: ['update', 'decision', 'blocked', 'completion'] },
     body: text(1), roomIds: { type: 'array', items: roomId, default: [] },
+    idempotencyKey: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9._:-]+$' },
     expectedRoomRevisions: { type: 'object', propertyNames: { pattern: '^[a-zA-Z0-9_-]{1,100}$' }, additionalProperties: revision },
 }, ['author', 'kind', 'body']);
 export const delegationResolveDefinition = objectSchema({

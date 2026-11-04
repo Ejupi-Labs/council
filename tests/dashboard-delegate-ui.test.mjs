@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContext, runInContext } from 'node:vm';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { CouncilService } from '../dist/service.js';
+import { loadConfig } from '../dist/config.js';
 import { dashboardHtml } from '../dist/dashboard-ui.js';
 import { delegateClientSource } from '../dist/dashboard-delegate-ui.js';
 
@@ -24,7 +30,7 @@ function harness(handler = path => path === '/api/delegation' ? configuration() 
   }
   const $ = id => { if (!nodes.has(id)) nodes.set(id, new Node(id)); return nodes.get(id); };
   $('delegateOpenOnly').checked = true; $('delegateReportAuthor').value = 'Human';
-  const context = createContext({ Promise, AbortController, encodeURIComponent, $,
+  const context = createContext({ Promise, AbortController, encodeURIComponent, crypto: { randomUUID }, $,
     element: (tag, cls, content) => { const node = new Node(tag); node.className = cls ?? ''; if (content !== undefined) node.textContent = String(content); return node; },
     api: async (path, body, signal) => { calls.push({ path, body, signal }); return await handler(path, body, signal); },
     room: { id: 'room-a' }, roomLoading: false, selected: 'room-a',
@@ -168,4 +174,151 @@ test('complete report bodies remain literal text and failed appended pages retai
   await wire.run('delegateLoadReports(true)'); assert.equal(wire.run('delegateReportsCursor'), 23); assert.equal(wire.$('delegateReports').children.length, 1);
   await wire.run('delegateLoadReports(true)'); assert.match(wire.calls.at(-1).path, /cursor=23/);
   assert.equal(wire.$('delegateReports').children.length, 2); assert.equal(wire.run('delegateReportsCursor'), null);
+});
+
+function persistedDelegate(t) {
+  const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'council-delegate-ui-retry-'));
+  const service = new CouncilService(loadConfig(root, { backend: 'mock' }), {
+    doctor: async () => [], run: async () => { assert.fail('Executive UI retry checks must not invoke providers.'); },
+  });
+  t.after(async () => {
+    await service.close();
+    assert.equal(dirname(resolve(root)), parent); assert.ok(basename(root).startsWith('council-delegate-ui-retry-'));
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const manager = service.delegation;
+  const first = manager.report({ author: 'Chief of staff', kind: 'decision', body: 'Which verified approach should the board use?' });
+  const second = manager.report({ author: 'Chief of staff', kind: 'blocked', body: 'An independent question still needs a response.' });
+  return { manager, first, second };
+}
+
+test('a lost reply after durable human resolution preserves its exact retry and another question draft', async t => {
+  const { manager, first, second } = persistedDelegate(t), attempts = [];
+  const wire = harness((path, body) => {
+    if (path === '/api/delegation') return configuration();
+    if (!body) return manager.reportsPage({ openOnly: true });
+    assert.equal(path, '/api/delegation/reports/' + first.id + '/resolve');
+    attempts.push(JSON.parse(JSON.stringify(body)));
+    const saved = manager.resolve(first.id, JSON.parse(JSON.stringify(body)));
+    if (attempts.length === 1) throw new Error('Network response lost after the durable reply committed.');
+    return saved;
+  });
+  await wire.open();
+  const [firstCard, secondCard] = wire.$('delegateReports').children;
+  const reply = 'Proceed with the existing authorized scope.';
+  child(firstCard, 'textarea').value = reply; await child(firstCard, 'textarea').fire('input');
+  child(secondCard, 'textarea').value = 'Retain this independent unsent draft.'; await child(secondCard, 'textarea').fire('input');
+  const before = manager.overview();
+  await child(firstCard, 'form').fire('submit');
+  const committed = manager.reportsPage().reports.find(value => value.id === first.id);
+  assert.equal(committed.revision, 2); assert.equal(committed.resolution.body, reply);
+  assert.equal(manager.overview().reportRevision, before.reportRevision + 1);
+  assert.equal(manager.overview().openQuestions, 1);
+  assert.equal(wire.$('delegateError').hidden, false); assert.match(wire.$('delegateError').textContent, /response lost/);
+  assert.equal(child(firstCard, 'textarea').value, reply);
+  assert.equal(wire.run('delegateReplyDrafts.get(' + JSON.stringify(first.id) + ')'), reply);
+  await child(firstCard, 'form').fire('submit');
+  assert.deepEqual(attempts, [
+    { author: 'Human', body: reply, expectedRevision: 1 },
+    { author: 'Human', body: reply, expectedRevision: 1 },
+  ]);
+  assert.deepEqual(manager.reportsPage().reports.find(value => value.id === first.id), committed);
+  assert.equal(manager.overview().reportRevision, before.reportRevision + 1);
+  assert.equal(wire.$('delegateReports').children.length, 1);
+  assert.equal(child(wire.$('delegateReports').children[0], 'textarea').value, 'Retain this independent unsent draft.');
+  assert.equal(wire.run('delegateReplyDrafts.has(' + JSON.stringify(first.id) + ')'), false);
+  assert.equal(wire.$('delegateError').hidden, true, 'A successful reply retry must clear its obsolete network error.');
+  assert.equal(wire.run('delegateReplyDrafts.get(' + JSON.stringify(second.id) + ')'), 'Retain this independent unsent draft.');
+});
+
+test('a late lost-response error from a closed reply leaves the reopened delegate and saved answer intact', async t => {
+  const { manager, first, second } = persistedDelegate(t), lateResponse = deferred();
+  let writes = 0;
+  const wire = harness((path, body) => {
+    if (path === '/api/delegation') return configuration();
+    if (!body) return manager.reportsPage({ openOnly: wire.$('delegateOpenOnly').checked });
+    assert.equal(path, '/api/delegation/reports/' + first.id + '/resolve');
+    writes++; manager.resolve(first.id, JSON.parse(JSON.stringify(body)));
+    return lateResponse.promise;
+  });
+  await wire.open();
+  const firstCard = wire.$('delegateReports').children[0];
+  child(firstCard, 'textarea').value = 'This answer committed before the old dialog closed.'; await child(firstCard, 'textarea').fire('input');
+  const submitting = child(firstCard, 'form').fire('submit');
+  assert.equal(manager.overview().openQuestions, 1);
+  const committed = manager.reportsPage().reports.find(value => value.id === first.id), revision = manager.overview().reportRevision;
+  wire.run('dismissDelegate()'); await wire.open(); await wire.flushClose();
+  const session = wire.run('delegateSession'), current = wire.$('delegateReports').children[0];
+  child(current, 'textarea').value = 'A new-session draft for the unresolved question.'; await child(current, 'textarea').fire('input');
+  lateResponse.reject(new Error('Obsolete reply response was lost after commit.')); await submitting;
+  assert.equal(wire.run('delegateSession'), session); assert.equal(wire.$('delegateDialog').open, true);
+  assert.equal(wire.$('delegateError').hidden, true);
+  assert.equal(child(wire.$('delegateReports').children[0], 'textarea').value, 'A new-session draft for the unresolved question.');
+  assert.equal(wire.run('delegateReplyDrafts.get(' + JSON.stringify(second.id) + ')'), 'A new-session draft for the unresolved question.');
+  wire.$('delegateOpenOnly').checked = false; await wire.$('delegateOpenOnly').fire('change'); await turn();
+  assert.equal(wire.$('delegateReports').children.length, 2);
+  const resolved = wire.$('delegateReports').children[0];
+  assert.equal(child(resolved, 'textarea'), undefined);
+  assert.ok(resolved.children.some(node => node.tag === 'p' && node.textContent === committed.resolution.body));
+  assert.equal(manager.overview().reportRevision, revision); assert.equal(writes, 1);
+});
+
+test('a lost executive-report response reuses its operation key and creates one durable question', async t => {
+  const { manager } = persistedDelegate(t), submitted = [], baseline = manager.overview();
+  const wire = harness((path, body) => {
+    if (path === '/api/delegation') return configuration(1, { roomIds: [] });
+    if (!body) return manager.reportsPage({ openOnly: true });
+    assert.equal(path, '/api/delegation/reports');
+    const input = JSON.parse(JSON.stringify(body)); submitted.push(input);
+    const saved = manager.report(input);
+    if (submitted.length === 1) throw new Error('Executive-report response lost after commit.');
+    return saved;
+  });
+  await wire.open();
+  wire.$('delegateReportKind').value = 'decision'; wire.$('delegateReportBody').value = 'Choose the verified approach once.';
+  await wire.$('delegateReportForm').fire('submit');
+  const committed = manager.reportsPage().reports.at(-1);
+  assert.equal(manager.overview().openQuestions, baseline.openQuestions + 1);
+  assert.equal(wire.$('delegateReportBody').value, 'Choose the verified approach once.');
+  assert.equal(wire.$('delegateError').hidden, false);
+  await wire.$('delegateReportForm').fire('submit');
+  assert.equal(submitted.length, 2);
+  assert.ok(submitted[0].idempotencyKey);
+  assert.deepEqual(submitted[1], submitted[0]);
+  assert.deepEqual(manager.reportsPage().reports.at(-1), committed);
+  assert.equal(manager.overview().reportRevision, baseline.reportRevision + 1);
+  assert.equal(manager.overview().openQuestions, baseline.openQuestions + 1);
+  assert.equal(wire.$('delegateReportBody').value, '');
+  assert.equal(wire.$('delegateError').hidden, true);
+  wire.$('delegateReportBody').value = 'Choose the verified approach once.';
+  await wire.$('delegateReportForm').fire('submit');
+  assert.notEqual(submitted[2].idempotencyKey, submitted[0].idempotencyKey, 'A newly submitted report after success is a separate operation even when its body is identical.');
+  assert.equal(manager.overview().reportRevision, baseline.reportRevision + 2);
+});
+
+test('editing a failed executive-report draft starts a new keyed operation without changing the committed original', async t => {
+  const { manager } = persistedDelegate(t), submitted = [], baseline = manager.overview();
+  const wire = harness((path, body) => {
+    if (path === '/api/delegation') return configuration(1, { roomIds: [] });
+    if (!body) return manager.reportsPage({ openOnly: true });
+    const input = JSON.parse(JSON.stringify(body)); submitted.push(input);
+    const saved = manager.report(input);
+    if (submitted.length === 1) throw new Error('The original report committed before its response was lost.');
+    return saved;
+  });
+  await wire.open();
+  wire.$('delegateReportKind').value = 'blocked'; wire.$('delegateReportBody').value = 'The original blocker is retained.';
+  await wire.$('delegateReportForm').fire('submit');
+  const original = manager.reportsPage().reports.at(-1);
+  wire.$('delegateReportBody').value = 'A revised blocker intentionally submitted as new work.';
+  await wire.$('delegateReportForm').fire('submit');
+  assert.equal(submitted.length, 2);
+  assert.ok(submitted.every(input => typeof input.idempotencyKey === 'string' && input.idempotencyKey.length > 0));
+  assert.notEqual(submitted[0].idempotencyKey, submitted[1].idempotencyKey);
+  const reports = manager.reportsPage().reports;
+  assert.deepEqual(reports.find(value => value.id === original.id), original);
+  assert.equal(reports.at(-1).body, 'A revised blocker intentionally submitted as new work.');
+  assert.equal(manager.overview().reportRevision, baseline.reportRevision + 2);
+  assert.equal(manager.overview().openQuestions, baseline.openQuestions + 2);
+  assert.equal(wire.$('delegateReportBody').value, '');
 });

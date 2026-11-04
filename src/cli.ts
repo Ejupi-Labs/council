@@ -12,6 +12,8 @@ import { VERSION } from './version.js';
 import type { RunRecord } from './types.js';
 import { collaborationSkills } from './skills.js';
 import type { RoutingInput } from './routing-types.js';
+import { verifyStateSnapshot } from './state-snapshot.js';
+import { ROOM_COMMANDS, ROOM_ID_COMMANDS, roomCommandOptions, runRoomCommand, validateRoomCommand } from './cli-rooms.js';
 
 const HELP = `Council — collaboration for coding agents
 
@@ -21,7 +23,22 @@ Commands:
   init           Create project settings without overwriting existing settings
   doctor         Inspect local runtimes; no model calls or login
   health         Inspect state sizes, limits and runtime health; optional --integrity
-  backup         Create a consistent local backup with --output <new-file>
+  backup         Back up workflow state only with --output <new-file>
+  snapshot       Back up all collaboration databases with --output <new-directory>
+  verify-snapshot <directory>  Check a completed all-store snapshot
+  rooms          List recent project rooms; --limit <count>
+  room-create    Create a room from --input-file <room.json>, without model calls
+  room-show <id> Read a room and its current full task evidence
+  room-history <id> Read complete messages with --limit and --cursor
+  room-message <id> Add guidance from --input-file <message.json>
+  room-task <id> Add an explicit task from --input-file <task.json>
+  room-discuss <id> Discuss the plan; wait for stable state before exiting
+  room-execute <id> Execute an approved plan and wait for its outcome
+  room-pause <id> Pause admission and wait for admitted work to drain
+  room-resume <id> Resume a saved checkpoint and wait for stable state
+  room-cancel <id> Request durable cancellation without replay
+  room-wait <id> Wait for stable state; optional --wait-ms <budget>
+  room-recover <id> Settle proven-dead ownership without replaying tasks
   prune          Preview old run retention with --before <timestamp>; --execute deletes
   connection     Print absolute MCP connection settings for this project
   plan           Preview workflow stages and call bounds without model calls
@@ -111,12 +128,14 @@ async function main(): Promise<void> {
   if (values.version) { print({ name: 'council', version: VERSION }); return; }
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { process.stdout.write(HELP); return; }
-  const commands = ['init', 'doctor', 'health', 'backup', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route'];
+  const commands = ['init', 'doctor', 'health', 'backup', 'snapshot', 'verify-snapshot', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route', ...ROOM_COMMANDS];
   if (!commands.includes(command)) throw new Error(`Unknown command: ${command}`);
-  const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup', 'wait'].includes(command);
-  if (positionals.length !== (takesId ? 2 : 1)) throw new Error(takesId ? `${command} requires exactly one run ID.` : `${command} accepts no positional arguments.`);
+  const roomCommand = (ROOM_COMMANDS as readonly string[]).includes(command);
+  const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup', 'wait', ...ROOM_ID_COMMANDS].includes(command);
+  const takesDirectory = command === 'verify-snapshot';
+  if (positionals.length !== (takesId || takesDirectory ? 2 : 1)) throw new Error(takesId ? `${command} requires exactly one ${roomCommand ? 'room' : 'run'} ID.` : takesDirectory ? 'verify-snapshot requires exactly one snapshot directory.' : `${command} accepts no positional arguments.`);
   const id = positionals[1];
-  if (takesId && !/^[a-f0-9-]{36}$/i.test(id!)) throw new Error('Supply a valid Council run ID.');
+  if (takesId && !/^[a-f0-9-]{36}$/i.test(id!)) throw new Error(`Supply a valid Council ${roomCommand ? 'room' : 'run'} ID.`);
   if (values.task !== undefined && values['task-file'] !== undefined) throw new Error('Choose --task or --task-file, not both.');
   if (values.agent !== undefined && !values.agent.trim()) throw new Error('--agent must contain a configured alias.');
   for (const option of ['task-file', 'context-file', 'assignments-file', 'input-file'] as const) {
@@ -124,18 +143,25 @@ async function main(): Promise<void> {
   }
   const common = ['workspace', 'backend', 'json', 'help', 'version'];
   const workflowOptions = ['mode', 'agents', 'task', 'task-file', 'context-file', 'assignments-file', 'judge', 'rounds', 'max-calls', 'write', 'model', 'effort', 'advisor', 'skills'];
-  const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit', 'summary'] : []), ...(command === 'runs' ? ['limit', 'summary', 'cursor'] : []), ...(command === 'cancel' ? ['summary'] : []), ...(command === 'health' ? ['integrity'] : []), ...(command === 'prune' ? ['before', 'keep-latest', 'execute'] : []), ...(['export', 'backup'].includes(command) ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
+  const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit', 'summary'] : []), ...(command === 'runs' ? ['limit', 'summary', 'cursor'] : []), ...(command === 'cancel' ? ['summary'] : []), ...(command === 'health' ? ['integrity'] : []), ...(command === 'prune' ? ['before', 'keep-latest', 'execute'] : []), ...(['export', 'backup', 'snapshot'].includes(command) ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
   for (const option of command === 'ui' ? ['port'] : command === 'wait' ? ['wait-ms'] : command === 'advise' ? ['advisor', 'requester', 'question', 'model', 'effort'] : []) permitted.add(option);
   if (command === 'billing') permitted.add('agent');
   if (['billing-set', 'billing-import'].includes(command)) for (const option of ['agent', 'input-file', 'revision']) permitted.add(option);
   const routeOptions = ['input-file', 'task', 'task-file', 'context-file', 'agents', 'model', 'effort', 'skills', 'task-class', 'strategy', 'collaboration', 'requires', 'participants', 'allow-escalation', 'rounds', 'max-calls', 'write'];
   if (['route', 'route-plan'].includes(command)) for (const option of routeOptions) permitted.add(option);
+  if (roomCommand) for (const option of roomCommandOptions(command)) permitted.add(option);
   for (const option of Object.keys(values)) if (!permitted.has(option)) throw new Error(`--${option} is not supported by ${command}.`);
   if (command === 'backup' && !values.output) throw new Error('Backup requires --output with a new destination filename.');
+  if (command === 'snapshot' && !values.output) throw new Error('Snapshot requires --output with a new destination directory.');
+  if (roomCommand) validateRoomCommand(command, values);
   if (command === 'prune' && !values.before) throw new Error('Prune requires --before with an explicit cutoff timestamp.');
   if (command === 'runs' && values.cursor && !values.summary) throw new Error('--cursor requires runs --summary.');
   const backend = values.backend === undefined ? undefined : parseBackend(values.backend);
   const workspace = resolve(values.workspace ?? process.env.COUNCIL_WORKSPACE ?? process.cwd());
+  if (command === 'verify-snapshot') {
+    const result = await verifyStateSnapshot(resolve(workspace, positionals[1]!));
+    print(result); if (!result.valid) process.exitCode = 1; return;
+  }
   if (command === 'skills') { print({ skills: collaborationSkills() }); return; }
   if (command === 'init') { print({ created: initConfig(workspace, backend) }); return; }
   if (command === 'connection') {
@@ -167,7 +193,11 @@ async function main(): Promise<void> {
   const operationInt = () => stopOperation('SIGINT'), operationTerm = () => stopOperation('SIGTERM');
   if (!['run', 'continue'].includes(command)) { process.once('SIGINT', operationInt); process.once('SIGTERM', operationTerm); }
   try {
-    if (command === 'wait') {
+    if (roomCommand) {
+      const outcome = await runRoomCommand(service, command, id, values);
+      print(outcome.result); if (outcome.exitCode && !process.exitCode) process.exitCode = outcome.exitCode;
+    }
+    else if (command === 'wait') {
       const result = await service.awaitResults([id!], Number(values['wait-ms'] ?? 600_000));
       print(result);
       if (result.timedOut || result.runs.some(run => run.status !== 'completed')) process.exitCode = 1;
@@ -221,6 +251,7 @@ async function main(): Promise<void> {
     else if (command === 'doctor') print({ version: VERSION, node: process.version, backend: config.backend, workspace: config.workspaceRoot, concurrencyScope: 'workspace', agents: await service.runner.doctor(), recoveredRuns: service.recoveredRuns.map(run => run.id), note: 'Prerequisite availability does not prove authentication or model access.' });
     else if (command === 'health') { const health = service.health(values.integrity); print(health); if (health.status === 'degraded') process.exitCode = 1; }
     else if (command === 'backup') print({ destination: await service.backup(values.output!) });
+    else if (command === 'snapshot') print(await service.snapshot(values.output!));
     else if (command === 'prune') print({ dryRun: !values.execute, ...service.prune({ before: values.before!, keepLatest: Number(values['keep-latest'] ?? 100), dryRun: !values.execute }) });
     else if (command === 'runs') {
       const limit = Number(values.limit ?? 20);

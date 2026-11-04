@@ -10,7 +10,8 @@ function quota(context, alias) {
     const value = typeof context.availability === 'function' ? context.availability(alias) : context.availability?.[alias];
     if (!value)
         return { availability: 'unknown', fresh: false, reason: 'No current account quota observation is available.' };
-    if (!['available', 'exhausted', 'unknown'].includes(value.availability) || typeof value.fresh !== 'boolean')
+    if (!['available', 'exhausted', 'unknown'].includes(value.availability) || typeof value.fresh !== 'boolean'
+        || value.dispatchBlocked !== undefined && typeof value.dispatchBlocked !== 'boolean')
         throw new RoutingError('ROUTING_INVALID_INPUT', `Invalid quota observation for ${alias}.`);
     return !value.fresh ? { ...value, availability: 'unknown' } : { ...value };
 }
@@ -85,8 +86,10 @@ export function planRouting(value, context) {
         }
         const observation = quota(context, alias);
         const missing = requirements.filter(capability => !profile?.capabilities.map(value => value.trim()).includes(capability));
-        const reason = !agent.enabled ? 'Agent alias is disabled.' : observation.availability === 'exhausted' ? 'A fresh account quota observation is exhausted.'
-            : missing.length ? `Required capabilities are not configured: ${missing.join(', ')}.` : '';
+        const reason = !agent.enabled ? 'Agent alias is disabled.'
+            : observation.dispatchBlocked ? `Current subscription protection blocks dispatch.${observation.reason ? ` ${observation.reason}` : ''}`
+                : observation.availability === 'exhausted' ? 'A fresh account quota observation is exhausted.'
+                    : missing.length ? `Required capabilities are not configured: ${missing.join(', ')}.` : '';
         return { alias, profile, quota: observation, eligible: !reason, reason };
     });
     const describe = (selected = []) => alternatives(candidates, new Set(selected.map(candidate => candidate.alias)), preferred);

@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { CouncilService } from './service.js';
 import { parseSchema } from './schema.js';
+import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
 import { delegationDefinition, delegationReportDefinition, delegationResolveDefinition, delegationWatchDefinition } from './delegation-schema.js';
 import type { DelegationChangesPage, DelegationConfiguration, DelegationInput, DelegationReport, DelegationReportInput, DelegationReportsPage,
   DelegationResolutionInput, DelegationRoom, DelegationWatchInput, DelegationWatchResult } from './delegation-types.js';
@@ -14,6 +15,15 @@ export class DelegationRevisionConflict extends Error {
   constructor(readonly currentRevision: number) {
     super(`Delegation revision conflict: current revision is ${currentRevision}. Reload before saving.`);
     this.name = 'DelegationRevisionConflict';
+  }
+}
+
+export class DelegationReportConflict extends Error {
+  readonly code = 'COUNCIL_DELEGATION_REPORT_CONFLICT';
+  readonly status = 409;
+  constructor() {
+    super('This delegate report retry key was already used with different content.');
+    this.name = 'DelegationReportConflict';
   }
 }
 function nonempty(value: string, label: string): void {
@@ -28,6 +38,18 @@ function increment(value: number): number {
   return value + 1;
 }
 
+function reportDigest(input: DelegationReportInput & { roomIds: string[] }): string {
+  // Association order and object-key order do not change a report's meaning.
+  // Omitted review preconditions remain distinct from an explicit review map.
+  const original = {
+    author: input.author, kind: input.kind, body: input.body, roomIds: [...input.roomIds].sort(),
+    ...(input.expectedRoomRevisions === undefined ? {} : {
+      expectedRoomRevisions: Object.fromEntries(Object.entries(input.expectedRoomRevisions).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
+    }),
+  };
+  return createHash('sha256').update(JSON.stringify(original)).digest('hex');
+}
+
 /** Durable executive coordination. No providers, credentials, task permissions or worker prompts are changed. */
 export class DelegationManager {
   private readonly db: DatabaseSync;
@@ -37,26 +59,25 @@ export class DelegationManager {
   private closed = false;
 
   constructor(private readonly service: CouncilService) {
-    const sqlite = /^(\d+)\.(\d+)\.(\d+)/.exec(process.versions.sqlite ?? '');
-    if (!sqlite || !(Number(sqlite[1]) > 3 || Number(sqlite[1]) === 3 && (Number(sqlite[2]) > 51 || Number(sqlite[2]) === 51 && Number(sqlite[3]) >= 3))) throw new Error('Delegation state requires SQLite 3.51.3 or newer.');
+    requireSafeSqliteRuntime();
     mkdirSync(service.config.stateDir, { recursive: true, mode: 0o700 });
     const filename = join(resolve(service.config.stateDir), 'delegation.sqlite');
     this.db = new DatabaseSync(filename);
     try {
-      this.db.exec('PRAGMA busy_timeout=250;');
+      this.db.exec('PRAGMA busy_timeout=250; PRAGMA foreign_keys=ON;');
       const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-      if (version > 2) throw new Error('Delegation state was created by a newer Council version.');
+      if (version > 3) throw new Error('Delegation state was created by a newer Council version.');
       if (process.platform !== 'win32') chmodSync(filename, 0o600);
       const journal = this.db.prepare('PRAGMA journal_mode').get() as { journal_mode: string };
-      if (version < 2 || journal.journal_mode !== 'wal') {
+      if (version < 3 || journal.journal_mode !== 'wal') {
         const deadline = performance.now() + 5000, wait = new Int32Array(new SharedArrayBuffer(4));
         for (;;) {
           try {
             this.db.exec(`PRAGMA busy_timeout=${Math.max(1, Math.ceil(deadline - performance.now()))}; PRAGMA journal_mode=WAL;`);
             this.transaction(() => {
               const current = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-              if (current > 2) throw new Error('Delegation state was created by a newer Council version.');
-              if (current === 2) return;
+              if (current > 3) throw new Error('Delegation state was created by a newer Council version.');
+              if (current === 3) return;
               if (current === 1) {
                 this.db.exec('ALTER TABLE delegation_reports ADD COLUMN change_revision INTEGER NOT NULL DEFAULT 0;');
                 let reportRevision = Number(this.db.prepare('SELECT report_revision FROM delegation_settings WHERE id=1').get()!.report_revision);
@@ -66,16 +87,19 @@ export class DelegationManager {
                   this.db.prepare('UPDATE delegation_reports SET change_revision=? WHERE sequence=?').run(reportRevision, row.sequence);
                 }
                 this.db.prepare('UPDATE delegation_settings SET report_revision=? WHERE id=1').run(reportRevision);
-                this.db.exec('CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision); PRAGMA user_version=2;');
-                return;
+                this.db.exec('CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision);');
+              } else if (current === 0) {
+                this.db.exec(`CREATE TABLE delegation_settings(id INTEGER PRIMARY KEY CHECK(id=1), document TEXT NOT NULL, report_revision INTEGER NOT NULL, workspace_id TEXT NOT NULL);
+                  CREATE TABLE delegation_reports(sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
+                    resolved INTEGER NOT NULL DEFAULT 0, document TEXT NOT NULL, change_revision INTEGER NOT NULL);
+                  CREATE INDEX delegation_report_open ON delegation_reports(resolved,kind,sequence);
+                  CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision);`);
+                const initial: DelegationConfiguration = { mode: 'human', delegate: '', mandate: '', roomIds: [], revision: 0, updatedAt: new Date().toISOString() };
+                this.db.prepare('INSERT INTO delegation_settings(id,document,report_revision,workspace_id) VALUES(1,?,0,?)').run(JSON.stringify(initial), randomUUID());
               }
-              this.db.exec(`CREATE TABLE delegation_settings(id INTEGER PRIMARY KEY CHECK(id=1), document TEXT NOT NULL, report_revision INTEGER NOT NULL, workspace_id TEXT NOT NULL);
-                CREATE TABLE delegation_reports(sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
-                  resolved INTEGER NOT NULL DEFAULT 0, document TEXT NOT NULL, change_revision INTEGER NOT NULL);
-                CREATE INDEX delegation_report_open ON delegation_reports(resolved,kind,sequence);
-                CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision); PRAGMA user_version=2;`);
-              const initial: DelegationConfiguration = { mode: 'human', delegate: '', mandate: '', roomIds: [], revision: 0, updatedAt: new Date().toISOString() };
-              this.db.prepare('INSERT INTO delegation_settings(id,document,report_revision,workspace_id) VALUES(1,?,0,?)').run(JSON.stringify(initial), randomUUID());
+              this.db.exec(`CREATE TABLE delegation_report_retries(author TEXT NOT NULL, retry_key TEXT NOT NULL,
+                report_id TEXT NOT NULL UNIQUE REFERENCES delegation_reports(id), request_digest TEXT NOT NULL,
+                PRIMARY KEY(author,retry_key)); PRAGMA user_version=3;`);
             }); break;
           } catch (error) {
             const remaining = deadline - performance.now();
@@ -105,7 +129,7 @@ export class DelegationManager {
   }
   private rooms(ids: string[]) {
     if (new Set(ids).size !== ids.length) throw new Error('Delegation room IDs must be unique.');
-    return ids.map(id => this.service.rooms.metadata(id));
+    return ids.map(id => this.service.rooms.observation(id));
   }
   private bumpReports(): number {
     const next = increment(this.state().reportRevision);
@@ -146,25 +170,39 @@ export class DelegationManager {
     this.open();
     const input = parseSchema<DelegationReportInput & { roomIds: string[] }>(delegationReportDefinition, value, 'delegate report');
     nonempty(input.author, 'Report author'); nonempty(input.body, 'Report body');
-    const observedRooms = this.rooms(input.roomIds).map(room => ({ id: room.id, revision: room.revision, instructionRevision: room.instructionRevision ?? 0, status: room.status }));
-    if (input.expectedRoomRevisions) {
-      if (Object.keys(input.expectedRoomRevisions).some(id => !input.roomIds.includes(id))) throw new Error('Reviewed room revisions must refer to this report\'s room IDs.');
-      for (const room of observedRooms) {
-        if (!Object.hasOwn(input.expectedRoomRevisions, room.id)) throw new Error('Supply a reviewed revision for every report room.');
-        if (input.expectedRoomRevisions[room.id] !== room.revision) throw new Error(`Room ${room.id} changed after review. Read its latest state before reporting.`);
-      }
-    }
+    if (Buffer.from(input.author, 'utf8').toString('utf8') !== input.author) throw new Error('Report author must contain valid Unicode.');
+    const digest = input.idempotencyKey === undefined ? undefined : reportDigest(input);
+    let created = false;
     const saved = this.transaction(() => {
-      const { expectedRoomRevisions: _, ...details } = input;
+      if (input.idempotencyKey !== undefined) {
+        const duplicate = this.db.prepare('SELECT retries.request_digest,reports.document FROM delegation_report_retries AS retries JOIN delegation_reports AS reports ON reports.id=retries.report_id WHERE retries.author=? AND retries.retry_key=?')
+          .get(input.author, input.idempotencyKey) as { request_digest: string; document: string } | undefined;
+        if (duplicate) {
+          if (duplicate.request_digest !== digest) throw new DelegationReportConflict();
+          return JSON.parse(duplicate.document) as DelegationReport;
+        }
+      }
+      const observedRooms = this.rooms(input.roomIds).map(room => ({ id: room.id, revision: room.revision, instructionRevision: room.instructionRevision ?? 0, status: room.status }));
+      if (input.expectedRoomRevisions) {
+        if (Object.keys(input.expectedRoomRevisions).some(id => !input.roomIds.includes(id))) throw new Error("Reviewed room revisions must refer to this report's room IDs.");
+        for (const room of observedRooms) {
+          if (!Object.hasOwn(input.expectedRoomRevisions, room.id)) throw new Error('Supply a reviewed revision for every report room.');
+          if (input.expectedRoomRevisions[room.id] !== room.revision) throw new Error(`Room ${room.id} changed after review. Read its latest state before reporting.`);
+        }
+      }
+      const { expectedRoomRevisions: _, idempotencyKey: __, ...details } = input;
       const report: DelegationReport = { ...details, id: randomUUID(), sequence: 0, revision: 1, observedRooms, createdAt: new Date().toISOString() };
       const changeRevision = this.bumpReports();
       const row = this.db.prepare('INSERT INTO delegation_reports(id,kind,document,change_revision) VALUES(?,?,?,?)').run(report.id, report.kind, JSON.stringify(report), changeRevision);
       report.sequence = Number(row.lastInsertRowid);
       if (!Number.isSafeInteger(report.sequence)) throw new Error('Delegate report sequence space is exhausted.');
       this.db.prepare('UPDATE delegation_reports SET document=? WHERE id=?').run(JSON.stringify(report), report.id);
+      if (input.idempotencyKey !== undefined) this.db.prepare('INSERT INTO delegation_report_retries(author,retry_key,report_id,request_digest) VALUES(?,?,?,?)')
+        .run(input.author, input.idempotencyKey, report.id, digest!);
+      created = true;
       return report;
     });
-    this.notify(); return saved;
+    if (created) this.notify(); return saved;
   }
 
   resolve(id: string, value: DelegationResolutionInput): DelegationReport {
@@ -172,10 +210,15 @@ export class DelegationManager {
     if (typeof id !== 'string' || !id || id.length > 100) throw new Error('Delegate report not found (404).');
     const input = parseSchema<DelegationResolutionInput>(delegationResolveDefinition, value, 'delegate response');
     nonempty(input.author, 'Response author'); nonempty(input.body, 'Response body');
+    let changed = false;
     const saved = this.transaction(() => {
       const row = this.db.prepare('SELECT document FROM delegation_reports WHERE id=?').get(id) as { document: string } | undefined;
       if (!row) throw new Error('Delegate report not found (404).');
       const report = JSON.parse(row.document) as DelegationReport;
+      // A lost response can be retried against its original
+      // precondition; this reads the immutable answer rather than replacing it.
+      if (report.resolution && report.revision - 1 === input.expectedRevision &&
+          report.resolution.author === input.author && report.resolution.body === input.body) return report;
       if (report.revision !== input.expectedRevision) throw new DelegationRevisionConflict(report.revision);
       if (report.resolution) throw new Error('This delegate report is already resolved.');
       if (!['decision', 'blocked'].includes(report.kind)) throw new Error('Only a decision request or blocker can be resolved.');
@@ -183,28 +226,56 @@ export class DelegationManager {
       report.resolution = { author: input.author, body: input.body, createdAt: new Date().toISOString() };
       const changeRevision = this.bumpReports();
       this.db.prepare('UPDATE delegation_reports SET resolved=1,document=?,change_revision=? WHERE id=?').run(JSON.stringify(report), changeRevision, id);
+      changed = true;
       return report;
     });
-    this.notify(); return saved;
+    if (changed) this.notify(); return saved;
   }
 
   reportsPage(options: { limit?: number; cursor?: number; openOnly?: boolean } = {}): DelegationReportsPage {
     this.open();
     const { limit = 100, cursor = 0, openOnly = false } = options;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(cursor) || cursor < 0 || typeof openOnly !== 'boolean') throw new Error('Invalid delegate report page bounds.');
-    const rows = this.db.prepare(`SELECT sequence,document FROM delegation_reports WHERE sequence>? ${openOnly ? "AND resolved=0 AND kind IN ('decision','blocked')" : ''} ORDER BY sequence LIMIT ?`)
-      .all(cursor, limit + 1) as { sequence: number; document: string }[];
-    return { reports: rows.slice(0, limit).map(row => JSON.parse(row.document) as DelegationReport), nextCursor: rows.length > limit ? rows[limit - 1]!.sequence : null };
+    return this.transaction(() => {
+      const rows = this.db.prepare(`SELECT sequence,length(CAST(document AS BLOB)) AS bytes FROM delegation_reports WHERE sequence>? ${openOnly ? "AND resolved=0 AND kind IN ('decision','blocked')" : ''} ORDER BY sequence LIMIT ?`)
+        .all(cursor, limit + 1) as { sequence: number; bytes: number }[];
+      const reports: DelegationReport[] = [];
+      let bytes = 2;
+      for (const row of rows.slice(0, limit)) {
+        const reportBytes = row.bytes + (reports.length ? 1 : 0);
+        if (reports.length && bytes + reportBytes > 1024 * 1024) break;
+        const payload = this.db.prepare('SELECT document FROM delegation_reports WHERE sequence=?')
+          .get(row.sequence) as { document: string } | undefined;
+        if (!payload) throw new Error('Delegate report payload is unavailable in the current storage snapshot.');
+        reports.push(JSON.parse(payload.document) as DelegationReport);
+        bytes += reportBytes;
+        if (bytes >= 1024 * 1024) break;
+      }
+      return { reports, nextCursor: rows.length > reports.length ? reports.at(-1)!.sequence : null };
+    }, false);
   }
 
   reportChangesPage(options: { after?: number; limit?: number } = {}): DelegationChangesPage {
     this.open();
     const { after = 0, limit = 100 } = options;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(after) || after < 0) throw new Error('Invalid delegate change page bounds.');
-    const rows = this.db.prepare('SELECT change_revision,document FROM delegation_reports WHERE change_revision>? ORDER BY change_revision LIMIT ?')
-      .all(after, limit + 1) as { change_revision: number; document: string }[];
-    return { changes: rows.slice(0, limit).map(row => ({ revision: row.change_revision, report: JSON.parse(row.document) as DelegationReport })),
-      nextCursor: rows.length > limit ? rows[limit - 1]!.change_revision : null };
+    return this.transaction(() => {
+      const rows = this.db.prepare('SELECT change_revision,length(CAST(document AS BLOB)) AS bytes FROM delegation_reports WHERE change_revision>? ORDER BY change_revision LIMIT ?')
+        .all(after, limit + 1) as { change_revision: number; bytes: number }[];
+      const changes: DelegationChangesPage['changes'] = [];
+      let bytes = 2;
+      for (const row of rows.slice(0, limit)) {
+        const changeBytes = row.bytes + Buffer.byteLength(`{"revision":${row.change_revision},"report":}`) + (changes.length ? 1 : 0);
+        if (changes.length && bytes + changeBytes > 1024 * 1024) break;
+        const payload = this.db.prepare('SELECT document FROM delegation_reports WHERE change_revision=?')
+          .get(row.change_revision) as { document: string } | undefined;
+        if (!payload) throw new Error('Delegate report change is unavailable in the current storage snapshot.');
+        changes.push({ revision: row.change_revision, report: JSON.parse(payload.document) as DelegationReport });
+        bytes += changeBytes;
+        if (bytes >= 1024 * 1024) break;
+      }
+      return { changes, nextCursor: rows.length > changes.length ? changes.at(-1)!.revision : null };
+    }, false);
   }
 
   private snapshot(): Omit<DelegationWatchResult, 'reason'> {
@@ -220,10 +291,9 @@ export class DelegationManager {
           this.service.rooms.recover(id);
           this.roomRecoveryAt.set(id, now);
         }
-        const room = this.service.rooms.metadata(id);
+        const room = this.service.rooms.observation(id);
         return { id: room.id, title: room.title, revision: room.revision, instructionRevision: room.instructionRevision ?? 0, status: room.status,
-          taskCount: room.tasks.length, completedTasks: room.tasks.filter(task => task.status === 'completed').length,
-          failedTasks: room.tasks.filter(task => task.status === 'failed' || task.status === 'cancelled').length,
+          taskCount: room.taskCount, completedTasks: room.completedTasks, failedTasks: room.failedTasks,
           callsUsed: room.callsUsed, maxCalls: room.maxCalls, ...(room.error ? { error: room.error } : {}),
           ...(room.pauseRequested ? { pauseRequested: true } : {}), actionable: room.status !== 'discussing' && room.status !== 'running' };
       } catch (error) {

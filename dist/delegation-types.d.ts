@@ -23,8 +23,10 @@ export interface DelegationReportInput {
     roomIds?: string[];
     /** Optional revisions actually reviewed by the reporting agent; stale observations are rejected. */
     expectedRoomRevisions?: Record<string, number>;
+    /** Stable author-scoped retry identity; reusing it with changed content is rejected. */
+    idempotencyKey?: string;
 }
-export interface DelegationReport extends Omit<DelegationReportInput, 'roomIds' | 'expectedRoomRevisions'> {
+export interface DelegationReport extends Omit<DelegationReportInput, 'roomIds' | 'expectedRoomRevisions' | 'idempotencyKey'> {
     id: string;
     sequence: number;
     revision: number;

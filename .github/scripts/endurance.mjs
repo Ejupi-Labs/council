@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const platforms = Object.freeze({ ubuntu: 'linux', windows: 'win32', macos: 'darwin' });
 const durations = Object.freeze({ '60s': 60_000, '5m': 300_000, '10m': 600_000, '30m': 1_800_000 });
-const workloads = Object.freeze({ service: 'soak.mjs', storage: 'storage-soak.mjs', artifacts: 'artifact-soak.mjs' });
+const workloads = Object.freeze({ service: 'soak.mjs', storage: 'storage-soak.mjs', artifacts: 'artifact-soak.mjs', coordination: 'coordination-soak.mjs', rooms: 'room-soak.mjs' });
 
 export function endurancePlan(environment = process.env, platform = process.platform) {
   const os = environment.COUNCIL_ENDURANCE_OS;
@@ -12,7 +12,7 @@ export function endurancePlan(environment = process.env, platform = process.plat
   const duration = environment.COUNCIL_ENDURANCE_DURATION;
   if (!Object.hasOwn(platforms, os)) throw new Error('Choose ubuntu, windows or macos for the endurance OS.');
   if (platforms[os] !== platform) throw new Error('The selected endurance OS does not match this runner.');
-  if (!Object.hasOwn(workloads, workload)) throw new Error('Choose service, storage or artifacts for the endurance workload.');
+  if (!Object.hasOwn(workloads, workload)) throw new Error('Choose service, storage, artifacts, coordination or rooms for the endurance workload.');
   if (!Object.hasOwn(durations, duration)) throw new Error('Choose 60s, 5m, 10m or 30m for the endurance duration.');
   const script = fileURLToPath(new URL(`../../scripts/${workloads[workload]}`, import.meta.url));
   const args = ['--expose-gc', script, '--duration-ms', String(durations[duration])];

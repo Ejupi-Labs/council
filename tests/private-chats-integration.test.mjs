@@ -147,3 +147,22 @@ test('global room SSE never broadcasts private bodies or private-thread metadata
     const history = wire.service.rooms.messagePage(wire.room.id, 100); assert.equal(JSON.stringify(history).includes(secret), false); assert.equal(wire.calls(), 0);
   } finally { controller.abort(); try { await reader.cancel(); } catch {} reader.releaseLock(); }
 });
+
+test('an oversized complete private message fails MCP transport honestly and remains readable without truncation', { timeout: 15000 }, async t => {
+  const wire = await fixture(t);
+  const chat = wire.service.privateChats.create({ participants: [first, second] });
+  const body = 'Complete private evidence. '.repeat(700_000);
+  assert.ok(Buffer.byteLength(body) > 16 * 1024 * 1024);
+  const saved = wire.service.privateChats.send({ chatId: chat.id, from: first, body });
+  const frame = await wire.begin('tools/call', { name: 'council_chat_history', arguments: { chatId: chat.id, actor: second } }).promise;
+  assert.equal(frame.result, undefined);
+  assert.match(frame.error?.message ?? '', /MCP response exceeds 32 MiB/);
+  assert.doesNotMatch(frame.error.message, /Complete private evidence/);
+  const complete = await wire.http(history(chat.id, second));
+  assert.equal(complete.status, 200);
+  const page = await complete.json();
+  assert.equal(page.nextCursor, null);
+  assert.deepEqual(page.messages, [saved]);
+  assert.deepEqual(await wire.request('ping', {}), {});
+  assert.equal(wire.calls(), 0);
+});

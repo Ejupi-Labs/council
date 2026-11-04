@@ -1,4 +1,24 @@
-# Version 1.2 verification record
+# Council verification record
+
+## 1.3 development checkpoint — 4 November 2026, 19:24 UTC
+
+Version `1.3.0-dev.1` is a development checkpoint. The continuing overnight refinement and final release qualification are separate from this record. The two remote feature commits through `0903738` were integrated by a clean fast-forward before changes began.
+
+The complete local suite passed **897 tests**, with three platform skips and zero failures (**900 total**, 180.6 seconds), on Windows ARM64, Node **24.18.1**, SQLite **3.53.1**. `npm run check`, the generated build, seven CI-helper tests and both updated skill validators passed. The production dependency audit reported zero vulnerabilities. These checks use local fake agents and make no live provider calls.
+
+The new terminal-room cases exercise an actual CLI sequence from creation through weighted discussion, manual execution and explicit follow-up, preserving completed workflow identities. A native fake verifies failed evidence and nonzero exit. Foreign wait timeouts leave the foreground owner running; a foreign pause makes execution exit incomplete, then resume completes remaining work without replay. Full Unicode history remains available through explicit cursors.
+
+Snapshot tests restore all five collaboration stores and verify complete workflow, room, private-chat, report and billing data. They cover exclusive destinations, exact cancellation reasons, no initialization of absent features, corrupt/missing databases, invalid manifests, sealed copies, unmanifested WAL and declared-absent file rejection. An official MCP SDK client exercises the real stdio entrypoint, both snapshot tools, continued protocol use after an error and zero provider dispatch. Child-process runtime checks reject unsafe reported SQLite versions before filesystem mutations, including direct exported APIs, while preserving cancellation precedence and metadata-only inspection.
+
+Private and delegation regressions preserve complete byte-bounded pages, isolate malformed private control output, keep keyed report retries idempotent across replies/restarts, and reject altered retries. Sixteen shipped-browser-script cases include actual persisted-backend lost replies/reports, closed/reopened dialogs, preserved newer drafts and exact retry identities. Routing receipts distinguish unknown protected allowance from measured exhaustion. Emergency room summaries retain counters from the same authoritative evidence as the full room view after persistence acknowledgment loss.
+
+An isolated offline browser check inspected the room board, human delegation, scoped private history, unknown billing/protection controls, full workflow evidence and complete event timeline, with no browser warnings or errors. It made no form submissions or provider calls. The UI fixture and long stress captures identify their own build versions; screenshots and intermediate measurements do not establish final-build qualification.
+
+The new bounded coordination and real-process room endurance harnesses cover private/advisor turns, delegation reports/replies, shared billing, protected dispatch, pause/resume, instruction changes, cancellation, failure, actual owner death, resource drain and all-store snapshots. Their short automatic regressions passed, including interruption and cleanup-failure honesty. At this checkpoint, two separate one-hour runs on earlier captured builds were still in progress; their terminal results are not claimed here.
+
+Cross-platform qualification of this development checkpoint is pending. The pre-session [latest remote CI run](https://github.com/Ejupi-Labs/council/actions/runs/41862625529) passed Ubuntu but did not complete Windows or macOS successfully. Those failures are under investigation. Live provider accounts and a universal OS sandbox are not certified by these offline checks.
+
+## Earlier verification
 
 This record describes local release verification on 3–4 November 2026. Council targets trusted local workspaces under one operating-system account. These results establish the behavior of the tested builds and fixtures; they do not certify a hosted service, an OS sandbox or every vendor account configuration.
 

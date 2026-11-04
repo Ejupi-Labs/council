@@ -6,6 +6,11 @@ export declare class DelegationRevisionConflict extends Error {
     readonly status = 409;
     constructor(currentRevision: number);
 }
+export declare class DelegationReportConflict extends Error {
+    readonly code = "COUNCIL_DELEGATION_REPORT_CONFLICT";
+    readonly status = 409;
+    constructor();
+}
 /** Durable executive coordination. No providers, credentials, task permissions or worker prompts are changed. */
 export declare class DelegationManager {
     private readonly service;

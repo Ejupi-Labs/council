@@ -188,3 +188,30 @@ test('SSE sends compact delegate overview immediately and updates questions with
     controller.abort(); await reader.cancel().catch(() => {}); reader.releaseLock();
   }
 });
+
+test('MCP and HTTP report retries retain one question and return its later human response', { timeout: 15000 }, async t => {
+  const wire = await fixture(t), room = wire.service.rooms.create(roomInput());
+  const input = { author: 'Chief of staff', kind: 'decision', body: 'Choose the verified approach.', roomIds: [room.id],
+    expectedRoomRevisions: { [room.id]: room.revision }, idempotencyKey: 'board-review:decision.1' };
+  const saved = await wire.call('council_delegate_report', input), before = wire.service.delegation.overview();
+  const retry = await wire.http('/api/delegation/reports', { method: 'POST', body: input });
+  assert.equal(retry.status, 201); assert.deepEqual(await retry.json(), saved);
+  assert.deepEqual(wire.service.delegation.overview(), before);
+  wire.service.rooms.postMessage(room.id, { author: 'Human', body: 'The board has newer guidance after the original report.' });
+  const response = await wire.http('/api/delegation/reports/' + saved.id + '/resolve', { method: 'POST',
+    body: { author: 'Human', body: 'Proceed within the existing scope.', expectedRevision: saved.revision } });
+  assert.equal(response.status, 200); const resolved = await response.json();
+  const retriedReply = await wire.http('/api/delegation/reports/' + saved.id + '/resolve', { method: 'POST',
+    body: { author: 'Human', body: 'Proceed within the existing scope.', expectedRevision: saved.revision } });
+  assert.equal(retriedReply.status, 200); assert.deepEqual(await retriedReply.json(), resolved);
+  assert.deepEqual(await wire.call('council_delegate_report', input), resolved);
+  const conflict = await wire.http('/api/delegation/reports', { method: 'POST', body: { ...input, body: 'A different question under the same key.' } });
+  assert.equal(conflict.status, 409);
+  const failed = await wire.request('tools/call', { name: 'council_delegate_report', arguments: { ...input, kind: 'blocked' } });
+  assert.equal(failed.isError, true); assert.match(failed.content[0].text, /retry key.*different content/);
+  const reports = await wire.call('council_delegate_reports');
+  assert.deepEqual(reports.reports, [resolved]); assert.equal(reports.nextCursor, null);
+  assert.equal(wire.service.delegation.overview().reportRevision, before.reportRevision + 1);
+  assert.equal(wire.service.delegation.overview().openQuestions, 0);
+  assert.equal(wire.calls.length, 0);
+});

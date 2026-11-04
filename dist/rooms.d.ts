@@ -1,5 +1,6 @@
 import type { CouncilService } from './service.js';
-import type { RoomInput, RoomMessage, RoomRecord, RoomSummary, RoomTaskInput } from './rooms-types.js';
+import type { RoomInput, RoomMessage, RoomObservation, RoomRecord, RoomSummary, RoomTaskInput } from './rooms-types.js';
+/** JSON.parse validates grammar first; reject ambiguous keys before trusting a ballot. */
 /** A durable human-managed task board; provider calls use the existing workflow service. */
 export declare class RoomManager {
     private readonly service;
@@ -14,9 +15,11 @@ export declare class RoomManager {
     private readonly shutdown;
     constructor(service: CouncilService);
     subscribe(listener: (room: RoomRecord) => void): () => void;
-    list(): RoomSummary[];
+    list(limit?: number): RoomSummary[];
     get(id: string): RoomRecord;
     metadata(id: string): Omit<RoomRecord, 'messages'>;
+    observation(id: string): RoomObservation;
+    private assertExists;
     /** Reconcile a proven-dead owner without reading history or replaying work. */
     recover(id: string): void;
     messagePage(id: string, limit?: number, cursor?: number): {

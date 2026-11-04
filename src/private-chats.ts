@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { CouncilService } from './service.js';
 import { parseSchema } from './schema.js';
+import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
 import { privateChatActorsDefinition, privateChatCreateDefinition, privateChatGetDefinition, privateChatListDefinition, privateChatPageDefinition,
   privateChatSendDefinition, privateChatWatchDefinition } from './private-chats-schema.js';
 import type { PrivateChat, PrivateChatInput, PrivateChatMessage, PrivateChatPage, PrivateChatPageInput,
@@ -43,8 +44,7 @@ export class PrivateChatManager {
   private closed = false;
 
   constructor(private readonly service: CouncilService) {
-    const sqlite = /^(\d+)\.(\d+)\.(\d+)/.exec(process.versions.sqlite ?? '');
-    if (!sqlite || !(Number(sqlite[1]) > 3 || Number(sqlite[1]) === 3 && (Number(sqlite[2]) > 51 || Number(sqlite[2]) === 51 && Number(sqlite[3]) >= 3))) throw new Error('Private chats require SQLite 3.51.3 or newer.');
+    requireSafeSqliteRuntime();
     mkdirSync(service.config.stateDir, { recursive: true, mode: 0o700 });
     const filename = join(resolve(service.config.stateDir), 'private-chats.sqlite');
     this.db = new DatabaseSync(filename);
@@ -145,7 +145,7 @@ export class PrivateChatManager {
           return message;
         }
       }
-      if (input.runId !== undefined && !this.service.getRun(input.runId)) throw new Error('Referenced private-message workflow not found (404).');
+      if (input.runId !== undefined && !this.service.hasRun(input.runId)) throw new Error('Referenced private-message workflow not found (404).');
       if (!Number.isSafeInteger(chat.message_count) || chat.message_count >= Number.MAX_SAFE_INTEGER) throw new Error('Private message count space is exhausted.');
       const { idempotencyKey: _, ...details } = input;
       const message: PrivateChatMessage = { ...details, id: randomUUID(), sequence: 0, createdAt: new Date().toISOString() };
@@ -166,10 +166,24 @@ export class PrivateChatManager {
     const input = parseSchema<Required<PrivateChatPageInput>>(privateChatPageDefinition, value, 'private message page');
     return this.transaction(() => {
       const chat = this.row(input.chatId); this.member(chat, input.actor); this.cursor(chat.id, input.after);
-      const rows = this.db.prepare('SELECT sequence,document FROM private_messages WHERE chat_id=? AND sequence>? ORDER BY sequence LIMIT ?')
-        .all(chat.id, input.after, input.limit + 1) as { sequence: number; document: string }[];
-      return { messages: rows.slice(0, input.limit).map(row => JSON.parse(row.document) as PrivateChatMessage),
-        nextCursor: rows.length > input.limit ? rows[input.limit - 1]!.sequence : null };
+      // Read lengths before bodies so later large messages do not consume the
+      // page budget or get decoded merely to decide where the next page starts.
+      const rows = this.db.prepare('SELECT sequence,length(CAST(document AS BLOB)) AS bytes FROM private_messages WHERE chat_id=? AND sequence>? ORDER BY sequence LIMIT ?')
+        .all(chat.id, input.after, input.limit + 1) as { sequence: number; bytes: number }[];
+      const messages: PrivateChatMessage[] = [];
+      let bytes = 2;
+      for (const row of rows.slice(0, input.limit)) {
+        const messageBytes = row.bytes + (messages.length ? 1 : 0);
+        if (messages.length && bytes + messageBytes > 1024 * 1024) break;
+        const payload = this.db.prepare('SELECT document FROM private_messages WHERE chat_id=? AND sequence=?')
+          .get(chat.id, row.sequence) as { document: string } | undefined;
+        if (!payload) throw new Error('Private message payload is unavailable in the current storage snapshot.');
+        messages.push(JSON.parse(payload.document) as PrivateChatMessage);
+        bytes += messageBytes;
+        // One oversized message remains complete and is returned on its own.
+        if (bytes >= 1024 * 1024) break;
+      }
+      return { messages, nextCursor: rows.length > messages.length ? messages.at(-1)!.sequence : null };
     }, false);
   }
 

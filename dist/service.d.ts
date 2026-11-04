@@ -99,6 +99,8 @@ export declare class CouncilService {
     completion(id: string): Promise<RunRecord>;
     /** Prefer an honest failed in-memory outcome if durable finalization was unavailable. */
     getRun(id: string): RunRecord | undefined;
+    /** Test workflow identity without loading complete prompts, results or artifacts. */
+    hasRun(id: string): boolean;
     private degrade;
     private summary;
     waitSummary(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunSummary>;
@@ -185,9 +187,16 @@ export declare class CouncilService {
             runStatuses: Record<string, number>;
         } | undefined;
         integrity: string[] | undefined;
+        databases: import("./state-snapshot.js").StateFileHealth[];
+        storageBytes: number;
         issues: string[];
     };
     backup(path: string, signal?: AbortSignal): Promise<string>;
+    /** Back up every present collaboration database; file artifacts require a separate copy. */
+    snapshot(path: string, signal?: AbortSignal): Promise<{
+        destination: string;
+        manifest: import("./state-snapshot.js").StateSnapshotManifest;
+    }>;
     prune(options: Parameters<CouncilStore['prune']>[0]): import("./summary.js").PruneResult;
     private trackMaintenance;
     runPage(limit?: number, cursor?: string): {

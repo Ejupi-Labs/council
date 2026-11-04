@@ -14,7 +14,7 @@ on:
         required: true
         type: choice
         default: storage
-        options: [service, storage, artifacts]
+        options: [service, storage, artifacts, coordination, rooms]
       duration:
         description: Requested workload duration (setup and cleanup follow)
         required: true
@@ -61,3 +61,7 @@ jobs:
             .council/refinement/storage-soak-*.jsonl
             .council/refinement/artifact-soak-*.jsonl
             .council/refinement/artifact-soak-*.summary.json
+            .council/refinement/coordination-soak-*.jsonl
+            .council/refinement/coordination-soak-*.summary.json
+            .council/refinement/room-soak-*.jsonl
+            .council/refinement/room-soak-*.summary.json

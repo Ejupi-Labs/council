@@ -1,4 +1,5 @@
 import { parseSchema } from './schema.js';
+import { assertUniqueObjectKeys } from './control-json.js';
 
 export interface PrivateChatRequest { peer: string; message: string; context: string }
 
@@ -7,27 +8,7 @@ export function privateChatRequest(output: string): PrivateChatRequest | undefin
   let value: unknown;
   try { value = JSON.parse(output); } catch { return undefined; }
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'council_private_chat_request')) return undefined;
-  // JSON.parse accepts duplicate keys. An orchestration request must have one
-  // unambiguous peer and message, including when keys use Unicode escapes.
-  const scopes: Set<string>[] = [];
-  for (let index = 0; index < output.length; index++) {
-    if (output[index] === '{') scopes.push(new Set());
-    else if (output[index] === '}') scopes.pop();
-    else if (output[index] === '"') {
-      const start = index;
-      while (++index < output.length) {
-        if (output[index] === '\\') index++;
-        else if (output[index] === '"') break;
-      }
-      let next = index + 1;
-      while (/\s/.test(output[next] ?? '')) next++;
-      if (output[next] === ':') {
-        const key = JSON.parse(output.slice(start, index + 1)) as string, scope = scopes.at(-1)!;
-        if (scope.has(key)) throw new Error('Private chat request contains duplicate JSON object keys.');
-        scope.add(key);
-      }
-    }
-  }
+  assertUniqueObjectKeys(output, 'Private chat request');
   let request: PrivateChatRequest;
   try {
     request = parseSchema<PrivateChatRequest>({ type: 'object', additionalProperties: false, required: ['peer', 'message'], properties: {
@@ -44,11 +25,35 @@ export function privateChatRequest(output: string): PrivateChatRequest | undefin
 
 /** Detect a candidate even when its grammar is invalid, so private request bodies are not saved as public failed output. */
 export function privateChatCandidate(output: string): boolean {
+  // Markdown wrappers are not valid requests, but a worker can add one by
+  // mistake. Treat unmistakable whole-response control output as private so
+  // malformed formatting cannot turn the pair's evidence into a public result.
+  const fence = /^\s*```(?:json)?[ \t]*\r?\n/i.exec(output);
+  const candidate = fence ? output.slice(fence[0].length) : output;
   try {
-    const value: unknown = JSON.parse(output);
-    if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'council_private_chat_request')) return true;
+    const value: unknown = JSON.parse(candidate);
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'council_private_chat_request'));
   } catch { /* A cut-off envelope can still contain private evidence. */ }
-  const match = /^\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/.exec(output);
-  if (!match) return false;
-  try { return JSON.parse(match[1]!) === 'council_private_chat_request'; } catch { return false; }
+  const root = /^\s*\{/.exec(candidate);
+  if (!root) return false;
+  let depth = 1;
+  for (let index = root[0].length; index < candidate.length && depth > 0; index++) {
+    const character = candidate[index];
+    if (character === '{' || character === '[') depth++;
+    else if (character === '}' || character === ']') depth--;
+    else if (character === '"') {
+      const start = index;
+      while (++index < candidate.length) {
+        if (candidate[index] === '\\') index++;
+        else if (candidate[index] === '"') break;
+      }
+      if (depth !== 1) continue;
+      let next = index + 1;
+      while (/\s/.test(candidate[next] ?? '')) next++;
+      if (candidate[next] !== ':') continue;
+      try { if (JSON.parse(candidate.slice(start, index + 1)) === 'council_private_chat_request') return true; }
+      catch { /* Invalid earlier fields do not create an accepted request. */ }
+    }
+  }
+  return false;
 }

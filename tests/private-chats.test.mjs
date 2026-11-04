@@ -115,13 +115,17 @@ test('private send retries are idempotent per sender and pair; conflicting reuse
 test('optional workflow references are validated while successful keyed retries survive later workflow pruning', t => {
   const { manager, peer, service, room } = fixture(t), chat = create(manager, room.id), other = peer();
   assert.throws(() => send(manager, chat.id, 'Unknown workflow.', { runId: 'missing-run' }), /workflow not found/);
-  const getRun = service.getRun;
-  service.getRun = id => id === 'retained-run' ? { id } : undefined;
-  let saved;
-  try { saved = send(manager, chat.id, 'Known workflow.', { runId: 'retained-run', idempotencyKey: 'retained-turn' }); }
-  finally { service.getRun = getRun; }
+  const timestamp = '2000-01-01T00:00:00.000Z';
+  service.store.saveRun({ id: 'retained-run', input: { mode: 'delegate', task: 'Retain a full evidence record.', agents: ['codex'], permission: 'read' },
+    status: 'completed', createdAt: timestamp, updatedAt: timestamp, steps: [], output: 'Large workflow evidence. '.repeat(50_000) });
+  service.getRun = () => { assert.fail('Private-message reference validation must not decode a complete workflow.'); };
+  service.store.getRun = service.getRun;
+  const saved = send(manager, chat.id, 'Known workflow.', { runId: 'retained-run', idempotencyKey: 'retained-turn' });
   assert.equal(saved.runId, 'retained-run');
+  assert.equal(service.store.prune({ before: '2001-01-01T00:00:00.000Z', keepLatest: 0, dryRun: false }).deletedRuns, 1);
+  assert.equal(service.hasRun('retained-run'), false);
   assert.deepEqual(send(other, chat.id, 'Known workflow.', { runId: 'retained-run', idempotencyKey: 'retained-turn' }), saved);
+  assert.throws(() => send(other, chat.id, 'A new message for a removed workflow.', { runId: 'retained-run' }), /workflow not found/);
   assert.throws(() => send(other, chat.id, 'Known workflow.', { idempotencyKey: 'retained-turn' }), PrivateChatConflict);
   assert.equal(manager.list(first)[0].messageCount, 1);
 });
@@ -184,4 +188,31 @@ test('future private-chat database versions are refused before changing their jo
     assert.equal(inspect.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
     assert.equal(inspect.prepare('PRAGMA user_version').get().user_version, 2);
   } finally { inspect.close(); }
+});
+
+test('private history pages complete UTF-8 messages by bytes and retain one oversized message intact', t => {
+  const { manager } = fixture(t), chat = create(manager);
+  const body = 'λ🛠️'.repeat(60_000);
+  const inserted = [
+    send(manager, chat.id, body),
+    send(manager, chat.id, body + 'second'),
+    send(manager, chat.id, 'é'.repeat(600_000)),
+    send(manager, chat.id, 'A final short message.'),
+  ];
+  const pages = [], all = [];
+  let after = 0;
+  do {
+    const page = manager.page({ chatId: chat.id, actor: second, after, limit: 100 });
+    pages.push(page); all.push(...page.messages);
+    assert.ok(page.messages.length);
+    assert.ok(Buffer.byteLength(JSON.stringify(page.messages)) <= 1024 * 1024 || page.messages.length === 1);
+    assert.equal(page.nextCursor, all.length < inserted.length ? page.messages.at(-1).sequence : null);
+    if (page.nextCursor === null) break;
+    assert.ok(page.nextCursor > after); after = page.nextCursor;
+  } while (pages.length <= inserted.length);
+  assert.deepEqual(all, inserted);
+  assert.equal(pages.length, 4);
+  assert.equal(pages[2].messages[0].body, inserted[2].body);
+  assert.ok(Buffer.byteLength(JSON.stringify(pages[2].messages)) > 1024 * 1024);
+  assert.deepEqual(manager.page({ chatId: chat.id, actor: first, after: inserted.at(-1).sequence }), { messages: [], nextCursor: null });
 });

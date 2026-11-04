@@ -1,0 +1,24 @@
+{
+  "title": "Diagnose and fix one reported defect",
+  "brief": "Work on the reported defect only. Preserve unrelated changes. Base conclusions on inspected evidence, run the relevant local checks, and report anything that remains unverified. Keep all writes in Council's isolated worktree for human review.",
+  "members": [
+    { "agent": "codex", "role": "lead", "weight": 2 },
+    { "agent": "claude", "role": "worker", "weight": 1 }
+  ],
+  "tasks": [
+    {
+      "title": "Diagnose the defect",
+      "brief": "Inspect the reported behavior and relevant source. Identify the concrete failure, affected paths, and a focused acceptance check. Do not modify files. Ask for missing reproduction information instead of inventing a cause.",
+      "permission": "read"
+    },
+    {
+      "title": "Implement and verify the agreed fix",
+      "brief": "Use the retained diagnosis as evidence, verify the actual source in this worktree, then implement the smallest complete fix for the reported defect. Run the focused acceptance check and required repository checks. Report the exact checks and their outcomes, changed paths, and unresolved limitations. Do not merge or publish changes.",
+      "permission": "write",
+      "dependsOn": ["task-1"]
+    }
+  ],
+  "rounds": 1,
+  "maxCalls": 12,
+  "autoExecute": false
+}

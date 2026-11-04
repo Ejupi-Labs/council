@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { CouncilService } from '../dist/service.js';
 import { loadConfig } from '../dist/config.js';
 import { RoomManager } from '../dist/rooms.js';
-import { DelegationManager, DelegationRevisionConflict } from '../dist/delegation.js';
+import { DelegationManager, DelegationRevisionConflict, DelegationReportConflict } from '../dist/delegation.js';
 
 function fixture(t) {
   const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'council-delegation-'));
@@ -188,7 +188,7 @@ test('legacy delegation stores migrate retained replies to unique change revisio
   const earlier = await manager.watch({ timeoutMs: 0 }); assert.equal(earlier.cursor.reportRevision, 3);
   manager.close();
   const legacy = new DatabaseSync(join(service.config.stateDir, 'delegation.sqlite'));
-  try { legacy.exec('DROP INDEX delegation_report_changes; ALTER TABLE delegation_reports DROP COLUMN change_revision; PRAGMA user_version=1;'); }
+  try { legacy.exec('DROP TABLE delegation_report_retries; DROP INDEX delegation_report_changes; ALTER TABLE delegation_reports DROP COLUMN change_revision; PRAGMA user_version=1;'); }
   finally { legacy.close(); }
   const migrated = peer();
   assert.deepEqual(migrated.get(), saved);
@@ -234,26 +234,29 @@ test('delegate watch supports finite safe timeouts without provider calls or a m
 test('executive settings, reports and watches use metadata without loading conversation history', async t => {
   const { manager, service, room, configuration } = fixture(t);
   for (let index = 0; index < 103; index++) service.rooms.postMessage(room.id, { author: 'Human', body: `Complete retained message ${index}` });
-  const fullRead = service.rooms.get;
+  service.rooms.addTask(room.id, { title: 'Large task evidence', brief: 'Complete task evidence. '.repeat(50_000), permission: 'read' });
+  const fullRead = service.rooms.get, metadata = service.rooms.metadata;
   service.rooms.get = () => { assert.fail('Executive coordination must not decode a conversation preview.'); };
+  service.rooms.metadata = () => { assert.fail('Executive coordination must not decode complete task documents.'); };
   try {
     manager.configure(configuration()); const saved = manager.report(report(room));
-    assert.equal(saved.observedRooms[0].instructionRevision, 103);
-    const snapshot = await manager.watch({ timeoutMs: 0 }); assert.equal(snapshot.rooms[0].instructionRevision, 103);
+    assert.equal(saved.observedRooms[0].instructionRevision, 104);
+    const snapshot = await manager.watch({ timeoutMs: 0 }); assert.equal(snapshot.rooms[0].instructionRevision, 104);
+    assert.equal(snapshot.rooms[0].taskCount, 2);
     assert.equal((await manager.watch({ cursor: snapshot.cursor, timeoutMs: 5 })).reason, 'timeout');
-  } finally { service.rooms.get = fullRead; }
+  } finally { service.rooms.get = fullRead; service.rooms.metadata = metadata; }
 });
 
 test('watch setup and snapshot errors release every local subscription', async t => {
   const { manager, service, configuration } = fixture(t); manager.configure(configuration());
-  const rooms = service.rooms, subscribe = rooms.subscribe, metadata = rooms.metadata;
+  const rooms = service.rooms, subscribe = rooms.subscribe, observation = rooms.observation;
   rooms.subscribe = () => { throw new Error('Room subscriptions unavailable.'); };
   try { await assert.rejects(manager.watch({}), /subscriptions unavailable/); }
   finally { rooms.subscribe = subscribe; }
   assert.equal(manager.listeners.size, 0); assert.equal(rooms.listeners.size, 0);
-  rooms.metadata = () => { throw new Error('Room storage unavailable.'); };
+  rooms.observation = () => { throw new Error('Room storage unavailable.'); };
   try { await assert.rejects(manager.watch({}), /storage unavailable/); }
-  finally { rooms.metadata = metadata; }
+  finally { rooms.observation = observation; }
   assert.equal(manager.listeners.size, 0); assert.equal(rooms.listeners.size, 0);
 });
 
@@ -283,4 +286,187 @@ test('watch recovers a tracked foreign owner that exits after its baseline witho
   assert.deepEqual(recovered.tasks[1].workspaces, [partialArtifact]);
   assert.equal(service.rooms.metadata(untracked.id).status, 'running', 'The watch only recovers its explicitly tracked rooms.');
   assert.equal(manager.listeners.size, 0); assert.equal(service.rooms.listeners.size, 0);
+});
+
+test('delegate report and change pages retain complete UTF-8 evidence within a byte target', t => {
+  const { manager, room } = fixture(t);
+  const body = 'λ🛠️'.repeat(60_000);
+  const inserted = [
+    manager.report(report(room, { body })),
+    manager.report(report(room, { body: body + 'second' })),
+    manager.report(report(room, { body: 'é'.repeat(600_000) })),
+    manager.report(report(room, { body: 'A final short report.' })),
+  ];
+  const collect = (read, values, cursorKey) => {
+    const retained = [], pages = [];
+    let cursor = 0;
+    do {
+      const page = read(cursor), batch = page[values];
+      retained.push(...batch); pages.push(page);
+      assert.ok(batch.length);
+      assert.ok(Buffer.byteLength(JSON.stringify(batch)) <= 1024 * 1024 || batch.length === 1);
+      if (page.nextCursor === null) break;
+      assert.equal(page.nextCursor, batch.at(-1)[cursorKey]);
+      assert.ok(page.nextCursor > cursor); cursor = page.nextCursor;
+    } while (pages.length <= inserted.length);
+    return { retained, pages };
+  };
+  const reports = collect(cursor => manager.reportsPage({ cursor, limit: 100, openOnly: true }), 'reports', 'sequence');
+  assert.deepEqual(reports.retained, inserted); assert.equal(reports.pages.length, 4);
+  const changes = collect(after => manager.reportChangesPage({ after, limit: 100 }), 'changes', 'revision');
+  assert.deepEqual(changes.retained.map(change => change.report), inserted); assert.equal(changes.pages.length, 4);
+  const response = manager.resolve(inserted[0].id, { author: 'Human', body: 'Complete resolution. '.repeat(65_000), expectedRevision: 1 });
+  const replyPage = manager.reportChangesPage({ after: changes.retained.at(-1).revision });
+  assert.deepEqual(replyPage.changes.map(change => change.report), [response]);
+  assert.equal(replyPage.nextCursor, null);
+  assert.ok(Buffer.byteLength(JSON.stringify(replyPage.changes)) > 1024 * 1024);
+  assert.equal(manager.overview().openQuestions, 3);
+});
+
+test('keyed executive reports are durable across hosts, canonical order, later room changes and human responses', async t => {
+  const { manager, peer, service, room, transition } = fixture(t), other = peer();
+  const another = service.rooms.create({ title: 'Other tracked room', brief: 'Review the same board evidence.', members: [{ agent: 'codex', role: 'lead' }], tasks: [] });
+  const input = report(room, { idempotencyKey: 'release:decision.1', roomIds: [room.id, another.id],
+    expectedRoomRevisions: { [room.id]: room.revision, [another.id]: another.revision } });
+  const saved = manager.report(input), baseline = manager.overview();
+  assert.equal(saved.idempotencyKey, undefined);
+  const reordered = { ...input, roomIds: [...input.roomIds].reverse(),
+    expectedRoomRevisions: Object.fromEntries(Object.entries(input.expectedRoomRevisions).reverse()) };
+  assert.deepEqual(other.report(reordered), saved);
+  assert.deepEqual(other.overview(), baseline);
+  transition(value => { value.title = 'A newer board state.'; });
+  assert.deepEqual(other.report(input), saved, 'A retry returns the original observation instead of reviewing a newer room.');
+  const resolved = manager.resolve(saved.id, { author: 'Human', body: 'Use the authorized approach.', expectedRevision: 1 });
+  const afterReply = manager.overview();
+  assert.deepEqual(other.report(reordered), resolved);
+  assert.deepEqual(other.overview(), afterReply);
+  assert.equal(afterReply.openQuestions, 0);
+  manager.close(); other.close();
+  const reopened = peer();
+  assert.deepEqual(reopened.report(input), resolved);
+  assert.deepEqual(reopened.reportsPage().reports, [resolved]);
+  assert.equal(reopened.db.prepare('SELECT COUNT(*) AS count FROM delegation_report_retries').get().count, 1);
+  assert.equal(reopened.db.prepare('PRAGMA foreign_key_check').all().length, 0);
+});
+
+test('report retry identities are author-scoped and conflicting content never appends another question', t => {
+  const { manager, room } = fixture(t);
+  const input = report(room, { idempotencyKey: 'same-turn' }), saved = manager.report(input), before = manager.overview();
+  for (const change of [
+    { body: 'Different question.' },
+    { kind: 'blocked' },
+    { roomIds: [] },
+    { expectedRoomRevisions: { [room.id]: room.revision } },
+  ]) assert.throws(() => manager.report({ ...input, ...change }), DelegationReportConflict);
+  assert.deepEqual(manager.overview(), before);
+  const separate = manager.report({ ...input, author: 'Another exact host label' });
+  assert.notEqual(separate.id, saved.id);
+  assert.equal(manager.overview().openQuestions, 2);
+  assert.equal(manager.db.prepare('SELECT COUNT(*) AS count FROM delegation_report_retries').get().count, 2);
+  const omitted = { author: 'Independent author', kind: 'update', body: 'No room association.', idempotencyKey: 'implicit-empty' };
+  assert.deepEqual(manager.report({ ...omitted, roomIds: [] }), manager.report(omitted));
+});
+
+test('invalid report retry input is rejected before any digest or durable change', t => {
+  const { manager, room } = fixture(t), baseline = manager.overview();
+  for (const idempotencyKey of ['', 'x'.repeat(129), 'white space', 'a/b', 2, null]) {
+    assert.throws(() => manager.report(report(room, { idempotencyKey })));
+  }
+  assert.throws(() => manager.report(report(room, { author: String.fromCharCode(0xd800), idempotencyKey: 'bad-label' })), /valid Unicode/);
+  assert.throws(() => manager.report(report(room, { idempotencyKey: 'unknown-property', unsupported: true })));
+  assert.deepEqual(manager.overview(), baseline);
+  assert.deepEqual(manager.reportsPage(), { reports: [], nextCursor: null });
+  assert.equal(manager.db.prepare('SELECT COUNT(*) AS count FROM delegation_report_retries').get().count, 0);
+});
+
+test('failed retry-map persistence rolls back the report and revision before an exact retry', t => {
+  const { manager, room } = fixture(t), input = report(room, { idempotencyKey: 'retry-after-storage-error' });
+  const before = manager.overview();
+  manager.db.exec("CREATE TRIGGER reject_retry_map BEFORE INSERT ON delegation_report_retries BEGIN SELECT RAISE(ABORT, 'retry-map persistence failed'); END;");
+  assert.throws(() => manager.report(input), /retry-map persistence failed/);
+  assert.deepEqual(manager.overview(), before);
+  assert.deepEqual(manager.reportsPage(), { reports: [], nextCursor: null });
+  manager.db.exec('DROP TRIGGER reject_retry_map');
+  const saved = manager.report(input);
+  assert.deepEqual(manager.report(input), saved);
+  assert.equal(saved.sequence, 1);
+  assert.equal(manager.overview().reportRevision, before.reportRevision + 1);
+  assert.equal(manager.overview().openQuestions, 1);
+});
+
+test('version two delegation state adds retry identities without rewriting existing reports or cursors', async t => {
+  const { manager, peer, service, room, configuration } = fixture(t);
+  const settings = manager.configure(configuration()), saved = manager.report(report(room)), before = await manager.watch({ timeoutMs: 0 });
+  manager.close();
+  const database = new DatabaseSync(join(service.config.stateDir, 'delegation.sqlite'));
+  try { database.exec('DROP TABLE delegation_report_retries; PRAGMA user_version=2;'); }
+  finally { database.close(); }
+  const migrated = peer(), after = await migrated.watch({ timeoutMs: 0 });
+  assert.deepEqual(migrated.get(), settings);
+  assert.deepEqual(migrated.reportsPage().reports, [saved]);
+  assert.deepEqual(after.cursor, before.cursor);
+  assert.equal(migrated.db.prepare('PRAGMA user_version').get().user_version, 3);
+  const keyed = migrated.report(report(room, { idempotencyKey: 'first-v3-turn' }));
+  assert.deepEqual(migrated.report(report(room, { idempotencyKey: 'first-v3-turn' })), keyed);
+  assert.equal(migrated.overview().reportRevision, before.cursor.reportRevision + 1);
+});
+
+test('failed legacy delegation migration rolls back schema and revision changes completely', t => {
+  const { manager, peer, service, room } = fixture(t);
+  const saved = manager.report(report(room)), before = manager.overview();
+  manager.close();
+  const filename = join(service.config.stateDir, 'delegation.sqlite'), legacy = new DatabaseSync(filename);
+  try { legacy.exec('DROP TABLE delegation_report_retries; DROP INDEX delegation_report_changes; ALTER TABLE delegation_reports DROP COLUMN change_revision; PRAGMA user_version=1;'); }
+  finally { legacy.close(); }
+  const original = DatabaseSync.prototype.exec;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (sql.includes('CREATE TABLE delegation_report_retries')) throw new Error('Injected migration write failure.');
+    return original.call(this, sql);
+  };
+  try { assert.throws(() => peer(), /Injected migration write failure/); }
+  finally { DatabaseSync.prototype.exec = original; }
+  const inspect = new DatabaseSync(filename);
+  try {
+    assert.equal(inspect.prepare('PRAGMA user_version').get().user_version, 1);
+    assert.equal(inspect.prepare('PRAGMA table_info(delegation_reports)').all().some(column => column.name === 'change_revision'), false);
+    assert.equal(inspect.prepare('SELECT report_revision FROM delegation_settings WHERE id=1').get().report_revision, before.reportRevision);
+    assert.deepEqual(JSON.parse(inspect.prepare('SELECT document FROM delegation_reports WHERE id=?').get(saved.id).document), saved);
+  } finally { inspect.close(); }
+  const recovered = peer();
+  assert.deepEqual(recovered.reportsPage().reports, [saved]);
+  assert.equal(recovered.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(recovered.overview().reportRevision, before.reportRevision + 1);
+});
+
+test('future delegation state is refused before journal or retained report changes', t => {
+  const { manager, peer, service, room } = fixture(t), saved = manager.report(report(room));
+  manager.close();
+  const filename = join(service.config.stateDir, 'delegation.sqlite'), future = new DatabaseSync(filename);
+  try { future.exec('PRAGMA journal_mode=DELETE; PRAGMA user_version=4;'); }
+  finally { future.close(); }
+  assert.throws(() => peer(), /newer Council version/);
+  const inspect = new DatabaseSync(filename);
+  try {
+    assert.equal(inspect.prepare('PRAGMA user_version').get().user_version, 4);
+    assert.equal(inspect.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+    assert.deepEqual(JSON.parse(inspect.prepare('SELECT document FROM delegation_reports WHERE id=?').get(saved.id).document), saved);
+  } finally { inspect.close(); }
+});
+
+test('an identical lost human-response retry reads the retained answer without overwriting it or waking a delegate', async t => {
+  const { manager, peer, room } = fixture(t), other = peer();
+  const saved = manager.report(report(room)), input = { author: 'Human CEO', body: 'Proceed with the existing authorization.', expectedRevision: saved.revision };
+  const resolved = other.resolve(saved.id, input), baseline = await manager.watch({ timeoutMs: 0 });
+  const pending = manager.watch({ cursor: baseline.cursor, timeoutMs: 20 });
+  assert.deepEqual(manager.resolve(saved.id, input), resolved);
+  assert.equal((await pending).reason, 'timeout');
+  assert.deepEqual(manager.overview(), other.overview());
+  assert.equal(manager.overview().reportRevision, baseline.cursor.reportRevision);
+  assert.equal(manager.overview().openQuestions, 0);
+  for (const change of [
+    { body: 'Different response.' }, { author: 'Another human label' }, { expectedRevision: 3 },
+  ]) assert.throws(() => manager.resolve(saved.id, { ...input, ...change }), DelegationRevisionConflict);
+  assert.throws(() => manager.resolve(saved.id, { ...input, expectedRevision: resolved.revision }), /already resolved/);
+  manager.close(); other.close();
+  assert.deepEqual(peer().resolve(saved.id, input), resolved);
 });

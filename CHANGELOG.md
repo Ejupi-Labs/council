@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a complete terminal room workflow: create, inspect, discuss, execute, pause/resume, read complete paged history, add guidance/tasks, wait and recover. Foreground owners remain alive until stable outcomes; failed, cancelled, undecided or phase-incomplete execution exits nonzero. Add practical diagnosis/fix and retained-evidence recipes.
+- Back up all present collaboration databases into a new verifiable snapshot directory, with pinned per-database copies, sealed journal mode, SHA-256, integrity checks and a final completion manifest. Reject unmanifested journals and declared-absent files on verification; inventory every present store in health without initializing optional features. Retain the explicit workflow-only backup command.
+- Keep whole messages and reports in byte-bounded pages, project compact room summaries/observations in SQLite, cache identical preflight context, and scope foreign room-owner recovery to the room being awaited.
+- Reject malformed, cut-off, duplicate-key and unmistakably wrapped advisor/private control messages without claiming completion or exposing private payloads as public evidence.
+- Add durable author-scoped executive-report retry keys and identical human-response retries, with transactional delegation schema 3 migration and explicit conflicts for changed content.
+- Exercise room lifecycles, private exchanges, advisors, delegated reports, shared billing, protected dispatch and all-store snapshots with a bounded offline coordination endurance harness.
+
 - Add per-alias subscription protection that blocks provider dispatch at exhausted or unverifiable included allowance even when paid credits remain. Retain exhaustion until a fresh positive observation, separate credit/other windows, and recheck queued, advisor, judge, continuation and private-peer calls. Request cancellation of active calls after a blocking report and retain honest failed evidence.
 - Add durable private one-to-one chats with task-instance participants, optional room association, complete ascending history, explicit discovery, safe keyed retries and server-side metadata-only waits. Pair messages never become room guidance or public update events.
 - Add opt-in managed private peer exchanges: reserve reply/resumption calls, release the sender's slot, run a separate read-only coordination turn and resume the sender. Keep raw turns outside workflow steps, shared lineage, room history and public advisor context.

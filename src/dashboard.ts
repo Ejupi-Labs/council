@@ -9,7 +9,7 @@ import { dashboardHtml } from './dashboard-ui.js';
 import { BillingRevisionConflict } from './billing.js';
 import { collaborationSkills } from './skills.js';
 import { RunEventsUnavailableError } from './store.js';
-import { DelegationRevisionConflict } from './delegation.js';
+import { DelegationRevisionConflict, DelegationReportConflict } from './delegation.js';
 import { PrivateChatConflict } from './private-chats.js';
 
 const BODY_LIMIT = 256 * 1024;
@@ -257,7 +257,7 @@ export async function serveDashboard(service: CouncilService, rooms: RoomManager
       if (response.destroyed || response.writableEnded) return;
       if (response.headersSent) { response.destroy(); return; }
       if (failure instanceof HttpError && [408, 413].includes(failure.status)) response.setHeader('Connection', 'close');
-      json(response, failure instanceof HttpError ? failure.status : failure instanceof RunEventsUnavailableError ? 404 : failure instanceof BillingRevisionConflict || failure instanceof DelegationRevisionConflict || failure instanceof PrivateChatConflict ? 409 : 400,
+      json(response, failure instanceof HttpError ? failure.status : failure instanceof RunEventsUnavailableError ? 404 : failure instanceof BillingRevisionConflict || failure instanceof DelegationRevisionConflict || failure instanceof DelegationReportConflict || failure instanceof PrivateChatConflict ? 409 : 400,
         { error: failure instanceof Error ? failure.message : 'The operation failed.',
           ...(failure && typeof failure === 'object' && 'code' in failure ? { code: failure.code } : {}) });
     });

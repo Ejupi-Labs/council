@@ -1,4 +1,4 @@
-# Council 1.2
+# Council 1.3 development
 
 A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
 
@@ -17,7 +17,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.2.0.tgz
+npm install --global ./council-ai-plugin-1.3.0-dev.1.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```
@@ -96,6 +96,8 @@ Native Codex JSON output uses the last completed agent message as the selected a
 The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council.
 
 ## Project rooms and server-side waiting
+
+Use the [room workflow guide](docs/rooms.md) for a complete diagnosis, implementation and review example, including terminal commands, pause/resume, evidence inspection and recovery. Room creation and inspection make no model calls; discussion and execution are explicit actions.
 
 Start the local project-manager interface with:
 
@@ -338,12 +340,14 @@ Council supports trusted, local development workspaces. Keep SQLite state on a l
 
 ```sh
 council health --integrity
+council snapshot --output /absolute/local/path/council-state-2026-11-05
+council verify-snapshot /absolute/local/path/council-state-2026-11-05
 council backup --output /absolute/local/path/council-backup.sqlite
 council prune --before 2026-10-01T00:00:00Z
 council prune --before 2026-10-01T00:00:00Z --execute
 ```
 
-Backup creates a consistent database snapshot and never replaces an existing file. Retention previews by default, preserves the newest 100 runs, and skips active runs and every record with worktree artifacts. It does not delete workspace files, patches, messages or shared notes. See the [operations runbook](docs/operations.md) for restore, shutdown, failure handling and deployment limits.
+`snapshot` backs up every present collaboration database into a new directory with integrity checks, SHA-256 and a completion manifest. Each store is consistent independently; stop hosts for a quiescent cross-store copy. Verification rejects modified files and unmanifested journals. The older `backup` command covers workflow state only. Neither operation copies retained Git artifacts. Retention previews by default, preserves the newest 100 runs, and skips active runs and every record with worktree artifacts. See the [operations runbook](docs/operations.md) for restore, shutdown, failure handling and deployment limits.
 
 Status, history and event summaries use indexed bounded metadata. Full transcripts remain explicit reads. Windows MCP output runs in a supervised helper so an unread client pipe cannot block cancellation. Call deadlines include executable resolution; Git operations and artifact export have separate budgets. An interrupted export remains marked pending for review instead of implying that a patch is ready.
 
@@ -361,7 +365,7 @@ Status, history and event summaries use indexed bounded metadata. Full transcrip
 | `council_continue`, `council_patches`, `council_cleanup` | Explicit handoff, patch refresh and reviewed cleanup |
 | `council_events` | Compact events with an incremental cursor |
 | `council_run_page` | Paginated run summaries with an opaque cursor |
-| `council_health`, `council_backup`, `council_prune` | Health, consistent backup and preview-first retention |
+| `council_health`, `council_backup`, `council_snapshot`, `council_verify_snapshot`, `council_prune` | All-store health, workflow-only backup, verifiable collaboration snapshots and preview-first retention |
 | `council_send`, `council_inbox`, `council_inbox_page`, `council_ack` | Local peer handoffs and complete paginated history |
 | `council_reserve`, `council_release`, `council_leases` | Advisory file ownership |
 | `council_context` | Shared project notes |

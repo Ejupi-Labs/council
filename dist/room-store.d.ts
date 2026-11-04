@@ -1,4 +1,4 @@
-import type { RoomMessage, RoomRecord, RoomSummary } from './rooms-types.js';
+import type { RoomMessage, RoomObservation, RoomRecord, RoomSummary } from './rooms-types.js';
 /** Room state has its own database so optional UI features never migrate workflow storage. */
 export declare class RoomStore {
     private readonly db;
@@ -10,7 +10,9 @@ export declare class RoomStore {
     get(id: string): RoomRecord | undefined;
     /** Read coordination state without fetching or decoding any chat history. */
     metadata(id: string): Omit<RoomRecord, 'messages'> | undefined;
-    list(): RoomSummary[];
+    has(id: string): boolean;
+    observation(id: string): RoomObservation | undefined;
+    list(limit?: number): RoomSummary[];
     mutate(id: string, change: (room: RoomRecord) => void, options?: {
         owner?: string;
         claim?: {

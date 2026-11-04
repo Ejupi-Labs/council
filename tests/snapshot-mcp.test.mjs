@@ -1,0 +1,44 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { verifyStateSnapshot } from '../dist/index.js';
+
+test('official SDK tools back up and verify all collaboration stores over the real stdio entrypoint', { timeout: 20000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'council-snapshot-mcp-'));
+  const client = new Client({ name: 'offline-snapshot-verification', version: '1.0.0' });
+  t.after(async () => { await client.close(); rmSync(root, { recursive: true, force: true }); });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), 'mcp', '--workspace', root, '--backend', 'mock'], env: { ...process.env, COUNCIL_DEPTH: '0' }, stderr: 'pipe' });
+  let stderr = '';
+  transport.stderr?.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-8192); });
+  await client.connect(transport);
+  const call = async (name, args = {}) => {
+    const response = await client.callTool({ name, arguments: args });
+    assert.notEqual(response.isError, true, response.content?.[0]?.text);
+    return JSON.parse(response.content.find(item => item.type === 'text').text);
+  };
+  const tools = (await client.listTools()).tools;
+  assert.equal(tools.find(tool => tool.name === 'council_snapshot').annotations.readOnlyHint, false);
+  assert.equal(tools.find(tool => tool.name === 'council_verify_snapshot').annotations.readOnlyHint, true);
+  const room = await call('council_room_create', { title: 'SDK fixture', brief: 'No model invocation.', members: [{ agent: 'codex', role: 'lead' }] });
+  const chat = await call('council_chat_create', { participants: ['human', 'host'], roomId: room.id });
+  await call('council_chat_send', { chatId: chat.id, from: 'human', body: 'Keep private fixture evidence.' });
+  await call('council_delegate_report', { author: 'host', kind: 'update', body: 'Offline SDK fixture.', idempotencyKey: 'sdk-fixture' });
+  await call('council_billing');
+  const snapshot = await call('council_snapshot', { destination: join(root, 'snapshot') });
+  assert.equal(snapshot.manifest.databases.length, 5);
+  assert.equal((await call('council_verify_snapshot', { directory: snapshot.destination })).valid, true);
+  assert.equal((await verifyStateSnapshot(snapshot.destination)).valid, true);
+  const duplicate = await client.callTool({ name: 'council_snapshot', arguments: { destination: snapshot.destination } });
+  assert.equal(duplicate.isError, true);
+  await client.ping();
+  const health = await call('council_health', { integrity: true });
+  assert.equal(health.status, 'ok');
+  assert.equal(health.state.counts.runs, 0);
+  assert.equal(health.databases.filter(database => database.present).length, 5);
+  assert(!stderr.includes('Keep private fixture evidence.'));
+});

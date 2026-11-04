@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, realpathSync, existsSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseSchema } from './schema.js';
+import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
 import { billingDefinition } from './billing-schema.js';
 import type { CouncilConfig } from './types.js';
 import type { BillingAvailability, BillingAvailabilityStatus, BillingAvailabilityWindow, BillingInput, BillingPrices, BillingRecord, BillingRouting, BillingSource, BillingWindow, SubscriptionProtection } from './billing-types.js';
@@ -61,8 +62,7 @@ export class BillingManager {
   private closed = false;
 
   constructor(private readonly config: CouncilConfig, stateDir = config.stateDir) {
-    const sqlite = /^(\d+)\.(\d+)\.(\d+)/.exec(process.versions.sqlite ?? '');
-    if (!sqlite || !(Number(sqlite[1]) > 3 || Number(sqlite[1]) === 3 && (Number(sqlite[2]) > 51 || Number(sqlite[2]) === 51 && Number(sqlite[3]) >= 3))) throw new Error('Billing state requires SQLite 3.51.3 or newer.');
+    requireSafeSqliteRuntime();
     const root = realpathSync(config.workspaceRoot), state = resolve(root, stateDir);
     const inside = (path: string): boolean => { const suffix = relative(root, path); return Boolean(suffix) && !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`); };
     if (!inside(state)) throw new Error('Billing state must stay inside the configured workspace state directory.');

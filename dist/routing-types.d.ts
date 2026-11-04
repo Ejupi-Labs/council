@@ -14,6 +14,8 @@ export interface RoutingQuotaView {
     availability: 'available' | 'exhausted' | 'unknown';
     fresh: boolean;
     reason?: string;
+    /** A dispatch policy can block unknown capacity without claiming an observed exhaustion. */
+    dispatchBlocked?: boolean;
 }
 export type RoutingModelSettings = Record<string, NonNullable<WorkflowInput['agentSettings']>[string] & {
     skills?: string[];

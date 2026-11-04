@@ -34,6 +34,8 @@ Short SQLite BUSY/LOCKED heartbeat failures retry within five seconds, with `hea
 
 Current-schema WAL opens avoid migration write locks. Cold initialization and upgrades allow five-second SQLite lock waits before restoring the 250 ms runtime bound. The CLI uses `CouncilService.open`, an asynchronous factory that retries brief state initialization contention before any workflow is accepted; embedded integrations can use the same factory. Initialization retries never replay agent calls. Large migrations and OS filesystem delays remain separate from lock-wait budgets.
 
+Optional feature stores have their own schema versions. Delegation schema 3 adds durable author-scoped executive-report retry keys while preserving existing reports, replies and change revisions. Stop older hosts before upgrading a shared workspace and use the same build everywhere; a future schema is refused before journal or permission changes. Workflow schema 5 remains unchanged by that migration.
+
 ## Observe, cancel and recover
 
 Prefer summaries during routine monitoring. Full records remain available with `show` and the MCP run resource.
@@ -52,9 +54,26 @@ Workflow evidence or slot-state persistence failures, and failed heartbeat/owner
 
 For mail history, use `council_inbox_page` with `agent`, `unreadOnly` and optional `limit`. Continue with `nextCursor` using the same recipient and filter; pages contain complete bodies and at most 1 MiB of serialized messages. Acknowledge processed messages with `council_ack`. Start a fresh query after reaching the end to discover later messages. For concurrent tasks using the same agent, use unique lease owners and supply `runId` to `council_release` to restrict release to that task.
 
-For a follow-up, use `continue RUN_ID --task "New explicit task"` and select the intended participants. This starts a new workflow with bounded prior evidence; it does not resume a vendor session or automatically repeat unfinished writes.
+For a follow-up, use `continue RUN_ID --task "New explicit task"` and select the intended participants. This starts a new workflow with complete retained prior evidence; it does not resume a vendor session or automatically repeat unfinished writes. An explicit context budget rejects insufficient capacity instead of silently dropping evidence. The [room workflow guide](rooms.md) covers related tasks, approval boundaries and safe follow-up work.
 
 ## Back up and restore
+
+Use `snapshot` when rooms, billing, private chats or human delegation matter. It copies every present collaboration database into a new directory, verifies each copy, records SHA-256 checksums and publishes `manifest.json` only after every database is ready:
+
+```sh
+node dist/cli.js snapshot --workspace "/absolute/path/to/project" --output "/absolute/path/to/backups/project-2026-11-05"
+node dist/cli.js verify-snapshot "/absolute/path/to/backups/project-2026-11-05"
+```
+
+Create the destination's parent directory first. A snapshot refuses an existing output directory and never initializes optional feature databases. It includes present `state.db`, `rooms.sqlite`, `billing.sqlite`, `private-chats.sqlite` and `delegation.sqlite`, with absent databases listed explicitly. Each SQLite database is consistent independently, including while trusted hosts are writing. The manifest records `consistency: "per-database"`: this is not an atomic transaction across all five stores. Stop every host before taking a filesystem copy when a single quiescent application state is required.
+
+Copied databases are sealed in DELETE journal mode before checksumming. Verification rejects unexpected WAL, shared-memory or rollback-journal sidecars, database files declared absent, modified files, incomplete manifests and failed integrity checks. It reads snapshot files without opening or creating project state. A `valid` result checks the supplied manifest and data; it does not authenticate who created them. No restore happens automatically.
+
+Snapshots contain private local prompts, results, chats, reports and billing observations. Keep their directory restricted to the intended user. They do not contain project files, Git metadata, retained worktrees, patch/intent manifests, configuration or vendor credentials. Preserve a separate matching repository/artifact copy when retained edits matter. Avoid modifying snapshot database files; copy them into a fresh restore directory first.
+
+The MCP tools are `council_snapshot` and `council_verify_snapshot`. `health --integrity` now inspects every present known database; ordinary health reports their sizes without loading transcripts or creating absent feature stores.
+
+For a workflow-only backup, the existing `backup` command still copies **only `state.db`**. It does not include the four additional collaboration stores:
 
 Create the destination's parent directory first and choose a filename that does not exist:
 
@@ -62,7 +81,7 @@ Create the destination's parent directory first and choose a filename that does 
 node dist/cli.js backup --workspace "/absolute/path/to/project" --output "/absolute/path/to/backups/project-state.db"
 ```
 
-Backup uses SQLite's online backup API and publishes a consistent database snapshot exclusively. It refuses existing destinations and active database/journal paths. It may run while trusted hosts are active. It copies database state, not project files, retained worktrees, patch files, manifests or vendor credentials. Preserve a separate matching filesystem snapshot when those artifacts are needed. Do not copy only a live `state.db` while ignoring its WAL.
+Backup uses SQLite's online backup API and publishes a consistent workflow database snapshot exclusively. It refuses existing destinations and active database/journal paths. It may run while trusted hosts are active. Preserve a separate matching filesystem snapshot when artifacts are needed. Do not copy only a live SQLite main file while ignoring its WAL.
 
 Each backup pins a separate read snapshot near the start of the operation; later writes continue on the application connection and stay outside that snapshot. This prevents ongoing writers from repeatedly restarting the copy. Cancellation and a 60-second budget are checked between copy steps. SQLite retains WAL pages needed by the reader until backup cleanup finishes, so allow temporary WAL headroom under write pressure.
 
@@ -70,8 +89,9 @@ To restore:
 
 1. Stop **all** Council hosts and remaining owned agent work for this workspace.
 2. Preserve the current state directory as a separate offline safety copy. Move it aside instead of overwriting a database with potentially stale `-wal` or `-shm` files beside it.
-3. Create a fresh configured state directory and copy the selected database snapshot into it as `state.db`. Restore retained artifacts only from the matching filesystem snapshot, keeping their expected repository paths and Git metadata. A database backup alone cannot reconstruct them.
-4. Use a build compatible with the backup schema. Run `health --integrity`, inspect runs/events, and use `recover` for proven-dead owners before enabling new work. Review artifacts before any cleanup or replacement task.
+3. Verify the all-store snapshot before copying it. Create a fresh configured state directory and copy only its manifest-listed database files, retaining their exact names. Leave manifest-declared absent stores absent. For a workflow-only backup, copy its selected file as `state.db`; it cannot recover unrelated room, billing, private-chat or delegation history.
+4. Restore retained artifacts only from the matching filesystem snapshot, keeping their expected repository paths and Git metadata. Database copies cannot reconstruct them. Restore the matching project configuration separately; do not combine old account/allowance observations or coordination files with newer unrelated state.
+5. Use one build compatible with every restored schema. Run `health --integrity`, inspect runs/events/rooms, and use `recover` or `room-recover` for proven-dead owners before enabling new work. Recovery never replays tasks. Inspect restored billing freshness and subscription protection before authorizing new calls. Review artifacts before any cleanup or replacement task.
 
 ## Retention and reviewed worktree cleanup
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
+import { statSync } from 'node:fs';
 import test from 'node:test';
 import { endurancePlan, runEndurance } from './endurance.mjs';
 
@@ -8,12 +9,13 @@ const defaults = Object.freeze({ COUNCIL_ENDURANCE_OS: 'ubuntu', COUNCIL_ENDURAN
 
 test('every workflow choice maps to a fixed shell-free Node argument list', () => {
   for (const [os, platform] of [['ubuntu', 'linux'], ['windows', 'win32'], ['macos', 'darwin']]) {
-    for (const [workload, script] of [['service', 'soak.mjs'], ['storage', 'storage-soak.mjs'], ['artifacts', 'artifact-soak.mjs']]) {
+    for (const [workload, script] of [['service', 'soak.mjs'], ['storage', 'storage-soak.mjs'], ['artifacts', 'artifact-soak.mjs'], ['coordination', 'coordination-soak.mjs'], ['rooms', 'room-soak.mjs']]) {
       for (const [duration, milliseconds] of [['60s', 60000], ['5m', 300000], ['10m', 600000], ['30m', 1800000]]) {
         const plan = endurancePlan({ COUNCIL_ENDURANCE_OS: os, COUNCIL_ENDURANCE_WORKLOAD: workload, COUNCIL_ENDURANCE_DURATION: duration }, platform);
         assert.equal(plan.command, process.execPath);
         assert.equal(plan.args[0], '--expose-gc');
         assert.equal(basename(plan.args[1]), script);
+        assert.ok(statSync(plan.args[1]).isFile(), `Declared workload must exist: ${workload}`);
         assert.deepEqual(plan.args.slice(2), ['--duration-ms', String(milliseconds), ...(workload === 'service' ? ['--label', 'github-manual'] : [])]);
       }
     }

@@ -104,3 +104,18 @@ export interface RoomSummary {
     revision: number;
     updatedAt: string;
 }
+/** Scalar coordination state; excludes task briefs, artifact records and chat history. */
+export interface RoomObservation {
+    id: string;
+    title: string;
+    status: RoomStatus;
+    revision: number;
+    instructionRevision: number;
+    taskCount: number;
+    completedTasks: number;
+    failedTasks: number;
+    callsUsed: number;
+    maxCalls: number;
+    error?: string;
+    pauseRequested?: boolean;
+}

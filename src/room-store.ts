@@ -2,10 +2,12 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { RoomMessage, RoomRecord, RoomSummary } from './rooms-types.js';
+import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
+import type { RoomMessage, RoomObservation, RoomRecord, RoomSummary } from './rooms-types.js';
 
 const ACTIVE = new Set(['discussing', 'running']);
 const HISTORY_MARKER = 'history-preview';
+const MESSAGE_PAGE_BYTES = 1024 * 1024;
 function json(value: unknown): string {
   const text = JSON.stringify(value);
   if (text === undefined) throw new Error('Room data must be JSON serializable.');
@@ -22,8 +24,7 @@ interface Row { document: string; owner: string | null; owner_pid: number | null
 export class RoomStore {
   private readonly db: DatabaseSync;
   constructor(stateDir: string) {
-    const sqlite = /^(\d+)\.(\d+)\.(\d+)/.exec(process.versions.sqlite ?? '');
-    if (!sqlite || !(Number(sqlite[1]) > 3 || Number(sqlite[1]) === 3 && (Number(sqlite[2]) > 51 || Number(sqlite[2]) === 51 && Number(sqlite[3]) >= 3))) throw new Error('Room state requires SQLite 3.51.3 or newer.');
+    requireSafeSqliteRuntime();
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const filename = join(resolve(stateDir), 'rooms.sqlite');
     this.db = new DatabaseSync(filename);
@@ -102,10 +103,20 @@ export class RoomStore {
     const row = this.row(id);
     if (!row) return undefined;
     const room = JSON.parse(row.document) as RoomRecord;
-    const messages = this.db.prepare('SELECT document FROM room_messages WHERE room_id=? ORDER BY sequence DESC LIMIT 101').all(id) as { document: string }[];
-    room.messages = messages.slice(0, 100).reverse().map(row => JSON.parse(row.document) as RoomMessage);
-    if (messages.length > 100) room.messages.unshift({ id: HISTORY_MARKER, author: 'system', kind: 'system',
-      body: 'Showing the latest 100 messages. Earlier complete messages remain available through messagePage.', createdAt: room.createdAt });
+    room.messages = [];
+    let bytes = 2, omitted = false;
+    const rows = this.db.prepare('SELECT document FROM room_messages WHERE room_id=? ORDER BY sequence DESC LIMIT 101').iterate(id);
+    for (const row of rows) {
+      const document = row.document as string;
+      const size = Buffer.byteLength(document) + (room.messages.length ? 1 : 0);
+      if (room.messages.length >= 100 || room.messages.length > 0 && bytes + size > MESSAGE_PAGE_BYTES) { omitted = true; break; }
+      // Preserve at least one complete message, even when it exceeds the page
+      // budget. Never clip evidence or materialize every large row eagerly.
+      room.messages.push(JSON.parse(document) as RoomMessage); bytes += size;
+    }
+    room.messages.reverse();
+    if (omitted) room.messages.unshift({ id: HISTORY_MARKER, author: 'system', kind: 'system',
+      body: `Showing the latest ${room.messages.length} complete messages. Earlier complete messages remain available through messagePage.`, createdAt: room.createdAt });
     return room;
   }
 
@@ -117,14 +128,43 @@ export class RoomStore {
     return metadata;
   }
 
-  list(): RoomSummary[] {
-    const rows = this.db.prepare('SELECT document FROM rooms ORDER BY updated_at DESC,id DESC LIMIT 1000').all() as { document: string }[];
-    return rows.map(row => {
-      const room = JSON.parse(row.document) as RoomRecord;
-      return { id: room.id, backend: room.backend, title: room.title, status: room.status, taskCount: room.tasks.length,
-        completedTasks: room.tasks.filter(task => task.status === 'completed').length, callsUsed: room.callsUsed,
-        maxCalls: room.maxCalls, revision: room.revision, updatedAt: room.updatedAt };
-    });
+  has(id: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM rooms WHERE id=?').get(id)); }
+
+  observation(id: string): RoomObservation | undefined {
+    const row = this.db.prepare(`SELECT id, status, revision,
+      json_extract(document, '$.title') AS title, COALESCE(json_extract(document, '$.instructionRevision'), 0) AS instruction_revision,
+      json_array_length(document, '$.tasks') AS task_count,
+      (SELECT COUNT(*) FROM json_each(rooms.document, '$.tasks') task WHERE json_extract(task.value, '$.status')='completed') AS completed_tasks,
+      (SELECT COUNT(*) FROM json_each(rooms.document, '$.tasks') task WHERE json_extract(task.value, '$.status') IN ('failed','cancelled')) AS failed_tasks,
+      json_extract(document, '$.callsUsed') AS calls_used, json_extract(document, '$.maxCalls') AS max_calls,
+      NULLIF(json_extract(document, '$.error'), '') AS error, json_extract(document, '$.pauseRequested') AS pause_requested
+      FROM rooms WHERE id=?`).get(id) as {
+        id: string; title: string; status: RoomObservation['status']; revision: number; instruction_revision: number;
+        task_count: number; completed_tasks: number; failed_tasks: number; calls_used: number; max_calls: number;
+        error: string | null; pause_requested: number | null;
+      } | undefined;
+    return row ? { id: row.id, title: row.title, status: row.status, revision: row.revision, instructionRevision: row.instruction_revision,
+      taskCount: row.task_count, completedTasks: row.completed_tasks, failedTasks: row.failed_tasks, callsUsed: row.calls_used, maxCalls: row.max_calls,
+      ...(row.error ? { error: row.error } : {}), ...(row.pause_requested === 1 ? { pauseRequested: true } : {}) } : undefined;
+  }
+
+  list(limit = 1000): RoomSummary[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Room summary limit must be from 1 to 1000.');
+    // Project only list metadata inside SQLite. Large briefs, task bodies and
+    // retained artifact records stay outside JavaScript during routine updates.
+    const rows = this.db.prepare(`SELECT rooms.id, rooms.status, rooms.revision, rooms.updated_at,
+      json_extract(document, '$.backend') AS backend, json_extract(document, '$.title') AS title,
+      json_array_length(document, '$.tasks') AS task_count,
+      (SELECT COUNT(*) FROM json_each(rooms.document, '$.tasks') task
+        WHERE json_extract(task.value, '$.status')='completed') AS completed_tasks,
+      json_extract(document, '$.callsUsed') AS calls_used, json_extract(document, '$.maxCalls') AS max_calls
+      FROM rooms ORDER BY updated_at DESC,id DESC LIMIT ?`).all(limit) as {
+        id: string; backend: RoomSummary['backend'] | null; title: string; status: RoomSummary['status']; revision: number;
+        updated_at: string; task_count: number; completed_tasks: number; calls_used: number; max_calls: number;
+      }[];
+    return rows.map(row => ({ id: row.id, backend: row.backend ?? undefined, title: row.title, status: row.status,
+      taskCount: row.task_count, completedTasks: row.completed_tasks, callsUsed: row.calls_used, maxCalls: row.max_calls,
+      revision: row.revision, updatedAt: row.updated_at }));
   }
 
   mutate(id: string, change: (room: RoomRecord) => void, options: { owner?: string; claim?: { id: string; pid: number }; release?: boolean; requireIdle?: boolean; preserveFailure?: boolean } = {}): RoomRecord {
@@ -223,10 +263,17 @@ export class RoomStore {
   messagePage(id: string, limit = 100, cursor?: number): { messages: RoomMessage[]; nextCursor: number | null } {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0))) throw new Error('Invalid message page bounds.');
     if (!this.row(id)) throw new Error('Room not found.');
+    const messages: RoomMessage[] = [];
+    let bytes = 2, lastSequence: number | null = null, more = false;
     const rows = this.db.prepare('SELECT sequence,document FROM room_messages WHERE room_id=? AND sequence>? ORDER BY sequence LIMIT ?')
-      .all(id, cursor ?? 0, limit + 1) as { sequence: number; document: string }[];
-    return { messages: rows.slice(0, limit).map(row => JSON.parse(row.document) as RoomMessage),
-      nextCursor: rows.length > limit ? rows[limit - 1]!.sequence : null };
+      .iterate(id, cursor ?? 0, limit + 1);
+    for (const row of rows) {
+      const document = row.document as string;
+      const size = Buffer.byteLength(document) + (messages.length ? 1 : 0);
+      if (messages.length >= limit || messages.length > 0 && bytes + size > MESSAGE_PAGE_BYTES) { more = true; break; }
+      messages.push(JSON.parse(document) as RoomMessage); bytes += size; lastSequence = row.sequence as number;
+    }
+    return { messages, nextCursor: more ? lastSequence : null };
   }
 
   recover(id?: string): void {

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { backup, DatabaseSync, type StatementSync } from 'node:sqlite';
+import { chmodSync, mkdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
+import { backupDatabase } from './sqlite-backup.js';
+import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord, WorkspaceArtifact } from './types.js';
 import { MAX_EVENT_PAGE_BYTES, summarizeEvent, summarizeRun, type EventPage, type PruneResult, type RunSummary } from './summary.js';
 
@@ -9,18 +11,6 @@ const SCHEMA_VERSION = 5;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUN_JSON_BYTES = 16 * 1024 * 1024;
 
-function requireSafeSqliteRuntime(): string {
-  const version = process.versions.sqlite;
-  const match = typeof version === 'string' ? /^(\d+)\.(\d+)\.(\d+)(?:\.\d+)?$/.exec(version) : null;
-  const major = Number(match?.[1]);
-  const minor = Number(match?.[2]);
-  const patch = Number(match?.[3]);
-  // https://sqlite.org/wal.html#walresetbug documents the multi-writer WAL reset fix.
-  if (!match || !(major > 3 || (major === 3 && (minor > 51 || (minor === 51 && patch >= 3))))) {
-    throw new Error(`Council requires SQLite 3.51.3 or newer for safe multi-process WAL writes; this runtime reports ${version ?? 'unknown'}. Upgrade Node.js to 24.18.1 or newer with a supported SQLite build before opening Council state.`);
-  }
-  return version!;
-}
 
 function text(value: string, label: string, maxBytes: number): string {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > maxBytes || value.includes('\0')) {
@@ -306,6 +296,12 @@ export class CouncilStore {
     text(id, 'Run id', 256);
     const row = this.statement('SELECT document FROM runs WHERE id = ?').get(id) as { document: string } | undefined;
     return row ? JSON.parse(row.document) as RunRecord : undefined;
+  }
+
+  /** Read only the indexed identity; callers do not need a workflow transcript. */
+  hasRun(id: string): boolean {
+    text(id, 'Run id', 256);
+    return this.statement('SELECT 1 FROM runs WHERE id = ?').get(id) !== undefined;
   }
 
   listRuns(limit = 20): RunRecord[] {
@@ -809,57 +805,9 @@ export class CouncilStore {
 
   /** Online SQLite backup, published atomically without ever opening the requested destination for writing. */
   async backupTo(path: string, signal?: AbortSignal): Promise<string> {
-    signal?.throwIfAborted();
-    text(path, 'Backup destination', 4096);
-    const requested = resolve(path);
-    const parent = realpathSync(dirname(requested));
-    const destination = join(parent, basename(requested));
-    const source = realpathSync(this.databasePath);
-    const key = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-    if ([source, `${source}-wal`, `${source}-shm`, `${source}-journal`].map(key).includes(key(destination))) throw new Error('A backup cannot replace the active Council database or its journal files.');
-    try { lstatSync(destination); throw new Error('Backup destination already exists; choose a new filename.'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    const temporary = mkdtempSync(join(parent, '.council-backup-'));
-    const snapshot = join(temporary, 'snapshot.db');
     this.activeBackups++;
-    let reader: DatabaseSync | undefined;
-    let failed = false;
-    try {
-      const deadline = performance.now() + 60_000;
-      // Pin one WAL snapshot on an isolated connection: foreign commits otherwise restart each batch.
-      // The application connection remains free to write while this read transaction is active.
-      reader = new DatabaseSync(source, { readOnly: true });
-      reader.exec('PRAGMA busy_timeout = 250; BEGIN;');
-      reader.prepare('SELECT name FROM sqlite_schema LIMIT 1').get();
-      await backup(reader, snapshot, { rate: 128, progress: () => {
-        signal?.throwIfAborted();
-        if (performance.now() > deadline) throw new Error('Council backup exceeded its 60-second deadline.');
-      } });
-      signal?.throwIfAborted();
-      if (performance.now() > deadline) throw new Error('Council backup exceeded its 60-second deadline.');
-      if (process.platform !== 'win32') chmodSync(snapshot, 0o600);
-      const descriptor = openSync(snapshot, 'r+');
-      try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
-      // A same-directory hard link is exclusive: an intervening creator yields EEXIST, never overwrite.
-      linkSync(snapshot, destination);
-      return destination;
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      let cleanupError: unknown;
-      try { if (reader?.isTransaction) reader.exec('ROLLBACK'); }
-      catch (error) { cleanupError = error; }
-      try { reader?.close(); }
-      catch (error) { cleanupError ??= error; }
-      this.activeBackups--;
-      // This directory was created exclusively by this invocation under the resolved parent.
-      try {
-        if (dirname(temporary) !== parent || !basename(temporary).startsWith('.council-backup-')) throw new Error('Refusing to remove an unexpected backup staging directory.');
-        rmSync(temporary, { recursive: true, force: true });
-      } catch (error) { cleanupError ??= error; }
-      if (!failed && cleanupError) throw cleanupError;
-    }
+    try { return await backupDatabase(this.databasePath, path, signal); }
+    finally { this.activeBackups--; }
   }
 
   prune(options: { before: string; keepLatest?: number; dryRun?: boolean }): PruneResult {

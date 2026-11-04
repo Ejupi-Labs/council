@@ -1,4 +1,5 @@
 import { parseSchema } from './schema.js';
+import { assertUniqueObjectKeys } from './control-json.js';
 /** Only an entire exact envelope yields control; examples and surrounding prose remain ordinary output. */
 export function privateChatRequest(output) {
     let value;
@@ -10,33 +11,7 @@ export function privateChatRequest(output) {
     }
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'council_private_chat_request'))
         return undefined;
-    // JSON.parse accepts duplicate keys. An orchestration request must have one
-    // unambiguous peer and message, including when keys use Unicode escapes.
-    const scopes = [];
-    for (let index = 0; index < output.length; index++) {
-        if (output[index] === '{')
-            scopes.push(new Set());
-        else if (output[index] === '}')
-            scopes.pop();
-        else if (output[index] === '"') {
-            const start = index;
-            while (++index < output.length) {
-                if (output[index] === '\\')
-                    index++;
-                else if (output[index] === '"')
-                    break;
-            }
-            let next = index + 1;
-            while (/\s/.test(output[next] ?? ''))
-                next++;
-            if (output[next] === ':') {
-                const key = JSON.parse(output.slice(start, index + 1)), scope = scopes.at(-1);
-                if (scope.has(key))
-                    throw new Error('Private chat request contains duplicate JSON object keys.');
-                scope.add(key);
-            }
-        }
-    }
+    assertUniqueObjectKeys(output, 'Private chat request');
     let request;
     try {
         request = parseSchema({ type: 'object', additionalProperties: false, required: ['peer', 'message'], properties: {
@@ -54,20 +29,48 @@ export function privateChatRequest(output) {
 }
 /** Detect a candidate even when its grammar is invalid, so private request bodies are not saved as public failed output. */
 export function privateChatCandidate(output) {
+    // Markdown wrappers are not valid requests, but a worker can add one by
+    // mistake. Treat unmistakable whole-response control output as private so
+    // malformed formatting cannot turn the pair's evidence into a public result.
+    const fence = /^\s*```(?:json)?[ \t]*\r?\n/i.exec(output);
+    const candidate = fence ? output.slice(fence[0].length) : output;
     try {
-        const value = JSON.parse(output);
-        if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'council_private_chat_request'))
-            return true;
+        const value = JSON.parse(candidate);
+        return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'council_private_chat_request'));
     }
     catch { /* A cut-off envelope can still contain private evidence. */ }
-    const match = /^\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/.exec(output);
-    if (!match)
+    const root = /^\s*\{/.exec(candidate);
+    if (!root)
         return false;
-    try {
-        return JSON.parse(match[1]) === 'council_private_chat_request';
+    let depth = 1;
+    for (let index = root[0].length; index < candidate.length && depth > 0; index++) {
+        const character = candidate[index];
+        if (character === '{' || character === '[')
+            depth++;
+        else if (character === '}' || character === ']')
+            depth--;
+        else if (character === '"') {
+            const start = index;
+            while (++index < candidate.length) {
+                if (candidate[index] === '\\')
+                    index++;
+                else if (candidate[index] === '"')
+                    break;
+            }
+            if (depth !== 1)
+                continue;
+            let next = index + 1;
+            while (/\s/.test(candidate[next] ?? ''))
+                next++;
+            if (candidate[next] !== ':')
+                continue;
+            try {
+                if (JSON.parse(candidate.slice(start, index + 1)) === 'council_private_chat_request')
+                    return true;
+            }
+            catch { /* Invalid earlier fields do not create an accepted request. */ }
+        }
     }
-    catch {
-        return false;
-    }
+    return false;
 }
 //# sourceMappingURL=private-chat-protocol.js.map

@@ -12,6 +12,7 @@ import { GitWorkspaces } from './workspaces.js';
 import { summarizeRun, type EventPage, type RunSummary } from './summary.js';
 import { VERSION } from './version.js';
 import { metadataPressure } from './metadata.js';
+import { createStateSnapshot, inspectStateFiles } from './state-snapshot.js';
 import { RoomManager } from './rooms.js';
 import { DelegationManager } from './delegation.js';
 import { PrivateChatManager } from './private-chats.js';
@@ -102,8 +103,8 @@ export class CouncilService {
     const availability = Object.fromEntries(records.map(record => {
       const value = this.billing.availabilityFor(record, now);
       const protection = this.billing.subscriptionProtectionFor(record, now);
-      return [record.alias, { availability: protection.allowed ? value.status : 'exhausted' as const,
-        fresh: protection.allowed ? value.status !== 'unknown' : true, reason: [...value.reasons, ...protection.reasons].join('; ') }];
+      return [record.alias, { availability: value.status, fresh: value.status !== 'unknown',
+        ...(!protection.allowed ? { dispatchBlocked: true } : {}), reason: [...value.reasons, ...protection.reasons].join('; ') }];
     }));
     const agents = Object.fromEntries(Object.entries(this.config.agents).map(([alias, agent]) => [alias,
       { ...agent, routing: records.find(record => record.alias === alias)?.routing ?? undefined }]));
@@ -248,6 +249,11 @@ export class CouncilService {
     return emergency ? structuredClone(emergency) : this.store.getRun(id);
   }
 
+  /** Test workflow identity without loading complete prompts, results or artifacts. */
+  hasRun(id: string): boolean {
+    return this.emergencyResults.has(id) || this.store.hasRun(id);
+  }
+
   private degrade(message: string): void {
     if (!this.fault) process.stderr.write(`${JSON.stringify({ event: 'state.degraded', message })}\n`);
     this.fault = message;
@@ -356,6 +362,8 @@ export class CouncilService {
         if (integrity.length !== 1 || integrity[0] !== 'ok') issues.push('SQLite integrity check did not return ok.');
       }
     } catch { issues.push('Council state could not be inspected.'); }
+    const databases = inspectStateFiles(this.config.stateDir, checkIntegrity);
+    for (const database of databases) if (database.error) issues.push(`${database.name}: ${database.error}`);
     return {
       status: issues.length ? 'degraded' : this.closing ? 'draining' : 'ok',
       version: VERSION, pid: process.pid, uptimeSeconds: Math.round(process.uptime()),
@@ -365,7 +373,9 @@ export class CouncilService {
       activeLocalRuns: this.jobs.size, maintenanceOperations: this.maintenance.size,
       emergencyResults: this.emergencyResults.size, memory: process.memoryUsage(),
       limits: { concurrency: this.config.maxConcurrency, activeLocalRuns: 20, activeWorkspaceRuns: 100, callsPerRun: this.config.maxCalls, outputBytesPerCall: this.config.maxOutputBytes, heartbeatGraceMs: STATE_CONTENTION_GRACE_MS },
-      state, integrity, issues,
+      state, integrity, databases,
+      storageBytes: databases.reduce((total, database) => total + database.databaseBytes + database.walBytes + database.shmBytes, 0),
+      issues,
     };
   }
 
@@ -373,6 +383,14 @@ export class CouncilService {
     if (this.closing) return Promise.reject(new Error('Council is shutting down.'));
     const controller = new AbortController();
     const work = this.store.backupTo(resolve(this.config.workspaceRoot, path), signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
+    return this.trackMaintenance(work, controller);
+  }
+
+  /** Back up every present collaboration database; file artifacts require a separate copy. */
+  snapshot(path: string, signal?: AbortSignal) {
+    if (this.closing) return Promise.reject(new Error('Council is shutting down.'));
+    const controller = new AbortController();
+    const work = createStateSnapshot(this.config.stateDir, resolve(this.config.workspaceRoot, path), signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
     return this.trackMaintenance(work, controller);
   }
 
