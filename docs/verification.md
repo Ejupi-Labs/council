@@ -1,5 +1,15 @@
 # Council verification record
 
+## 1.3 development checkpoint — 4 November 2026, 21:02 UTC
+
+Version `1.3.0-dev.3` passed **993 tests: 990 passed, three platform skips, zero failures**, in 230.9 seconds. TypeScript checks passed. The remaining Windows CI-helper fixture path comparison was reproduced under an actual 8.3 TEMP alias and corrected with native canonical paths; all seven helper checks passed under that alias. The preceding hosted run passed every runtime test on Linux, macOS and Windows, but its Windows job failed on that separate fixture. This checkpoint still needs its own complete hosted result.
+
+Idle executive waits now reuse unchanged compact observations while retaining fresh mandates/reports, foreign commit invalidation, emergency publications, outward-copy isolation and periodic recovery after real owner death without a database write. Thirty-five delegation checks passed. On the measured warm local fixture, four 1.5-second idle waits reduced repeated room observations from 56 to zero; CPU timings remain machine-specific evidence.
+
+Explicit room-context budgets reject an oversized prefix before requesting later pages. Five added regressions and 54 focused checks preserve exact Unicode/escaped accepted context, artifact metadata and full default history. A 4,096-character rejection fixture went from five history pages to one; a full-context fixture retained the same SHA-256. The existing page byte bound and complete oversized-first-row exception still apply, so this is not a 4 KiB allocation guarantee.
+
+Lost supervisor startup/outcome evidence now yields an explicit cleanup-uncertainty failure after attempting owned cleanup. Verified no-start failures and known vendor cleanup retain their behavior; kill order is unchanged. Seven fake-fork cases plus actual owned-child process, runner and lifecycle checks passed **118/118**. These distinguish missing evidence from a proved surviving orphan.
+
 ## 1.3 development checkpoint — 4 November 2026, 20:48 UTC
 
 Version `1.3.0-dev.2` passed the complete local suite: **977 total, 974 passed, three platform skips, zero failures**, in 258.8 seconds on Windows ARM64, Node 24.18.1 and SQLite 3.53.1. TypeScript checks, seven CI-helper tests, both workflow lint checks and the updated skill validator passed. The runtime dependency audit found zero vulnerabilities. This remains an overnight development checkpoint; final release qualification and hosted results are separate.

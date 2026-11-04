@@ -18,6 +18,7 @@ export declare class DelegationManager {
     private readonly shutdown;
     private readonly listeners;
     private readonly roomRecoveryAt;
+    private readonly roomObservations;
     private closed;
     constructor(service: CouncilService);
     private open;

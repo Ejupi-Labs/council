@@ -8,17 +8,17 @@ import { sanitizedGitEnvironment } from '../../dist/git-env.js';
 import { checkGenerated } from './check-generated.mjs';
 
 function fixture(prefix) {
-  const base = realpathSync(tmpdir());
-  const directory = realpathSync(mkdtempSync(join(base, prefix)));
+  const base = realpathSync.native(tmpdir());
+  const directory = realpathSync.native(mkdtempSync(join(base, prefix)));
   const identity = lstatSync(directory, { bigint: true });
   return { directory, remove() {
     const current = lstatSync(directory, { bigint: true });
     assert.ok(current.isDirectory() && !current.isSymbolicLink());
     assert.equal(current.dev, identity.dev); assert.equal(current.ino, identity.ino);
-    assert.equal(realpathSync(directory), directory);
+    assert.equal(realpathSync.native(directory), directory);
     assert.equal(dirname(directory), base);
     assert.ok(basename(directory).startsWith(prefix));
-    assert.equal(realpathSync(base), base);
+    assert.equal(realpathSync.native(base), base);
     rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   } };
 }
@@ -92,7 +92,7 @@ test('Git environment redirection cannot hide intended generated changes or touc
     const beforeIdentity = lstatSync(externalIndex, { bigint: true });
     const environment = { ...process.env, GIT_DIR: join(redirected, '.git'), GIT_WORK_TREE: redirected, GIT_INDEX_FILE: externalIndex };
     writeFileSync(join(intended, 'dist', 'new-module.js'), 'export {};\n');
-    assert.equal(realpathSync(fixtureGit(intended, ['rev-parse', '--show-toplevel'], environment).trim()), intended);
+    assert.equal(realpathSync.native(fixtureGit(intended, ['rev-parse', '--show-toplevel'], environment).trim()), intended);
     assert.throws(() => checkGenerated(intended, environment), /\?\? dist\/new-module\.js/);
     assert.deepEqual(readFileSync(externalIndex), before);
     const afterIdentity = lstatSync(externalIndex, { bigint: true });

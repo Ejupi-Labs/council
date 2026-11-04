@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { CouncilService } from '../dist/service.js';
 import { loadConfig } from '../dist/config.js';
 import { RoomManager } from '../dist/rooms.js';
@@ -469,4 +470,86 @@ test('an identical lost human-response retry reads the retained answer without o
   assert.throws(() => manager.resolve(saved.id, { ...input, expectedRevision: resolved.revision }), /already resolved/);
   manager.close(); other.close();
   assert.deepEqual(peer().resolve(saved.id, input), resolved);
+});
+
+test('idle delegate waits reuse large room observations while outward snapshots and tracked scopes stay independent', async t => {
+  const { manager, service, room, configuration } = fixture(t);
+  service.rooms.addTask(room.id, { title: 'Complete retained evidence', brief: 'Large complete task evidence. '.repeat(50000), permission: 'read' });
+  manager.configure(configuration());
+  let observations = 0;
+  const original = service.rooms.observation.bind(service.rooms);
+  service.rooms.observation = (...args) => { observations++; return original(...args); };
+  const initial = await manager.watch({ timeoutMs: 0 });
+  initial.rooms[0].title = 'Caller mutation must remain local.'; initial.rooms[0].taskCount = -99; initial.rooms[0].revision = -99;
+  const idle = await Promise.all(Array.from({ length: 4 }, () => manager.watch({ cursor: initial.cursor, timeoutMs: 220 })));
+  assert.equal(observations, 1, 'Idle checks never repeat the multi-MiB room observation query.');
+  for (const result of idle) {
+    assert.equal(result.reason, 'timeout'); assert.equal(result.rooms[0].title, room.title);
+    assert.equal(result.rooms[0].taskCount, 2); assert.equal(result.rooms[0].revision, initial.cursor.rooms[room.id].revision);
+  }
+  idle[0].rooms[0].error = 'A second caller mutation.';
+  assert.equal((await manager.watch({ timeoutMs: 0 })).rooms[0].error, undefined);
+  manager.configure(configuration({ roomIds: [] })); assert.equal((await manager.watch({ timeoutMs: 0 })).rooms.length, 0);
+  manager.configure(configuration()); observations = 0;
+  assert.equal((await manager.watch({ timeoutMs: 0 })).rooms[0].taskCount, 2);
+  assert.equal(observations, 1, 'An untracked scope does not retain an observation after reconfiguration.');
+  assert.equal(manager.listeners.size, 0); assert.equal(service.rooms.listeners.size, 0);
+});
+
+test('cached delegate observations invalidate on cross-host commits and in-memory emergency publications', async t => {
+  const { manager, service, room, configuration, roomPeer } = fixture(t);
+  manager.configure(configuration()); const first = await manager.watch({ timeoutMs: 0 }), peer = roomPeer();
+  const pending = manager.watch({ cursor: first.cursor, timeoutMs: 2000 });
+  peer.postMessage(room.id, { author: 'Human', body: 'Fresh cross-host project guidance.' });
+  const updated = await pending;
+  assert.equal(updated.reason, 'changed'); assert.ok(updated.rooms[0].instructionRevision > first.rooms[0].instructionRevision);
+  const saved = service.rooms.metadata(room.id), emergency = structuredClone(saved);
+  emergency.status = 'failed'; emergency.revision++; emergency.error = 'Retained emergency room failure.';
+  emergency.tasks[0].status = 'failed'; emergency.callsUsed = 1;
+  const databaseToken = service.rooms.store.changeToken();
+  const waiting = manager.watch({ cursor: updated.cursor, timeoutMs: 2000 });
+  try {
+    service.rooms.emergency.set(room.id, emergency); service.rooms.publish(emergency);
+    const failed = await waiting;
+    assert.equal(service.rooms.store.changeToken(), databaseToken, 'Emergency publication does not need a durable database write.');
+    assert.equal(failed.reason, 'changed'); assert.equal(failed.rooms[0].status, 'failed');
+    assert.equal(failed.rooms[0].failedTasks, 1); assert.equal(failed.rooms[0].error, emergency.error);
+    assert.equal(manager.listeners.size, 0); assert.equal(service.rooms.listeners.size, 0);
+  } finally { service.rooms.emergency.delete(room.id); }
+});
+
+test('an idle observation cache still recovers an owner that exits without another database write', { timeout: 7000 }, async t => {
+  const { manager, service, room, configuration } = fixture(t);
+  const owner = spawn(process.execPath, ['-e', 'process.on("message",()=>process.exit(0));process.send("ready");'], {
+    cwd: service.config.workspaceRoot, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  const exited = once(owner, 'exit');
+  t.after(() => { if (owner.exitCode === null && owner.signalCode === null) owner.kill(); });
+  await once(owner, 'message', { signal: t.signal });
+  service.rooms.store.mutate(room.id, value => { value.status = 'running'; value.tasks[0].status = 'running'; }, { claim: { id: 'exiting-owner', pid: owner.pid } });
+  manager.configure(configuration()); const initial = await manager.watch({ timeoutMs: 0 });
+  assert.equal(initial.rooms[0].status, 'running'); const unchanged = service.rooms.changeToken();
+  owner.send('exit'); await exited;
+  assert.equal(service.rooms.changeToken(), unchanged, 'The owner can disappear without a room publication or SQLite write.');
+  const recovered = await manager.watch({ cursor: initial.cursor, timeoutMs: 3000 });
+  assert.equal(recovered.reason, 'changed'); assert.equal(recovered.rooms[0].status, 'failed');
+  assert.match(recovered.rooms[0].error, /owning process exited/); assert.equal(recovered.rooms[0].failedTasks, 1);
+  assert.equal(manager.listeners.size, 0); assert.equal(service.rooms.listeners.size, 0);
+});
+
+test('an unavailable cache token falls back to authoritative emergency observations instead of stale cached metadata', async t => {
+  const { manager, service, room, configuration } = fixture(t);
+  manager.configure(configuration()); const initial = await manager.watch({ timeoutMs: 0 });
+  const emergency = service.rooms.metadata(room.id);
+  emergency.status = 'failed'; emergency.revision++; emergency.error = 'Fresh emergency failure while the token cannot be read.';
+  emergency.tasks[0].status = 'failed';
+  service.rooms.emergency.set(room.id, emergency); service.rooms.publish(emergency);
+  const changeToken = service.rooms.changeToken;
+  service.rooms.changeToken = () => { throw new Error('The cheap token read is temporarily unavailable.'); };
+  try {
+    const fresh = await manager.watch({ cursor: initial.cursor, timeoutMs: 0 });
+    assert.equal(fresh.reason, 'changed'); assert.equal(fresh.rooms[0].status, 'failed');
+    assert.equal(fresh.rooms[0].failedTasks, 1); assert.equal(fresh.rooms[0].error, emergency.error);
+  } finally { service.rooms.changeToken = changeToken; service.rooms.emergency.delete(room.id); }
+  assert.equal(manager.listeners.size, 0); assert.equal(service.rooms.listeners.size, 0);
 });

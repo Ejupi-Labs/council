@@ -487,26 +487,31 @@ export class RoomManager {
       context: sharedContext ?? this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, members.map(member => member.agent)) };
   }
   private context(room: RoomRecord): string {
-    const history: RoomMessage[] = [];
-    let cursor: number | undefined;
-    do {
-      const page = this.store.messagePage(room.id, 100, cursor);
-      history.push(...page.messages); cursor = page.nextCursor ?? undefined;
-      if (page.nextCursor === null) break;
-    } while (true);
-    const sections = [JSON.stringify({ roomBrief: room.brief }), ...room.tasks.map(task => {
+    const sections: string[] = [];
+    let length = 0;
+    const append = (section: string): void => {
+      const required = length + (sections.length ? 1 : 0) + section.length;
+      if (room.contextLimit !== null && required > room.contextLimit) throw new Error(`Room context requires at least ${required} characters, exceeding the configured context budget ${room.contextLimit}; increase the context budget or use full context.`);
+      sections.push(section); length = required;
+    };
+    append(JSON.stringify({ roomBrief: room.brief }));
+    for (const task of room.tasks) {
       const run = task.runId ? this.service.getRun(task.runId) : undefined;
       const workspaces = task.workspaces ?? run?.workspaces ?? (run?.input.permission === 'read' ? [] : undefined);
-      return JSON.stringify({ task: task.id, brief: task.brief, status: task.status, dependsOn: task.dependsOn, runId: task.runId,
+      append(JSON.stringify({ task: task.id, brief: task.brief, status: task.status, dependsOn: task.dependsOn, runId: task.runId,
         workflowRecordAvailable: task.runId ? Boolean(run) : undefined,
         fullResultResource: run ? `council://runs/${run.id}` : undefined, workspaces,
         workspaceEvidence: !task.runId ? undefined : workspaces === undefined ? 'Workspace metadata is unavailable; do not assume prerequisite changes are present.'
-          : workspaces.length ? 'Retained export metadata; inspect paths to verify current access and contents.' : 'The workflow recorded no retained worktrees.' });
-    }),
-    ...history.map(value => JSON.stringify({ author: value.author, kind: value.kind, body: value.body, runId: value.runId }))];
-    const context = sections.join('\n');
-    if (room.contextLimit !== null && context.length > room.contextLimit) throw new Error(`Room context requires ${context.length} characters, exceeding the configured context budget ${room.contextLimit}; increase the context budget or use full context.`);
-    return context;
+          : workspaces.length ? 'Retained export metadata; inspect paths to verify current access and contents.' : 'The workflow recorded no retained worktrees.' }));
+    }
+    let cursor: number | undefined;
+    do {
+      const page = this.store.messagePage(room.id, 100, cursor);
+      for (const value of page.messages) append(JSON.stringify({ author: value.author, kind: value.kind, body: value.body, runId: value.runId }));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    } while (true);
+    return sections.join('\n');
   }
   private taskWorkspaces(task: RoomTask): WorkspaceArtifact[] | undefined {
     if (task.workspaces !== undefined) return task.workspaces;

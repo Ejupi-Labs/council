@@ -17,7 +17,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.3.0-dev.2.tgz
+npm install --global ./council-ai-plugin-1.3.0-dev.3.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```

@@ -102,6 +102,7 @@ export class ManagedProcess extends EventEmitter {
     pid;
     supervisor;
     vendorPid;
+    launchFailed = false;
     outcome;
     stopping = false;
     stoppingAt = 0;
@@ -128,8 +129,10 @@ export class ManagedProcess extends EventEmitter {
             }
             if (value.type === 'closed')
                 this.outcome = { code: typeof value.code === 'number' ? value.code : null, signal: typeof value.signal === 'string' ? value.signal : null, cleanupFailed: value.cleanupFailed === true };
-            if (value.type === 'launch_error')
+            if (value.type === 'launch_error') {
+                this.launchFailed = true;
                 this.emit('error', new Error('Unable to start the configured agent executable.'));
+            }
         });
         this.supervisor.once('error', () => this.emit('error', new Error('Unable to start the agent supervisor.')));
         this.supervisor.once('close', (code, signal) => {
@@ -141,8 +144,11 @@ export class ManagedProcess extends EventEmitter {
                 return;
             }
             // A supervisor's own successful exit is not evidence of vendor completion.
+            // Without either startup PID or final IPC, its vendor may have started;
+            // cleaning the known supervisor cannot establish vendor quiescence.
+            const unknownStartup = !this.outcome && !this.vendorPid && !this.launchFailed && this.pid !== undefined;
             void this.forceKill().then(() => {
-                this.emit('error', new Error('Agent supervisor exited without a verified vendor outcome.'));
+                this.emit('error', unknownStartup ? new ProcessCleanupError() : new Error('Agent supervisor exited without a verified vendor outcome.'));
                 this.emit('close', code && code !== 0 ? code : 1, signal);
             }, () => {
                 this.emit('error', new ProcessCleanupError());

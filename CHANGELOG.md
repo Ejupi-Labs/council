@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reuse unchanged compact room observations in idle executive waits while preserving cross-host updates, emergency evidence, fresh mandates/reports and periodic owner recovery.
+- Reject explicit room-context budget overflow incrementally before reading later history pages, retaining exact complete context whenever it fits.
+- Classify lost supervisor startup evidence as unverified process cleanup while preserving verified no-start failures and existing kill order. Canonicalize the remaining Windows CI-helper fixture paths.
+
 - Page private-thread and participant discovery with exact scope-bound cursors, complete metadata and bounded reads; expose matching MCP and authenticated HTTP routes while retaining existing list APIs.
 - Check newer room messages explicitly after paging reaches the end, preserving loaded evidence, scroll position and drafts. Retain safe failed-voter diagnostics and document read-only review of a writer's isolated checkout.
 - Validate snapshot manifests against a strict published schema before database reads; reject duplicate fields, invalid UTF-8, excessive JSON graphs and files growing beyond the 64 KiB read bound.

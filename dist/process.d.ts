@@ -23,6 +23,7 @@ export declare class ManagedProcess extends EventEmitter {
     readonly pid: number | undefined;
     private readonly supervisor;
     private vendorPid?;
+    private launchFailed;
     private outcome?;
     private stopping;
     private stoppingAt;

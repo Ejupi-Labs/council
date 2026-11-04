@@ -56,6 +56,7 @@ export class DelegationManager {
   private readonly shutdown = new AbortController();
   private readonly listeners = new Set<() => void>();
   private readonly roomRecoveryAt = new Map<string, number>();
+  private readonly roomObservations = new Map<string, { token: string; room: DelegationRoom }>();
   private closed = false;
 
   constructor(private readonly service: CouncilService) {
@@ -163,6 +164,7 @@ export class DelegationManager {
     });
     const tracked = new Set(saved.roomIds);
     for (const id of this.roomRecoveryAt.keys()) if (!tracked.has(id)) this.roomRecoveryAt.delete(id);
+    for (const id of this.roomObservations.keys()) if (!tracked.has(id)) this.roomObservations.delete(id);
     this.notify(); return saved;
   }
 
@@ -284,6 +286,7 @@ export class DelegationManager {
       openQuestions: Number(this.db.prepare("SELECT COUNT(*) AS count FROM delegation_reports WHERE resolved=0 AND kind IN ('decision','blocked')").get()!.count) }), false);
     const tracked = new Set(configuration.roomIds);
     for (const id of this.roomRecoveryAt.keys()) if (!tracked.has(id)) this.roomRecoveryAt.delete(id);
+    for (const id of this.roomObservations.keys()) if (!tracked.has(id)) this.roomObservations.delete(id);
     const rooms: DelegationRoom[] = configuration.roomIds.map(id => {
       try {
         const checkedAt = this.roomRecoveryAt.get(id), now = performance.now();
@@ -291,12 +294,22 @@ export class DelegationManager {
           this.service.rooms.recover(id);
           this.roomRecoveryAt.set(id, now);
         }
+        // Recovery must run even when no database write changes the token: a
+        // foreign owner can exit while its persisted room stays unchanged.
+        let token: string | undefined;
+        try { token = this.service.rooms.changeToken(); }
+        catch { this.roomObservations.delete(id); }
+        const cached = this.roomObservations.get(id);
+        if (token !== undefined && cached?.token === token) return { ...cached.room };
         const room = this.service.rooms.observation(id);
-        return { id: room.id, title: room.title, revision: room.revision, instructionRevision: room.instructionRevision ?? 0, status: room.status,
+        const observed: DelegationRoom = { id: room.id, title: room.title, revision: room.revision, instructionRevision: room.instructionRevision ?? 0, status: room.status,
           taskCount: room.taskCount, completedTasks: room.completedTasks, failedTasks: room.failedTasks,
           callsUsed: room.callsUsed, maxCalls: room.maxCalls, ...(room.error ? { error: room.error } : {}),
           ...(room.pauseRequested ? { pauseRequested: true } : {}), actionable: room.status !== 'discussing' && room.status !== 'running' };
+        if (token !== undefined) this.roomObservations.set(id, { token, room: observed });
+        return { ...observed };
       } catch (error) {
+        this.roomObservations.delete(id);
         if (!(error instanceof Error) || !/not found \(404\)/i.test(error.message)) throw error;
         return { id, revision: 0, instructionRevision: 0, missing: true, error: error.message, actionable: true };
       }
@@ -360,6 +373,6 @@ export class DelegationManager {
     if (this.closed) return;
     this.closed = true;
     this.shutdown.abort(new DOMException('Delegation manager is shutting down.', 'AbortError'));
-    this.listeners.clear(); this.roomRecoveryAt.clear(); this.db.close();
+    this.listeners.clear(); this.roomRecoveryAt.clear(); this.roomObservations.clear(); this.db.close();
   }
 }
