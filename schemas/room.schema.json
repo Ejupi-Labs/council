@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council room",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "brief": {
+      "type": "string",
+      "minLength": 1
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "lead",
+              "worker",
+              "advisor"
+            ],
+            "default": "worker"
+          },
+          "weight": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "advisor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "advisorMaxRequests": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dont-kill-an-ant-with-a-bazooka",
+                "council-implementation-review",
+                "council-independent-perspectives",
+                "council-advisor"
+              ]
+            }
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "default": "read"
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "required": [
+          "title",
+          "brief"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "maxCalls": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "autoExecute": {
+      "type": "boolean",
+      "default": true
+    },
+    "contextLimit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "default": null
+    }
+  },
+  "required": [
+    "title",
+    "brief",
+    "members"
+  ],
+  "additionalProperties": false
+}

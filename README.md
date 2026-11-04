@@ -56,6 +56,20 @@ Council never reads, copies or rewrites vendor login files. Each agent uses its 
 
 Antigravity uses `agy_acp_server.exe` on Windows and `agy_acp_server.par` on macOS/Linux. Linux adds the registry's `--uid=` argument. Configure `ANTIGRAVITY_HARNESS_PATH` and authentication according to the runtime's instructions. Its ACP runtime is separate from the IDE and `agy` CLI.
 
+The installed `agy` CLI can also be used directly with an explicit native transport. The configuration in this checkout selects it; the schema defaults retain ACP compatibility:
+
+```json
+{
+  "agents": {
+    "antigravity": { "profile": "antigravity", "transport": "native" }
+  }
+}
+```
+
+Native Antigravity sends one stdin NDJSON turn using the [documented CLI protocol](https://antigravity.google/docs/cli/headless/), with `plan` mode for read tasks or `accept-edits` for isolated write tasks and a requested terminal sandbox. Native settings and platform sandbox availability still apply. Council never passes automatic approval flags. Permission notices can accompany a successful CLI exit, so any non-whitespace stderr diagnostic conservatively fails this transport instead of certifying a possibly incomplete result. Assistant deltas, conversation identity and the final result must agree; cut-off or contradictory replies fail.
+
+On Windows, Council recognizes Junie's standard `.local/bin/junie.bat` installation layout, validates its bounded version pointer and launches the matching `junie.exe` directly. It does not execute the batch file. Vendor authentication is still handled through the native CLI.
+
 Use a custom executable, interpreter and argument array when needed:
 
 ```json
@@ -79,7 +93,108 @@ Commands are spawned without a shell. Recognized npm launchers are resolved to t
 
 The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council.
 
-## Collaboration modes
+## Project rooms and server-side waiting
+
+Start the local project-manager interface with:
+
+```sh
+node dist/cli.js ui --workspace /absolute/path/to/project
+```
+
+Open its printed loopback URL. `--backend mock` provides an explicitly labelled offline simulation. The interface runs locally, requires its generated access token, and keeps room state and full chat history in `.council/rooms.sqlite`. Stop the foreground server with Ctrl+C. `council_ui` opens the same interface from a connected MCP session.
+
+Create a room, select lead/worker/advisor profiles, and define tasks with read/write permissions and dependencies. Each voting member submits a proposal; an explicit weighted majority approves the plan. The highest-weight approving proposal supplies assignments, with the lead and then member order breaking assignment ties. Disagreements and alternative assignments remain in history. Advisor-only members neither vote nor execute tasks. Weights express the project manager's decision policy; they are not automatic intelligence scores or proof of correctness.
+
+An omitted member weight inherits the profile's configured `authority`, or 1 when none is configured. A new project-manager message invalidates a ready approval. If instructions change during discussion or execution, already-dispatched workflows drain under their original instructions, including calls waiting for an execution slot; their evidence stays available and further room tasks require a fresh discussion. Use Stop to cancel admitted work. Completed tasks and retained writes are never replayed automatically. Failed or cancelled rooms retain their history and artifacts; create a new room for replacement work.
+
+Weights accept any positive finite number, including scientific notation. Majority checks use exact decimal arithmetic, so rounding and overflowing totals cannot turn a tie into approval. Totals that exceed the numeric range are retained as scientific strings. Unsent message and task drafts stay separate for each room within the current tab; switching rooms does not send or move a draft.
+
+Each room records whether it belongs to the native, ACPX or mock backend. Another backend can inspect its history, but cannot start or execute it. The UI labels both the current server and the recorded room backend so an offline simulation cannot be mistaken for live agent work.
+
+Approved tasks execute automatically by default. The server advances discussion rounds and dependent tasks without asking an orchestrating model to poll. Write tasks retain isolated worktrees for review and never merge automatically. Invalid ballots, failed calls or an unresolved vote require attention rather than authorizing partial work as success.
+
+Context is complete by default. Room history, task briefs and peer handoffs are not shortened to save tokens. Context and call budgets can be chosen explicitly; an insufficient context budget fails before dispatch instead of silently omitting evidence. UI task cards and recent-history windows are labelled previews, with full history available separately. Model and provider context limits remain native to the selected runtime. Transport and persistence errors are reported explicitly.
+
+Debate rounds retain every earlier round. Later stages receive the relevant advisor request and answer alongside the worker's result, even when the worker omits those details. Explicit continuations preserve the previous task, project context, all step outcomes and retained artifact metadata, together with the new caller context. Shared step evidence appears once per handoff.
+
+For direct delegation, start with `council_run` and then use one `council_wait`, or run `council wait <id>` from the CLI. The server holds the wait until completion or the chosen deadline. It makes no additional model calls while idle. Council controls its own scheduler; the host controls when its orchestrating model runs and how long a tool request may remain open. For a manually registered Codex MCP server, the [host configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) supports a longer tool deadline:
+
+```toml
+[mcp_servers.council]
+# Keep the existing command and args.
+tool_timeout_sec = 660
+```
+
+This setting is an example for a ten-minute Council wait. It is not written to your host configuration automatically. If the host cannot hold a long request, use the local UI to observe autonomous work instead of spending model turns on status polling.
+
+`council_wait` returns the complete selected answer and every step's status metadata from a consistent run snapshot. Step bodies stay in the full run resource to avoid repeating their tokens. `council wait` exits nonzero for failed, cancelled or still-pending work; a wait timeout leaves the workflow running.
+
+## Model profiles
+
+Profiles may name an exact `model`, supported `effort`, and a default `authority` for room setup. Room settings and `agentSettings` override model/effort for that work without changing the profile defaults. Multiple aliases can target the same harness with different models. Model IDs are passed unchanged; Council does not substitute another model after a failure.
+
+## Billing, limits and appropriately sized models
+
+Open **Agents & billing** in the dashboard to record each alias's billing mode (`api`, `subscription`, `local` or `unknown`), plan, optional token prices and allowance windows. Windows have user-defined labels and units; Council does not assume that a subscription has a particular weekly limit. Enter an observation time and either a reset time or validity bound. Expired, future or unbounded observations remain visible as historical data and become unknown for routing. A passed reset time never implies replenishment. Blank quantities and prices mean unknown, including API accounts with no usage report.
+
+Link aliases with the same **shared account key** when they draw from the same allowance. Their quota is stored once, while skills and model-routing preferences stay separate per alias. Shared-account edits invalidate linked views' revisions, so an obsolete form cannot overwrite a newer report. Account links are explicit; matching harness names do not establish account identity. Billing state stays in `.council/billing.sqlite`, outside Git and release packages.
+
+Provider observations can be imported through `council_billing_import` or `council billing-import --agent <alias> --input-file <snapshot.json>`. Use a normalized report from an available host connector or another trusted source and verify the alias-to-account link. Council does not read vendor credentials, scrape undocumented account APIs or pretend that every provider exposes live limits. The [billing format](docs/billing-format.md) describes manual edits, reported observations and freshness. Configured prices are reference rates, not measured charges. Council does not decrement reported subscription allowance from an invented tokens-per-call estimate.
+
+For economical model selection, configure each alias's tier, capabilities and comparative cost/quality ranks in that dialog. Lower cost rank and higher quality rank express your preferences; they are not prices or automatic intelligence measurements. Pin the intended model in the alias's project configuration, or supply an explicit per-run model. Multiple aliases can use the same harness with different exact models. Unpinned native defaults produce a routing warning because they can change outside Council.
+
+```sh
+council billing --agent quick
+council billing-set --agent quick --input-file examples/billing-routing-small.json
+council route-plan --task "Correct the known typo and verify it" --task-class routine --requires code --write
+council route --task "Correct the known typo and verify it" --task-class routine --requires code --write
+```
+
+The `quick` alias must already exist in `council.config.json` with a model available to you. The [small-profile example](examples/billing-routing-small.json) contains preferences, with billing left unknown. `route-plan` makes no model or classifier calls. `route` selects, records its reasons, starts the chosen workflow and waits in the server. The four collaboration presets are `direct`, `review`, `parallel` and `council`; their call costs come from the actual workflow plan. The room creation helper previews a team and applies it only when requested; rooms retain their existing weighted discussion and task-execution behavior.
+
+Routine economy routing prefers suitable configured small profiles. Task class comes from the caller's assessment of uncertainty, consequences and verification needs, rather than task length or model-name heuristics. Known current exhaustion excludes an account; unknown allowance is labelled and is never presented as verified capacity. Larger-tier fallback requires `--allow-escalation` (or `allowEscalation: true`). Explicit aliases, models and effort remain authoritative. Missing profiles, insufficient capabilities and invalid plans fail clearly instead of silently substituting another model.
+
+## Collaboration skills
+
+The plugin ships four discoverable skills:
+
+- [Don't kill an ant with a bazooka](skills/dont-kill-an-ant-with-a-bazooka/SKILL.md): choose proportionate models, effort and collaboration, then wait without polling.
+- [Implementation and review](skills/council-implementation-review/SKILL.md): implementation, independent read-only review and revision.
+- [Independent perspectives](skills/council-independent-perspectives/SKILL.md): preserve independent analyses, evidence and material disagreement.
+- [Focused advisor](skills/council-advisor/SKILL.md): resolve a concrete uncertainty with read-only cross-model advice.
+
+Assign skills in **Agents & billing**, through an agent profile's `skills` array, or per run with `agentSettings[alias].skills` / CLI `--skills`. Room members also accept explicit skill arrays. A local `null` assignment inherits project defaults; `[]` disables inherited skills. Only the selected skills' short worker guidance is injected into that agent's prompt. Host orchestration instructions are not injected into workers, and skills never expand task permissions or permit recursive delegation. Effective assignments are snapshotted in run input. Routing and configured billing observations are recorded atomically with admission; billing observations are not charge receipts.
+
+The economy skill chooses Council workers. It cannot change the model already running the host conversation, the host's scheduling policy or the provider's own context and usage rules.
+
+## Cross-model advisors and explicit reasoning effort
+
+An independent consultation is available through `council_advise` or:
+
+```sh
+council advise --requester junie --advisor codex --model gpt-6.1-sol --effort high --question "Review this decision and explain its risks."
+```
+
+A worker may request advice during a workflow when its advisor mapping is enabled:
+
+```json
+{
+  "mode": "delegate",
+  "agents": ["junie"],
+  "permission": "read",
+  "task": "Investigate the issue; ask the configured advisor when an independent opinion is needed.",
+  "agentSettings": {"codex": {"model": "gpt-6.1-sol", "effort": "high"}},
+  "advisors": {"junie": {"agent": "codex", "maxRequests": 1}}
+}
+```
+
+The worker yields a complete `{"council_advisor_request":{"question":"...","context":"..."}}` answer. Council releases its call slot, invokes the advisor read-only, and resumes the worker in the same workspace with the full advice. The request quota is configurable; each possible consultation reserves two additional calls for advice and resumption. Advisors cannot recurse, permission is never expanded, and a failed consultation cannot turn into a successful task. The UI exposes the advisor and its request quota per member.
+
+Cancelling a blocking `council_advise` request also cancels the read-only job it just created. A normal wait timeout returns its run ID and leaves that job available for a later wait. Cancelling `council_wait` stops only that wait.
+
+Effort is sent through native Codex, Claude, Antigravity or Junie's supported CLI options. Unsupported harness/effort combinations fail before dispatch. Higher effort can use more reasoning tokens; select it deliberately rather than treating it as a voting weight. Current [Codex configuration guidance](https://learn.chatgpt.com/docs/config-file/config-reference) describes model-dependent reasoning levels.
+
+## Workflow modes
 
 | Mode | Flow | Maximum calls |
 | --- | --- | --- |
@@ -101,7 +216,7 @@ council run --mode pipeline --agents codex,claude --task "Produce a design, then
 
 `plan` does not invoke agents. Actual runs immediately print their ID to stderr, then print the terminal result as JSON to stdout. This keeps stdout machine-readable and provides a cancellation handle during long work. `--task-file` and `--context-file` avoid shell quoting and support longer briefs. Conflicting and unsupported arguments are rejected.
 
-Independent assignments are optional. Without them, parallel participants address the same brief, which is useful for comparing alternative solutions. Handoffs reserve context for peer results, so a full project note cannot hide prior evidence.
+Independent assignments are optional. Without them, parallel participants address the same brief, which is useful for comparing alternative solutions. Handoffs preserve full project and peer evidence by default. Configured advisor quotas add their reserved consultation/resumption calls to the mode's ordinary call bound.
 
 ## Code changes and artifact review
 
@@ -190,6 +305,11 @@ Status, history and event summaries use indexed bounded metadata. Full transcrip
 | --- | --- |
 | `council_agents`, `council_plan` | Runtime inspection and planning |
 | `council_run`, `council_status`, `council_runs`, `council_cancel` | Workflow lifecycle |
+| `council_wait`, `council_advise` | Server-side waiting and independent cross-harness advice |
+| `council_billing`, `council_billing_update`, `council_billing_import` | Local billing, shared-account quotas and explicit observations |
+| `council_skills`, `council_route_plan`, `council_route_run` | Assignable collaboration guidance and deterministic cost-aware routing |
+| `council_ui`, `council_rooms`, `council_room_create`, `council_room_status` | Local project rooms and dashboard |
+| `council_room_message`, `council_room_task`, `council_room_start`, `council_room_execute`, `council_room_cancel`, `council_room_history` | Project-manager instructions, autonomous task execution and complete history |
 | `council_continue`, `council_patches`, `council_cleanup` | Explicit handoff, patch refresh and reviewed cleanup |
 | `council_events` | Compact events with an incremental cursor |
 | `council_run_page` | Paginated run summaries with an opaque cursor |
@@ -198,9 +318,11 @@ Status, history and event summaries use indexed bounded metadata. Full transcrip
 | `council_reserve`, `council_release`, `council_leases` | Advisory file ownership |
 | `council_context` | Shared project notes |
 
-Status waits are bounded to 30 seconds. Run summaries cap serialized data at 64 KiB and mark omitted entries; retained artifact paths remain complete. `includeResults: true` or `council://runs/{id}` retrieves the full record. `council://modes` describes modes and workspace bounds. The stdio server implements the tools/resources MCP subset, validated against the official SDK client; HTTP, sampling and interactive elicitation are not offered.
+Status waits are bounded to 30 seconds. Run summaries cap serialized data at 64 KiB and mark omitted entries; retained artifact paths remain complete. `includeResults: true` or `council://runs/{id}` retrieves the full record. `council://modes` describes modes and workspace bounds. The stdio server implements the tools/resources MCP subset, validated against the official SDK client; MCP over HTTP, sampling and interactive elicitation are not offered.
 
-Default bounds: 3 simultaneous calls per workspace, 16 calls per run, 180 seconds per call, 128 KiB final output per call, 32,000 task characters and 64,000 context characters. Configuration limits total retained call output to 2 MiB before JSON encoding. MCP frames, nesting, node counts, concurrent requests and queued responses are bounded independently. Stderr and protocol traffic have separate caps.
+Default runtime budgets: 3 simultaneous calls per workspace, 16 calls per run, 180 seconds per call and 128 KiB final output per call. Task text and shared context have no built-in character ceiling; full context is the default. An explicit `contextLimit` is checked rather than used to truncate content. Configuration, MCP framing, structural validation, output retention and protocol traffic retain their separately reported resource guards. Exceeding a configured output budget fails the task instead of reporting a shortened answer as completed.
+
+Round counts and call budgets accept positive safe integers rather than fixed workflow caps. Plans reserve the exact worst-case call count before dispatch, including configured advisor requests, without allocating a stage entry for every debate round. Peer messages and project notes also preserve complete text up to their explicit transport and stored-record byte guards; the former 32 KiB/64 KiB text caps do not apply.
 
 ## Verification and releases
 

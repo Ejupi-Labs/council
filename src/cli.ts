@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -10,6 +10,8 @@ import { CouncilService } from './service.js';
 import { renderRun } from './report.js';
 import { VERSION } from './version.js';
 import type { RunRecord } from './types.js';
+import { collaborationSkills } from './skills.js';
+import type { RoutingInput } from './routing-types.js';
 
 const HELP = `Council — collaboration for coding agents
 
@@ -24,7 +26,7 @@ Commands:
   connection     Print absolute MCP connection settings for this project
   plan           Preview workflow stages and call bounds without model calls
   run            Execute a workflow; print its ID to stderr and JSON result to stdout
-  continue <id>  Start a new task with a previous terminal run as bounded context
+  continue <id>  Start a new task with complete evidence from a previous terminal run
   runs           List recent runs
   show <id>      Read a saved run
   events <id>    Read ordered events; --after <cursor> and --limit <count>
@@ -34,6 +36,15 @@ Commands:
   patches <id>   Refresh patch artifacts for terminal work without calling agents
   cleanup <id>   Remove managed worktrees after --reviewed; --discard permits dirty work
   mcp            Serve MCP over stdio
+  ui             Serve the local project room dashboard; prints its private loopback URL
+  wait <id>      Block inside Council until a run settles; no model-driven polling
+  advise         Ask a configured advisor with --advisor and --question
+  skills         List assignable collaboration skills; no model calls
+  billing        Read local billing and limits; optionally --agent <alias>
+  billing-set    Save manual metadata with --agent and --input-file
+  billing-import Import a reported observation with --agent and --input-file
+  route-plan     Preview a right-sized team with --task and --task-class
+  route          Start a routed workflow and wait for its result
   demo           Run all six modes with local mock agents; zero model calls
 
 Options:
@@ -46,8 +57,24 @@ Options:
   --assignments-file <p> JSON map of independent parallel tasks
   --judge <name>        Synthesis agent
   --model <id>           Explicit model for a single participant, without saving settings
-  --rounds <n>           Debate rounds, 1 to 3
+  --effort <level>       Explicit reasoning effort for one participant (harness support varies)
+  --advisor <name>       Advisor alias for a single worker, or the advise command
+  --question <text>      Question for the advise command
+  --requester <name>     Requester label for advise (default: host)
+  --wait-ms <n>          Budget for wait, 0 to 600000 ms (default: 600000)
+  --port <n>             Local UI port (default: an available loopback port)
+  --rounds <n>           Debate rounds within your configured call budget
   --max-calls <n>        Per-run bound within project limits
+  --agent <alias>       Agent for billing inspection or updates
+  --input-file <path>   Billing settings/snapshot or complete routing JSON
+  --revision <n>        Expected billing revision for a conditional update
+  --task-class <name>   routine | standard | complex (routing)
+  --strategy <name>     economy | balanced | quality (routing default: economy)
+  --collaboration <n>   direct | review | parallel | council (default: direct)
+  --requires <names>    Comma-separated required configured capabilities
+  --participants <n>    Team size for routed collaboration
+  --allow-escalation    Explicitly allow a larger model tier when necessary
+  --skills <ids>        Comma-separated bundled collaboration skill IDs
   --write               Enable isolated worktrees for requested edits
   --json                JSON output (default; export emits Markdown)
   --summary             Use lightweight summaries for runs/events
@@ -61,7 +88,6 @@ Read policy is not an OS sandbox. Native agents retain their own accounts and se
 
 function print(value: unknown) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function textFile(filename: string): string {
-  if (statSync(filename).size > 1_048_576) throw new Error('Input file exceeds 1 MiB.');
   return readFileSync(filename, 'utf8').replace(/^\uFEFF/, '');
 }
 
@@ -70,8 +96,12 @@ async function main(): Promise<void> {
     workspace: { type: 'string' }, backend: { type: 'string' }, mode: { type: 'string' },
     agents: { type: 'string' }, task: { type: 'string' }, 'task-file': { type: 'string' },
     'context-file': { type: 'string' }, judge: { type: 'string' }, rounds: { type: 'string' },
-    'assignments-file': { type: 'string' }, model: { type: 'string' },
+    'assignments-file': { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, advisor: { type: 'string' },
+    question: { type: 'string' }, requester: { type: 'string' }, 'wait-ms': { type: 'string' }, port: { type: 'string' },
     'max-calls': { type: 'string' }, write: { type: 'boolean' }, json: { type: 'boolean' },
+    agent: { type: 'string' }, 'input-file': { type: 'string' }, revision: { type: 'string' },
+    'task-class': { type: 'string' }, strategy: { type: 'string' }, collaboration: { type: 'string' },
+    requires: { type: 'string' }, participants: { type: 'string' }, 'allow-escalation': { type: 'boolean' }, skills: { type: 'string' },
     after: { type: 'string' }, limit: { type: 'string' }, output: { type: 'string' },
     reviewed: { type: 'boolean' }, discard: { type: 'boolean' },
     integrity: { type: 'boolean' }, summary: { type: 'boolean' }, cursor: { type: 'string' },
@@ -81,22 +111,32 @@ async function main(): Promise<void> {
   if (values.version) { print({ name: 'council', version: VERSION }); return; }
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { process.stdout.write(HELP); return; }
-  const commands = ['init', 'doctor', 'health', 'backup', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo'];
+  const commands = ['init', 'doctor', 'health', 'backup', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route'];
   if (!commands.includes(command)) throw new Error(`Unknown command: ${command}`);
-  const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup'].includes(command);
+  const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup', 'wait'].includes(command);
   if (positionals.length !== (takesId ? 2 : 1)) throw new Error(takesId ? `${command} requires exactly one run ID.` : `${command} accepts no positional arguments.`);
   const id = positionals[1];
   if (takesId && !/^[a-f0-9-]{36}$/i.test(id!)) throw new Error('Supply a valid Council run ID.');
   if (values.task !== undefined && values['task-file'] !== undefined) throw new Error('Choose --task or --task-file, not both.');
+  if (values.agent !== undefined && !values.agent.trim()) throw new Error('--agent must contain a configured alias.');
+  for (const option of ['task-file', 'context-file', 'assignments-file', 'input-file'] as const) {
+    if (values[option] === '') throw new Error(`--${option} must contain a filename.`);
+  }
   const common = ['workspace', 'backend', 'json', 'help', 'version'];
-  const workflowOptions = ['mode', 'agents', 'task', 'task-file', 'context-file', 'assignments-file', 'judge', 'rounds', 'max-calls', 'write', 'model'];
+  const workflowOptions = ['mode', 'agents', 'task', 'task-file', 'context-file', 'assignments-file', 'judge', 'rounds', 'max-calls', 'write', 'model', 'effort', 'advisor', 'skills'];
   const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit', 'summary'] : []), ...(command === 'runs' ? ['limit', 'summary', 'cursor'] : []), ...(command === 'cancel' ? ['summary'] : []), ...(command === 'health' ? ['integrity'] : []), ...(command === 'prune' ? ['before', 'keep-latest', 'execute'] : []), ...(['export', 'backup'].includes(command) ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
+  for (const option of command === 'ui' ? ['port'] : command === 'wait' ? ['wait-ms'] : command === 'advise' ? ['advisor', 'requester', 'question', 'model', 'effort'] : []) permitted.add(option);
+  if (command === 'billing') permitted.add('agent');
+  if (['billing-set', 'billing-import'].includes(command)) for (const option of ['agent', 'input-file', 'revision']) permitted.add(option);
+  const routeOptions = ['input-file', 'task', 'task-file', 'context-file', 'agents', 'model', 'effort', 'skills', 'task-class', 'strategy', 'collaboration', 'requires', 'participants', 'allow-escalation', 'rounds', 'max-calls', 'write'];
+  if (['route', 'route-plan'].includes(command)) for (const option of routeOptions) permitted.add(option);
   for (const option of Object.keys(values)) if (!permitted.has(option)) throw new Error(`--${option} is not supported by ${command}.`);
   if (command === 'backup' && !values.output) throw new Error('Backup requires --output with a new destination filename.');
   if (command === 'prune' && !values.before) throw new Error('Prune requires --before with an explicit cutoff timestamp.');
   if (command === 'runs' && values.cursor && !values.summary) throw new Error('--cursor requires runs --summary.');
   const backend = values.backend === undefined ? undefined : parseBackend(values.backend);
   const workspace = resolve(values.workspace ?? process.env.COUNCIL_WORKSPACE ?? process.cwd());
+  if (command === 'skills') { print({ skills: collaborationSkills() }); return; }
   if (command === 'init') { print({ created: initConfig(workspace, backend) }); return; }
   if (command === 'connection') {
     loadConfig(workspace);
@@ -107,6 +147,17 @@ async function main(): Promise<void> {
     ? loadConfig(mkdtempSync(join(tmpdir(), 'council-demo-')), { backend: 'mock' })
     : loadConfig(workspace, { ...(backend ? { backend } : {}), ...(process.env.COUNCIL_BACKEND && !backend ? { backend: parseBackend(process.env.COUNCIL_BACKEND) } : {}) });
   const service = await CouncilService.open(config);
+  if (command === 'ui') {
+    const port = values.port === undefined ? 0 : Number(values.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) { await service.close(); throw new Error('UI port must be from 0 to 65535.'); }
+    try {
+      const dashboard = await service.openDashboard(port);
+      print({ ...dashboard, workspace: config.workspaceRoot, backend: config.backend });
+      const stop = () => { void service.close().catch(fail); };
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    } catch (error) { await service.close(); throw error; }
+    return;
+  }
   if (command === 'mcp') {
     const server = await serveMcp(service);
     for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { process.exitCode = signal === 'SIGINT' ? 130 : 143; void server.close().catch(fail); });
@@ -116,7 +167,58 @@ async function main(): Promise<void> {
   const operationInt = () => stopOperation('SIGINT'), operationTerm = () => stopOperation('SIGTERM');
   if (!['run', 'continue'].includes(command)) { process.once('SIGINT', operationInt); process.once('SIGTERM', operationTerm); }
   try {
-    if (command === 'doctor') print({ version: VERSION, node: process.version, backend: config.backend, workspace: config.workspaceRoot, concurrencyScope: 'workspace', agents: await service.runner.doctor(), recoveredRuns: service.recoveredRuns.map(run => run.id), note: 'Prerequisite availability does not prove authentication or model access.' });
+    if (command === 'wait') {
+      const result = await service.awaitResults([id!], Number(values['wait-ms'] ?? 600_000));
+      print(result);
+      if (result.timedOut || result.runs.some(run => run.status !== 'completed')) process.exitCode = 1;
+    }
+    else if (command === 'advise') {
+      const run = service.advise({ requester: values.requester ?? 'host', advisor: values.advisor ?? '', question: values.question ?? '',
+        ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort as any } : {}) });
+      process.stderr.write(`${JSON.stringify({ event: 'run.started', id: run.id, mode: 'advisor' })}\n`);
+      const outcome = await service.completion(run.id);
+      print(outcome);
+      if (outcome.status !== 'completed') process.exitCode = 1;
+    }
+    else if (command === 'billing') print(values.agent ? { ...service.billing.get(values.agent), availability: service.billing.availability(values.agent) } : service.billingView());
+    else if (command === 'billing-set' || command === 'billing-import') {
+      if (!values.agent?.trim() || !values['input-file']) throw new Error(`${command} requires --agent and --input-file.`);
+      const settings = readJsonFile(resolve(workspace, values['input-file']), Infinity) as any;
+      const revision = values.revision === undefined ? service.billing.get(values.agent).revision : Number(values.revision);
+      print(command === 'billing-set' ? service.billing.update(values.agent, settings, revision) : service.billing.importSnapshot(values.agent, settings, revision));
+    }
+    else if (command === 'route' || command === 'route-plan') {
+      let input: RoutingInput;
+      if (values['input-file']) {
+        if (routeOptions.some(option => option !== 'input-file' && Object.hasOwn(values, option))) throw new Error('Choose a routing --input-file or routing flags, not both.');
+        input = readJsonFile(resolve(workspace, values['input-file']), Infinity) as RoutingInput;
+      } else {
+        const agents = values.agents?.split(',').map(alias => alias.trim());
+        if ((values.model !== undefined || values.effort !== undefined) && (!agents || agents.length !== 1)) throw new Error('Explicit routing model/effort requires one alias with --agents.');
+        input = { task: values.task ?? (values['task-file'] ? textFile(resolve(workspace, values['task-file'])) : ''),
+          taskClass: values['task-class'] as RoutingInput['taskClass'], strategy: values.strategy as RoutingInput['strategy'],
+          collaboration: values.collaboration as RoutingInput['collaboration'], agents,
+          context: values['context-file'] ? textFile(resolve(workspace, values['context-file'])) : undefined,
+          permission: values.write ? 'write' : 'read', requiredCapabilities: values.requires?.split(',').map(value => value.trim()),
+          participants: values.participants === undefined ? undefined : Number(values.participants),
+          rounds: values.rounds === undefined ? undefined : Number(values.rounds), maxCalls: values['max-calls'] === undefined ? undefined : Number(values['max-calls']),
+          allowEscalation: values['allow-escalation'], skills: values.skills?.split(',').map(value => value.trim()),
+          ...((values.model !== undefined || values.effort !== undefined) ? { modelSettings: { [agents![0]!]: {
+            ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort as any } : {}),
+          } } } : {}),
+        };
+      }
+      if (command === 'route-plan') print(service.routePlan(input));
+      else {
+        const { run, selection } = service.routeRun(input);
+        process.stderr.write(`${JSON.stringify({ event: 'run.started', id: run.id, mode: run.input.mode })}\n`);
+        const { workflow: _workflow, ...receipt } = selection;
+        const completed = await service.completion(run.id);
+        print({ run: completed, selection: receipt });
+        if (completed.status !== 'completed' && !process.exitCode) process.exitCode = 1;
+      }
+    }
+    else if (command === 'doctor') print({ version: VERSION, node: process.version, backend: config.backend, workspace: config.workspaceRoot, concurrencyScope: 'workspace', agents: await service.runner.doctor(), recoveredRuns: service.recoveredRuns.map(run => run.id), note: 'Prerequisite availability does not prove authentication or model access.' });
     else if (command === 'health') { const health = service.health(values.integrity); print(health); if (health.status === 'degraded') process.exitCode = 1; }
     else if (command === 'backup') print({ destination: await service.backup(values.output!) });
     else if (command === 'prune') print({ dryRun: !values.execute, ...service.prune({ before: values.before!, keepLatest: Number(values['keep-latest'] ?? 100), dryRun: !values.execute }) });
@@ -154,20 +256,27 @@ async function main(): Promise<void> {
       const input = parseWorkflow({
         mode,
         task: values.task ?? (values['task-file'] ? textFile(resolve(workspace, values['task-file'])) : ''),
-        agents: values.agents ? values.agents.split(',').map(agent => agent.trim()) : previous?.input.agents ?? (mode === 'delegate' ? ['codex'] : ['codex', 'claude']),
+        agents: values.agents !== undefined ? values.agents.split(',').map(agent => agent.trim()) : previous?.input.agents ?? (mode === 'delegate' ? ['codex'] : ['codex', 'claude']),
         judge: values.judge ?? previous?.input.judge,
         rounds: values.rounds === undefined ? previous?.input.rounds : Number(values.rounds),
         permission: values.write ? 'write' : 'read',
         context: values['context-file'] ? textFile(resolve(workspace, values['context-file'])) : undefined,
         maxCalls: values['max-calls'] === undefined ? undefined : Number(values['max-calls']),
-        assignments: values['assignments-file'] ? readJsonFile(resolve(workspace, values['assignments-file'])) : undefined,
+        assignments: values['assignments-file'] ? readJsonFile(resolve(workspace, values['assignments-file']), Infinity) : undefined,
       });
-      if (values.model) {
+      if (values.model !== undefined || values.effort !== undefined) {
         if (input.agents.length !== 1 || (input.judge && input.judge !== input.agents[0])) throw new Error('--model requires one participant; configure per-agent models in project settings for a team.');
         const agent = input.agents[0]!;
         if (!config.agents[agent]) throw new Error('The selected agent is not configured.');
-        if (values.model.length > 200 || !values.model.trim()) throw new Error('Model must contain from 1 to 200 characters.');
-        config.agents[agent] = { ...config.agents[agent]!, model: values.model };
+        if (values.model !== undefined && (values.model.length > 200 || !values.model.trim())) throw new Error('Model must contain from 1 to 200 characters.');
+        input.agentSettings = { [agent]: { ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort as any } : {}) } };
+      }
+      if (values.advisor !== undefined) {
+        if (input.agents.length !== 1 || !values.advisor.trim()) throw new Error('--advisor requires one participant and a configured advisor alias.');
+        input.advisors = { [input.agents[0]!]: { agent: values.advisor, maxRequests: 1 } };
+      }
+      if (values.skills !== undefined) for (const alias of new Set([...input.agents, ...(input.judge ? [input.judge] : [])])) {
+        input.agentSettings = { ...input.agentSettings, [alias]: { ...input.agentSettings?.[alias], skills: values.skills.split(',').map(value => value.trim()) } };
       }
       if (command === 'plan') print(service.engine.plan(input));
       else {

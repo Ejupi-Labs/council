@@ -1,6 +1,7 @@
 /** The bounded JSON Schema subset used by Council's public input contracts. */
+export type JsonSchemaType = 'object' | 'array' | 'string' | 'integer' | 'number' | 'boolean' | 'null';
 export interface JsonSchema {
-    type?: 'object' | 'array' | 'string' | 'integer' | 'number' | 'boolean';
+    type?: JsonSchemaType | JsonSchemaType[];
     properties?: Record<string, JsonSchema>;
     required?: string[];
     additionalProperties?: boolean | JsonSchema;
@@ -18,6 +19,7 @@ export interface JsonSchema {
     maxItems?: number;
     minimum?: number;
     maximum?: number;
+    exclusiveMinimum?: number;
     description?: string;
 }
 export declare class ValidationError extends Error {

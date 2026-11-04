@@ -31,7 +31,8 @@ test('prototype-shaped profile names cannot pollute objects', () => {
 test('finite numbers and exact integer bounds are enforced', () => {
   for (const number of [NaN, Infinity, -Infinity, 1.5, 0, 9]) assert.throws(() => configSchema.parse({ maxConcurrency: number }), ValidationError);
   assert.equal(configSchema.parse({ maxConcurrency: 8 }).maxConcurrency, 8);
-  assert.throws(() => configSchema.parse({ maxCalls: 64, maxOutputBytes: 2_097_152 }), /2 MiB/);
+  assert.equal(configSchema.parse({ maxCalls: 64, maxOutputBytes: 2_097_152 }).maxCalls, 64);
+  assert.throws(() => configSchema.parse({ maxCalls: Number.MAX_SAFE_INTEGER + 1 }), ValidationError);
 });
 
 test('configured commands and each argument reject NUL without interpreting shell syntax', () => {
@@ -60,10 +61,20 @@ test('unconstrained parsed objects cannot alias or mutate caller data', () => {
   assert.deepEqual(source.nested.values, [1, 2]);
 });
 
-test('workflow structural bounds reject empty tasks and excessive assignment payloads', () => {
+test('workflow structure rejects empty tasks while preserving larger teams and assignment maps', () => {
   const input = { mode: 'delegate', task: 'Review this.', agents: ['codex'] };
   assert.equal(workflowSchema.parse(input).permission, 'read');
   assert.throws(() => workflowSchema.parse({ ...input, task: '   ' }), ValidationError);
-  assert.throws(() => workflowSchema.parse({ ...input, agents: Array(9).fill('codex') }), ValidationError);
-  assert.throws(() => workflowSchema.parse({ ...input, assignments: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`peer${index}`, 'Task'])) }), ValidationError);
+  assert.equal(workflowSchema.parse({ ...input, agents: Array.from({ length: 9 }, (_, index) => `peer${index}`) }).agents.length, 9);
+  assert.equal(Object.keys(workflowSchema.parse({ ...input, assignments: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`peer${index}`, 'Task'])) }).assignments).length, 9);
+});
+
+test('nullable context budgets accept full context by default and reject invalid numeric values', () => {
+  const schema = { type: ['integer', 'null'], minimum: 1, default: null };
+  assert.equal(parseSchema(schema, undefined), null); assert.equal(parseSchema(schema, null), null);
+  for (const value of [1, 999, 64001, 1000000]) assert.equal(parseSchema(schema, value), value);
+  for (const value of ['1000', 0, -1, 1.5, false]) assert.throws(() => parseSchema(schema, value), ValidationError);
+  const input = { mode: 'delegate', task: 'Review this.', agents: ['codex'] };
+  assert.equal(workflowSchema.parse({ ...input, contextLimit: null }).contextLimit, null);
+  assert.equal(workflowSchema.parse(input).contextLimit, undefined);
 });

@@ -78,6 +78,26 @@ for (const scenario of ['version', 'auth', 'unknown-request', 'question']) test(
   assert.equal(result.status, 'failed'); assert.ok(!JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'));
 });
 
+test('Junie exact authentication failure text cannot masquerade as successful ACP completion', async () => {
+  const local = new NativeRunner(config({ peer: { enabled: true, profile: 'junie', transport: 'acp', command: process.execPath, args: [adapter] } }),
+    { environment: { ...process.env, COUNCIL_TEST_ACP_CASE: 'provider-auth-answer' } });
+  const result = await local.run(request('peer', 'Return the offline marker.'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /Junie authentication.*Sign in.*CLI/);
+  assert.equal(result.output, 'Authentication data is invalid or missing');
+  assert.equal(result.stopReason, 'end_turn');
+});
+
+for (const [profile, scenario] of [['junie', 'provider-auth-example'], ['codex', 'provider-auth-answer']]) {
+  test(`authentication text remains ordinary evidence for ${profile} ${scenario}`, async () => {
+    const local = new NativeRunner(config({ peer: { enabled: true, profile, transport: 'acp', command: process.execPath, args: [adapter] } }),
+      { environment: { ...process.env, COUNCIL_TEST_ACP_CASE: scenario } });
+    const result = await local.run(request('peer', 'Discuss the offline authentication diagnostic.'));
+    assert.equal(result.status, 'completed', result.error);
+    assert.match(result.output, /Authentication data is invalid or missing/);
+  });
+}
+
 test('direct ACP rejects an unadvertised model without changing the requested model', async () => {
   const local = new NativeRunner(config({ peer: { enabled: true, profile: 'junie', transport: 'acp', command: process.execPath, args: [adapter], model: 'unavailable-model' } }));
   const result = await local.run(request('peer', 'hello'));

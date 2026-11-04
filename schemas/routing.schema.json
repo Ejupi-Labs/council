@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council routing",
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskClass": {
+      "type": "string",
+      "enum": [
+        "routine",
+        "standard",
+        "complex"
+      ]
+    },
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "economy",
+        "balanced",
+        "quality"
+      ],
+      "default": "economy"
+    },
+    "collaboration": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "review",
+        "parallel",
+        "council"
+      ],
+      "default": "direct"
+    },
+    "requiredCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "minItems": 1
+    },
+    "modelSettings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dont-kill-an-ant-with-a-bazooka",
+                "council-implementation-review",
+                "council-independent-perspectives",
+                "council-advisor"
+              ]
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "dont-kill-an-ant-with-a-bazooka",
+          "council-implementation-review",
+          "council-independent-perspectives",
+          "council-advisor"
+        ]
+      }
+    },
+    "permission": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ],
+      "default": "read"
+    },
+    "context": {
+      "type": "string"
+    },
+    "contextLimit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "maxCalls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "participants": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "allowEscalation": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "task",
+    "taskClass"
+  ],
+  "additionalProperties": false
+}

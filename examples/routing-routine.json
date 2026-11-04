@@ -1,0 +1,10 @@
+{
+  "task": "Identify the documented typo and propose the smallest correction with relevant verification.",
+  "taskClass": "routine",
+  "strategy": "economy",
+  "collaboration": "direct",
+  "requiredCapabilities": ["code"],
+  "permission": "read",
+  "skills": ["dont-kill-an-ant-with-a-bazooka"],
+  "allowEscalation": false
+}

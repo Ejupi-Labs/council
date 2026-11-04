@@ -44,6 +44,33 @@ test('process resolution preserves argument boundaries for JavaScript entrypoint
   assert.equal(result.command, process.execPath); assert.deepEqual(result.args, [fixture, 'literal $() & ; "argument"']);
 });
 
+test('POSIX tree termination distinguishes missing processes from unverified cleanup', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const originalKill = process.kill;
+  try {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    for (const [groupError, leaderError, failed] of [
+      [undefined, undefined, false], ['ESRCH', undefined, false], ['ESRCH', 'ESRCH', false],
+      ['EPERM', undefined, true], ['EPERM', 'ESRCH', true], ['ESRCH', 'EPERM', true], ['EPERM', 'EPERM', true],
+    ]) {
+      const calls = [];
+      process.kill = (pid, signal) => {
+        calls.push([pid, signal]);
+        const code = pid < 0 ? groupError : leaderError;
+        if (code) throw Object.assign(new Error(code), { code });
+        return true;
+      };
+      const cleanup = killProcessTree(987654);
+      if (failed) await assert.rejects(cleanup, ProcessCleanupError);
+      else await cleanup;
+      assert.deepEqual(calls, groupError ? [[-987654, 'SIGKILL'], [987654, 'SIGKILL']] : [[-987654, 'SIGKILL']]);
+    }
+  } finally {
+    process.kill = originalKill;
+    Object.defineProperty(process, 'platform', platform);
+  }
+});
+
 test('Windows npm wrapper resolution uses known package metadata rather than a shell', { skip: process.platform !== 'win32' }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'council-shim-'));
   try {
@@ -59,6 +86,45 @@ test('Windows npm wrapper resolution uses known package metadata rather than a s
     await writeFile(join(temporary, 'unrecognized'), '#!/bin/sh\necho never execute this POSIX shell wrapper');
     await assert.rejects(resolveLaunch('unrecognized', [], cwd, { PATH: temporary + delimiter }), /shell wrappers are not executed/);
     await assert.rejects(resolveLaunch(join(temporary, 'unrecognized'), [], cwd), /shell entrypoints are not executed/);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test('Windows Junie installer launchers resolve their bounded version pointer to a native executable', { skip: process.platform !== 'win32' }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'council-junie-shim-'));
+  try {
+    const bin = join(temporary, '.local', 'bin'), root = join(temporary, '.local', 'share', 'junie');
+    const target = join(root, 'versions', '2383.10', 'junie', 'junie.exe');
+    await mkdir(bin, { recursive: true }); await mkdir(join(root, 'versions', '2383.10', 'junie'), { recursive: true });
+    await writeFile(join(bin, 'junie.bat'), '@echo This fixture batch must never run.');
+    await writeFile(join(root, 'current'), '2383.10\r\n');
+    await writeFile(target, 'MZ native executable fixture');
+    for (const command of ['junie', join(bin, 'junie.bat')]) {
+      const args = ['--acp=true', 'literal $() & ; "argument"'];
+      const result = await resolveLaunch(command, args, cwd, { PATH: bin });
+      assert.equal(result.command, target); assert.deepEqual(result.args, args); assert.notEqual(result.args, args);
+    }
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test('Windows Junie resolution refuses invalid pointers, missing native targets and arbitrary batch wrappers', { skip: process.platform !== 'win32' }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'council-junie-shim-invalid-'));
+  try {
+    const bin = join(temporary, '.local', 'bin'), root = join(temporary, '.local', 'share', 'junie');
+    const target = join(root, 'versions', '2383.10', 'junie', 'junie.exe');
+    await mkdir(bin, { recursive: true }); await mkdir(join(root, 'versions', '2383.10', 'junie'), { recursive: true });
+    await writeFile(join(bin, 'junie.bat'), '@echo This fixture batch must never run.');
+    await writeFile(target, 'MZ native executable fixture');
+    for (const pointer of ['', '../outside', '..\\outside', 'C:\\outside', '2383.10\0', '2383.10\n2383.11', '2383.10' + ' '.repeat(129), '2383.11']) {
+      await writeFile(join(root, 'current'), pointer);
+      await assert.rejects(resolveLaunch('junie', [], cwd, { PATH: bin }), /shell wrappers are not executed/);
+    }
+    await writeFile(join(root, 'current'), '2383.10');
+    await writeFile(target, '#!/bin/sh\necho not a native executable');
+    await assert.rejects(resolveLaunch('junie', [], cwd, { PATH: bin }), /shell wrappers are not executed/);
+    await writeFile(join(temporary, 'junie.bat'), '@echo unrecognized installation layout');
+    await writeFile(join(bin, 'arbitrary.bat'), '@echo never execute an arbitrary batch wrapper');
+    await assert.rejects(resolveLaunch(join(temporary, 'junie.bat'), [], cwd), /shell wrappers are not executed/);
+    await assert.rejects(resolveLaunch('arbitrary', [], cwd, { PATH: bin }), /shell wrappers are not executed/);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 

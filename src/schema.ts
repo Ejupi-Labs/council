@@ -1,6 +1,7 @@
 /** The bounded JSON Schema subset used by Council's public input contracts. */
+export type JsonSchemaType = 'object' | 'array' | 'string' | 'integer' | 'number' | 'boolean' | 'null';
 export interface JsonSchema {
-  type?: 'object' | 'array' | 'string' | 'integer' | 'number' | 'boolean';
+  type?: JsonSchemaType | JsonSchemaType[];
   properties?: Record<string, JsonSchema>;
   required?: string[];
   additionalProperties?: boolean | JsonSchema;
@@ -10,7 +11,7 @@ export interface JsonSchema {
   const?: string | number | boolean;
   default?: unknown;
   minLength?: number; maxLength?: number; pattern?: string;
-  minItems?: number; maxItems?: number; minimum?: number; maximum?: number;
+  minItems?: number; maxItems?: number; minimum?: number; maximum?: number; exclusiveMinimum?: number;
   description?: string;
 }
 
@@ -25,28 +26,33 @@ export function objectSchema(properties: Record<string, JsonSchema>, required: s
 export function parseSchema<T = Record<string, unknown>>(schema: JsonSchema, value: unknown, label = 'input'): T {
   // Bound every input branch, including permissive schemas, before allocating parsed copies.
   const pending = [{ value, depth: 0 }];
-  let inspected = 0, textBytes = 0;
+  let inspected = 0;
   while (pending.length) {
     const current = pending.pop()!;
     if (++inspected > 8192 || current.depth > 64) throw new ValidationError('Input exceeds the structural validation limit.');
     const entry = current.value;
-    if (typeof entry === 'string') textBytes += Buffer.byteLength(entry);
     if (typeof entry === 'bigint' || typeof entry === 'symbol' || typeof entry === 'function' || (typeof entry === 'number' && !Number.isFinite(entry))) throw new ValidationError('Input must contain JSON-compatible values.');
     if (entry && typeof entry === 'object') {
       if (!Array.isArray(entry) && ![Object.prototype, null].includes(Object.getPrototypeOf(entry))) throw new ValidationError('Input must contain plain JSON objects.');
       for (const key in entry) if (Object.hasOwn(entry, key)) {
         if (inspected + pending.length >= 8192) throw new ValidationError('Input exceeds the structural validation limit.');
-        textBytes += Buffer.byteLength(key);
         pending.push({ value: (entry as Record<string, unknown>)[key], depth: current.depth + 1 });
       }
     }
-    if (textBytes > 1_048_576) throw new ValidationError('Input text exceeds 1 MiB.');
   }
   let nodes = 0;
   function parse(rule: JsonSchema, input: unknown, path: string, depth: number): unknown {
     if (++nodes > 8192 || depth > 64) throw new ValidationError('Input exceeds the structural validation limit.');
     if (input === undefined && rule.default !== undefined) input = structuredClone(rule.default);
     const fail = (detail: string): never => { throw new ValidationError(`${path}: ${detail}`); };
+    if (Array.isArray(rule.type)) {
+      for (const type of rule.type) {
+        try { return parse({ ...rule, type }, input, path, depth); }
+        catch (error) { if (!(error instanceof ValidationError)) throw error; }
+      }
+      return fail(`must match one of: ${rule.type.join(', ')}.`);
+    }
+    if (rule.type === 'null') { if (input !== null) fail('must be null.'); return null; }
     if (rule.const !== undefined && input !== rule.const) fail(`must equal ${JSON.stringify(rule.const)}.`);
     if (rule.enum && !rule.enum.includes(input as string)) fail(`must be one of ${rule.enum.join(', ')}.`);
     if (rule.type === 'string') {
@@ -62,6 +68,7 @@ export function parseSchema<T = Record<string, unknown>>(schema: JsonSchema, val
       const number = input as number;
       if (rule.minimum !== undefined && number < rule.minimum) fail(`must be at least ${rule.minimum}.`);
       if (rule.maximum !== undefined && number > rule.maximum) fail(`must be at most ${rule.maximum}.`);
+      if (rule.exclusiveMinimum !== undefined && number <= rule.exclusiveMinimum) fail(`must be greater than ${rule.exclusiveMinimum}.`);
       return number;
     }
     if (rule.type === 'boolean') {

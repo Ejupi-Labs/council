@@ -43,7 +43,7 @@
     "maxCalls": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 64,
+      "maximum": 9007199254740991,
       "default": 16
     },
     "agents": {
@@ -72,6 +72,32 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "authority": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dont-kill-an-ant-with-a-bazooka",
+                "council-implementation-review",
+                "council-independent-perspectives",
+                "council-advisor"
+              ]
+            }
           },
           "transport": {
             "type": "string",

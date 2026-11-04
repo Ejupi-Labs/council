@@ -2,15 +2,18 @@ import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { isUtf8 } from 'node:buffer';
 import { AcpProtocol, acpErrorSummary, isObject, validAcpEnvelope } from './acp.js';
+import { AntigravityProtocol } from './antigravity.js';
 import { ManagedProcess, ProcessCleanupError, PROCESS_CLEANUP_ERROR, resolveLaunch } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { checkAgentJsonStructure } from './agent-json.js';
+import { REASONING_EFFORTS } from './types.js';
 export const MAX_AGENT_FRAME_BYTES = 4 * 1024 * 1024;
 async function withBudget(request, task) {
     const started = performance.now();
     const controller = new AbortController();
     let timedOut = false;
-    const expire = () => { timedOut = true; controller.abort(); };
+    const expire = () => { if (controller.signal.aborted)
+        return; timedOut = true; controller.abort(); };
     const timer = setTimeout(expire, Math.min(request.timeoutMs, 2_147_483_647));
     const cancel = () => controller.abort();
     request.signal?.addEventListener('abort', cancel, { once: true });
@@ -69,6 +72,20 @@ function providerAnswerFailure(output) {
 function failed(request, error) {
     return { agent: request.agent, status: 'failed', output: '', durationMs: 0, error };
 }
+/** Reject unsupported explicit effort before executable lookup or provider dispatch. */
+export function reasoningEffortError(config, agent, effort) {
+    if (effort === undefined)
+        return undefined;
+    if (!REASONING_EFFORTS.includes(effort))
+        return 'Reasoning effort must be low, medium, high, xhigh or max.';
+    if (config.backend === 'mock')
+        return undefined;
+    const transport = agent.transport ?? (['codex', 'claude'].includes(agent.profile) ? 'native' : 'acp');
+    const supported = config.backend === 'native' && ((transport === 'native' && ['codex', 'antigravity'].includes(agent.profile))
+        || (transport === 'native' && agent.profile === 'claude' && effort !== 'xhigh')
+        || (transport === 'acp' && agent.profile === 'junie' && ['low', 'medium', 'high'].includes(effort)));
+    return supported ? undefined : `Reasoning effort ${effort} is unsupported for ${agent.profile} over ${config.backend === 'acpx' ? 'ACPX' : transport}; choose a supported explicit setting.`;
+}
 function validateRequest(config, request) {
     if (request.signal?.aborted)
         return { agent: request.agent, status: 'cancelled', output: '', durationMs: 0, error: 'Agent request cancelled.' };
@@ -76,6 +93,9 @@ function validateRequest(config, request) {
         return failed(request, 'Agent permission must be read or write.');
     if (!config.agents[request.agent]?.enabled)
         return failed(request, 'Agent is not enabled in Council configuration.');
+    const effortError = reasoningEffortError(config, config.agents[request.agent], request.effort === undefined ? config.agents[request.agent].effort : request.effort);
+    if (effortError)
+        return failed(request, effortError);
     if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0)
         return failed(request, 'Agent timeout must be positive.');
     if (!Number.isSafeInteger(config.maxOutputBytes) || config.maxOutputBytes < 1)
@@ -245,8 +265,18 @@ async function runProtocol(launch, protocol, request, config, environment) {
                 offset = newline + 1;
             }
         });
-        child.stderr.on('data', (chunk) => { stderrBytes += chunk.length; if (stderrBytes > 64 * 1024)
-            terminate('failed', 'Agent diagnostics exceeded their bounded transport allowance.'); });
+        child.stderr.on('data', (chunk) => {
+            stderrBytes += chunk.length;
+            if (stderrBytes > 64 * 1024)
+                terminate('failed', 'Agent diagnostics exceeded their bounded transport allowance.');
+            else
+                try {
+                    protocol.diagnostic?.(chunk.toString('utf8'), control);
+                }
+                catch {
+                    terminate('failed', 'Agent returned invalid protocol diagnostics.');
+                }
+        });
         child.on('error', error => {
             if (error instanceof ProcessCleanupError) {
                 forcedStatus = 'failed';
@@ -284,6 +314,10 @@ async function runProtocol(launch, protocol, request, config, environment) {
             }
             if (!output.trim()) {
                 finish('failed', 'Agent returned an empty answer.');
+                return;
+            }
+            if (config.agents[request.agent]?.profile === 'junie' && output.trim() === 'Authentication data is invalid or missing') {
+                finish('failed', 'Junie authentication is unavailable. Sign in through the Junie CLI outside Council, then retry.');
                 return;
             }
             const providerFailure = providerAnswerFailure(output);
@@ -435,16 +469,22 @@ class ExternalAcpxProtocol {
 }
 function nativeArguments(agent, request) {
     const model = request.model ?? agent.model;
+    const effort = request.effort ?? agent.effort;
     if (agent.profile === 'codex')
         return ['--ask-for-approval', 'never', 'exec', '--json', '--color', 'never', '--skip-git-repo-check', '--ephemeral',
-            '--sandbox', request.permission === 'write' ? 'workspace-write' : 'read-only', '--cd', resolve(request.cwd), ...(model ? ['--model', model] : []), '-'];
+            '--sandbox', request.permission === 'write' ? 'workspace-write' : 'read-only', '--cd', resolve(request.cwd), ...(model ? ['--model', model] : []),
+            ...(effort ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []), '-'];
     if (agent.profile === 'claude') {
         const tools = request.permission === 'read' ? 'Read,Glob,Grep' : 'Read,Glob,Grep,Edit,Write,Bash';
         return ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--permission-mode', 'dontAsk',
             '--tools', tools, '--allowedTools', tools, '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-            '--settings', '{"disableAllHooks":true}', ...(model ? ['--model', model] : [])];
+            '--settings', '{"disableAllHooks":true}', ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])];
     }
-    throw new Error('Native transport is supported only for Codex and Claude. Configure ACP transport for this profile.');
+    if (agent.profile === 'antigravity')
+        return ['--input-format', 'stream-json', '--output-format', 'stream-json',
+            '--mode', request.permission === 'read' ? 'plan' : 'accept-edits', '--sandbox',
+            '--print-timeout', `${Math.max(1, Math.ceil(request.timeoutMs / 1000))}s`, ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])];
+    throw new Error('Native transport is supported only for Codex, Claude and Antigravity. Configure ACP transport for this profile.');
 }
 function defaultAcp(agent) {
     if (agent.profile === 'deepseek-harness')
@@ -466,9 +506,10 @@ export class NativeRunner {
         const transport = agent.transport ?? (['codex', 'claude'].includes(agent.profile) ? 'native' : 'acp');
         const environment = this.options.environment ?? process.env;
         if (transport === 'native')
-            return { transport, launch: await resolveLaunch(agent.command ?? agent.profile, [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
+            return { transport, launch: await resolveLaunch(agent.command ?? (agent.profile === 'antigravity' ? 'agy' : agent.profile), [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
         const defaults = agent.command ? { command: agent.command, args: agent.args ?? [] } : defaultAcp(agent);
-        return { transport, launch: await resolveLaunch(defaults.command, agent.args ?? defaults.args, request.cwd, environment, signal) };
+        const effort = request.effort ?? agent.effort;
+        return { transport, launch: await resolveLaunch(defaults.command, [...agent.args ?? defaults.args, ...(effort ? ['--effort', effort] : [])], request.cwd, environment, signal) };
     }
     async run(request) {
         const invalid = validateRequest(this.config, request);
@@ -479,7 +520,9 @@ export class NativeRunner {
             const scoped = { ...request, signal };
             const { launch, transport } = await this.launch(agent, scoped, signal);
             scoped.timeoutMs = remaining();
-            const protocol = transport === 'acp' ? new AcpProtocol(scoped, request.model ?? agent.model) : agent.profile === 'codex' ? new CodexProtocol(request.prompt) : new ClaudeProtocol(scoped);
+            const protocol = transport === 'acp' ? new AcpProtocol(scoped, request.model ?? agent.model)
+                : agent.profile === 'codex' ? new CodexProtocol(request.prompt)
+                    : agent.profile === 'antigravity' ? new AntigravityProtocol(request.prompt) : new ClaudeProtocol(scoped);
             return await runProtocol(launch, protocol, scoped, this.config, this.options.environment ?? process.env);
         });
     }
@@ -554,6 +597,18 @@ export class MockRunner {
         const invalid = validateRequest(this.config, request);
         if (invalid)
             return invalid;
+        const ballot = /ROOM_BALLOT_DATA_BEGIN\n([^\n]+)\nROOM_BALLOT_DATA_END/.exec(request.prompt);
+        if (ballot) {
+            try {
+                const data = JSON.parse(ballot[1]);
+                if (Array.isArray(data.members) && data.members.length && Array.isArray(data.tasks)) {
+                    const assignments = Object.fromEntries(data.tasks.map((task, index) => [task.id, data.members[index % data.members.length].agent]));
+                    return { agent: request.agent, status: 'completed', durationMs: 0, stopReason: 'end_turn', output: JSON.stringify({ vote: 'approve',
+                            rationale: 'Offline mock ballot: assignments are deterministic fixtures, not a verified model judgment. No provider was called.', assignments }) };
+                }
+            }
+            catch { /* Ordinary mock tasks retain their deterministic text response. */ }
+        }
         const digest = createHash('sha256').update(request.prompt).digest('hex').slice(0, 12);
         return { agent: request.agent, status: 'completed', durationMs: 0, stopReason: 'end_turn',
             output: `[MOCK ${request.agent}] Offline simulation ${digest}.\nReviewed the supplied task. Suggested action: keep changes scoped, verify acceptance criteria, and report unresolved assumptions. No provider was called and no files were changed.` };

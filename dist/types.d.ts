@@ -4,13 +4,18 @@ export type Mode = typeof MODES[number];
 export type Permission = 'read' | 'write';
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type ResultStatus = 'completed' | 'failed' | 'cancelled' | 'timeout';
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export declare const REASONING_EFFORTS: readonly ReasoningEffort[];
 export interface AgentConfig {
     enabled: boolean;
     profile: string;
     model?: string;
+    effort?: ReasoningEffort;
+    authority?: number;
     transport?: 'native' | 'acp';
     command?: string;
     args?: string[];
+    skills?: string[];
 }
 export interface CouncilConfig {
     version: 1;
@@ -31,6 +36,7 @@ export interface AgentRequest {
     timeoutMs: number;
     signal?: AbortSignal;
     model?: string;
+    effort?: ReasoningEffort;
 }
 export interface AgentResult {
     agent: string;
@@ -61,6 +67,16 @@ export interface WorkflowInput {
     context?: string;
     maxCalls?: number;
     assignments?: Record<string, string>;
+    agentSettings?: Record<string, {
+        model?: string;
+        effort?: ReasoningEffort;
+        skills?: string[];
+    }>;
+    advisors?: Record<string, {
+        agent: string;
+        maxRequests?: number;
+    }>;
+    contextLimit?: number | null;
 }
 export interface WorkflowStep {
     id: string;

@@ -2,7 +2,7 @@ import { fork, spawn, type ChildProcess, type ForkOptions } from 'node:child_pro
 import { EventEmitter } from 'node:events';
 import { access, open, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Readable, Writable } from 'node:stream';
 import { metadataLookup, MetadataLimitError } from './metadata.js';
@@ -29,7 +29,14 @@ export function killProcessTree(pid: number): Promise<void> {
 
 async function terminateProcessTree(pid: number): Promise<void> {
   if (process.platform !== 'win32') {
-    try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
+    try { process.kill(-pid, 'SIGKILL'); }
+    catch (groupError) {
+      try { process.kill(pid, 'SIGKILL'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw new ProcessCleanupError(); }
+      // A missing process group permits the legacy leader fallback. Permission
+      // and other failures leave descendants unverified even if that fallback works.
+      if ((groupError as NodeJS.ErrnoException).code !== 'ESRCH') throw new ProcessCleanupError();
+    }
     return;
   }
   await new Promise<void>((resolveDone, reject) => {
@@ -195,13 +202,41 @@ async function isWindowsNativeBinary(path: string, signal?: AbortSignal): Promis
   finally { await file?.close(); }
 }
 
-/** Resolve executable paths and recognized npm bins without ever evaluating shell text. */
+async function unwrapJunieShim(path: string, signal?: AbortSignal): Promise<ProcessLaunch | undefined> {
+  const bin = dirname(path), local = dirname(bin);
+  if (process.platform !== 'win32' || basename(path).toLowerCase() !== 'junie.bat' || basename(bin).toLowerCase() !== 'bin' || basename(local).toLowerCase() !== '.local') return undefined;
+  try {
+    const root = join(local, 'share', 'junie');
+    // The installer records one version identifier; never interpret the batch
+    // launcher, accept a path from this pointer, or read vendor settings.
+    const version = await metadataLookup(async () => {
+      const pointer = await open(join(root, 'current'), 'r');
+      try {
+        signal?.throwIfAborted();
+        const info = await pointer.stat();
+        if (!info.isFile() || info.size < 1 || info.size > 128) return undefined;
+        const buffer = Buffer.alloc(129);
+        const { bytesRead } = await pointer.read(buffer, 0, buffer.length, 0);
+        signal?.throwIfAborted();
+        if (bytesRead === 0 || bytesRead > 128) return undefined;
+        const value = buffer.subarray(0, bytesRead).toString('utf8').trim();
+        return value.length <= 64 && /^\d+(?:\.\d+)+$/.test(value) ? value : undefined;
+      } finally { await pointer.close(); }
+    }, signal);
+    if (!version) return undefined;
+    const target = join(root, 'versions', version, 'junie', 'junie.exe');
+    if (!await isExecutable(target, signal) || !await metadataLookup(() => isWindowsNativeBinary(target, signal))) return undefined;
+    return { command: target, args: [] };
+  } catch (error) { if (signal?.aborted || error instanceof MetadataLimitError) throw error; return undefined; }
+}
+
+/** Resolve executables and recognized installation shims without evaluating shell text. */
 export async function resolveLaunch(command: string, args: string[], cwd: string, environment: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<ProcessLaunch> {
   signal?.throwIfAborted();
   if (!command || command.includes('\0') || args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('Agent command and arguments must be nonempty executable/argument strings.');
   const explicit = isAbsolute(command) || command.includes('/') || command.includes('\\');
   const directories = explicit ? [''] : (environment.PATH ?? environment.Path ?? '').split(delimiter).filter(Boolean);
-  const names = process.platform === 'win32' && !extname(command) ? [command + '.exe', command + '.com', command, command + '.cmd', command + '.ps1'] : [command];
+  const names = process.platform === 'win32' && !extname(command) ? [command + '.exe', command + '.com', command, command + '.cmd', command + '.ps1', command + '.bat'] : [command];
   for (const directory of directories) for (const name of names) {
     signal?.throwIfAborted();
     const candidate = explicit ? resolve(cwd, name) : resolve(cwd, directory.replace(/^"|"$/g, ''), name);
@@ -217,7 +252,7 @@ export async function resolveLaunch(command: string, args: string[], cwd: string
       continue;
     }
     if (/\.(cmd|bat|ps1)$/i.test(candidate)) {
-      const unwrapped = await unwrapNpmShim(candidate, command.split(/[\\/]/).pop()!.replace(/\.(cmd|bat|ps1)$/i, ''), signal);
+      const unwrapped = await unwrapJunieShim(candidate, signal) ?? await unwrapNpmShim(candidate, command.split(/[\\/]/).pop()!.replace(/\.(cmd|bat|ps1)$/i, ''), signal);
       if (unwrapped) return { command: unwrapped.command, args: [...unwrapped.args, ...args] };
       throw new Error('Windows shell wrappers are not executed. Configure an executable or an explicit interpreter with an argument array.');
     }

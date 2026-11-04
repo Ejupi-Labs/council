@@ -1,14 +1,19 @@
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { AGENTS, MODES } from './types.js';
+import { AGENTS, MODES, REASONING_EFFORTS } from './types.js';
 import { objectSchema, parseSchema, ValidationError } from './schema.js';
+import { BUILT_IN_SKILL_IDS } from './skills.js';
 const boundedString = (minLength, maxLength) => ({ type: 'string', minLength, maxLength });
+const fullString = (minLength) => ({ type: 'string', minLength });
 const integer = (minimum, maximum, value) => ({ type: 'integer', minimum, maximum, ...(value === undefined ? {} : { default: value }) });
 export const backendDefinition = { type: 'string', enum: ['native', 'acpx', 'mock'], default: 'native' };
+export const reasoningEffortDefinition = { type: 'string', enum: REASONING_EFFORTS };
 export const agentDefinition = objectSchema({
     enabled: { type: 'boolean', default: true },
     profile: { type: 'string', enum: AGENTS },
-    model: boundedString(1, 200), transport: { type: 'string', enum: ['native', 'acp'] },
+    model: boundedString(1, 200), effort: reasoningEffortDefinition, authority: { type: 'number', exclusiveMinimum: 0 },
+    skills: { type: 'array', items: { type: 'string', enum: BUILT_IN_SKILL_IDS } },
+    transport: { type: 'string', enum: ['native', 'acp'] },
     command: { ...boundedString(1, 4096), pattern: '^[^\\u0000]+$' },
     args: { type: 'array', items: { ...boundedString(0, 4096), pattern: '^[^\\u0000]*$' }, maxItems: 64 },
 }, ['profile']);
@@ -16,7 +21,7 @@ export const configDefinition = objectSchema({
     version: { const: 1, default: 1 }, backend: backendDefinition,
     stateDir: { ...boundedString(1, 4096), default: '.council' },
     maxConcurrency: integer(1, 8, 3), timeoutMs: integer(100, 3_600_000, 180_000),
-    maxOutputBytes: integer(1024, 2_097_152, 131_072), maxCalls: integer(1, 64, 16),
+    maxOutputBytes: integer(1024, 2_097_152, 131_072), maxCalls: integer(1, Number.MAX_SAFE_INTEGER, 16),
     agents: {
         type: 'object', propertyNames: { pattern: '^(?!__proto__$|constructor$|prototype$)[a-z][a-z0-9-]{0,63}$' },
         additionalProperties: agentDefinition,
@@ -24,20 +29,21 @@ export const configDefinition = objectSchema({
     },
 });
 export const workflowDefinition = objectSchema({
-    mode: { type: 'string', enum: MODES }, task: boundedString(1, 32_000),
-    agents: { type: 'array', items: boundedString(1, 64), minItems: 1, maxItems: 8 },
-    judge: boundedString(1, 64), rounds: integer(1, 3),
+    mode: { type: 'string', enum: MODES }, task: fullString(1),
+    agents: { type: 'array', items: boundedString(1, 64), minItems: 1 },
+    judge: boundedString(1, 64), rounds: integer(1, Number.MAX_SAFE_INTEGER),
     permission: { type: 'string', enum: ['read', 'write'], default: 'read' },
-    context: boundedString(0, 64_000), maxCalls: integer(1, 64),
-    assignments: { type: 'object', additionalProperties: boundedString(1, 32_000) },
+    context: fullString(0), maxCalls: integer(1, Number.MAX_SAFE_INTEGER),
+    assignments: { type: 'object', additionalProperties: fullString(1) },
+    agentSettings: { type: 'object', additionalProperties: objectSchema({ model: boundedString(1, 200), effort: reasoningEffortDefinition, skills: { type: 'array', items: { type: 'string', enum: BUILT_IN_SKILL_IDS } } }) },
+    advisors: { type: 'object', additionalProperties: objectSchema({ agent: boundedString(1, 64), maxRequests: { type: 'integer', minimum: 1, default: 1 } }, ['agent']) },
+    contextLimit: { type: ['integer', 'null'], minimum: 1 },
 }, ['mode', 'task', 'agents']);
 export const configSchema = {
     parse(value) {
         const config = parseSchema(configDefinition, value, 'configuration');
-        if (config.maxCalls * config.maxOutputBytes > 2_097_152)
-            throw new ValidationError('maxCalls multiplied by maxOutputBytes must not exceed 2 MiB per run.');
-        if (Object.keys(config.agents).length === 0 || Object.keys(config.agents).length > 32)
-            throw new ValidationError('Configure between 1 and 32 named agent profiles.');
+        if (Object.keys(config.agents).length === 0)
+            throw new ValidationError('Configure at least one named agent profile.');
         return config;
     },
 };
@@ -46,15 +52,15 @@ export const workflowSchema = {
         const input = parseSchema(workflowDefinition, value, 'workflow');
         if (!input.task.trim())
             throw new ValidationError('Task must contain non-whitespace text.');
-        if (input.assignments && (Object.keys(input.assignments).length > 8 || Object.values(input.assignments).reduce((size, text) => size + text.length, 0) > 64_000))
-            throw new ValidationError('Assignments must contain at most 8 tasks and 64,000 characters in total.');
         return input;
     },
 };
 export function parseBackend(value) { return parseSchema(backendDefinition, value, 'backend'); }
-export function readJsonFile(filename) {
-    if (statSync(filename).size > 1_048_576)
-        throw new ValidationError('Configuration/input file exceeds 1 MiB.');
+export function readJsonFile(filename, maxBytes = 1_048_576) {
+    if (maxBytes !== Infinity && (!Number.isSafeInteger(maxBytes) || maxBytes < 1))
+        throw new ValidationError('JSON file byte limit must be a positive integer or Infinity.');
+    if (statSync(filename).size > maxBytes)
+        throw new ValidationError(maxBytes === 1_048_576 ? 'Configuration/input file exceeds 1 MiB.' : 'JSON input exceeds its configured file byte limit.');
     try {
         return JSON.parse(readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
     }

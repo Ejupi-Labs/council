@@ -1,4 +1,4 @@
-import type { AgentHealth, AgentRequest, AgentResult, AgentRunner, CouncilConfig } from './types.js';
+import type { AgentConfig, AgentHealth, AgentRequest, AgentResult, AgentRunner, CouncilConfig } from './types.js';
 export interface RunnerOptions {
     environment?: NodeJS.ProcessEnv;
 }
@@ -6,6 +6,8 @@ export interface AcpxRunnerOptions extends RunnerOptions {
     acpxEntrypoint?: string;
 }
 export declare const MAX_AGENT_FRAME_BYTES: number;
+/** Reject unsupported explicit effort before executable lookup or provider dispatch. */
+export declare function reasoningEffortError(config: CouncilConfig, agent: AgentConfig, effort: unknown): string | undefined;
 export declare class NativeRunner implements AgentRunner {
     private readonly config;
     private readonly options;

@@ -10,6 +10,8 @@ export declare class CouncilStore {
     private lastRecoveryAt;
     private activeBackups;
     constructor(stateDir: string);
+    /** WAL lock upgrades can bypass SQLite's busy handler; retry only startup SQL within one deadline. */
+    private retryStartup;
     /** SQLite inherits the database mode when creating WAL/SHM beside existing state directories. */
     private restrictDatabaseFiles;
     /** Fixed SQL only, with a bounded cache rather than re-preparing every polling query. */

@@ -27,6 +27,7 @@ export interface ProtocolControl {
 export interface AgentProtocol {
   start(control: ProtocolControl): void;
   event(event: JsonObject, control: ProtocolControl): void;
+  diagnostic?(text: string, control: ProtocolControl): void;
   cancel?(control: ProtocolControl): void;
   settle?(): Promise<void>;
   readonly closeAfterCompletion?: boolean;

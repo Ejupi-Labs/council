@@ -53,6 +53,41 @@ test('CLI run emits its ID on stderr and one JSON result on stdout', async t => 
   assert.equal(JSON.parse((await call(root, ['show', run.id])).stdout).id, run.id);
 });
 
+test('CLI wait returns persisted terminal outcomes and advise waits for a completed independent consultation', async t => {
+  const root = workspace(t);
+  const prior = JSON.parse((await call(root, ['run', '--task', 'Inspect the offline input.'])).stdout);
+  const waiting = JSON.parse((await call(root, ['wait', prior.id, '--wait-ms', '0'])).stdout);
+  assert.equal(waiting.runs[0].status, 'completed'); assert.equal(waiting.timedOut, false);
+  const response = await call(root, ['advise', '--requester', 'junie', '--advisor', 'codex', '--question', 'Independently check this offline choice.', '--model', 'exact-advisor-model', '--effort', 'high']);
+  const advice = JSON.parse(response.stdout);
+  assert.equal(advice.status, 'completed'); assert.equal(advice.input.permission, 'read');
+  assert.equal(advice.input.agentSettings.codex.model, 'exact-advisor-model');
+  assert.equal(advice.input.agentSettings.codex.effort, 'high');
+  assert.equal(events(response.stderr)[0].id, advice.id);
+  const planned = JSON.parse((await call(root, ['plan', '--task', 'Plan a bounded worker task.', '--advisor', 'claude', '--effort', 'medium'])).stdout);
+  assert.equal(planned.estimatedCalls, 3);
+});
+
+test('CLI rejects explicitly empty selections and file paths before dispatching a workflow', async t => {
+  const root = workspace(t);
+  for (const [args, message] of [
+    [['--agents', '', '--task', 'Do not dispatch.'], /at least 1 character/i],
+    [['--model', '', '--task', 'Do not dispatch.'], /Model must contain/],
+    [['--task-file', ''], /--task-file must contain a filename/],
+    [['--context-file', '', '--task', 'Do not dispatch.'], /--context-file must contain a filename/],
+    [['--assignments-file', '', '--task', 'Do not dispatch.'], /--assignments-file must contain a filename/],
+  ]) {
+    await assert.rejects(call(root, ['run', '--backend', 'mock', ...args]), error => {
+      assert.notEqual(error.code, 0);
+      assert.equal(error.stdout, '');
+      assert.match(error.stderr, message);
+      assert.equal(events(error.stderr).some(event => event.event === 'run.started'), false);
+      return true;
+    });
+  }
+  assert.deepEqual(JSON.parse((await call(root, ['runs'])).stdout), []);
+});
+
 test('CLI events, report export and explicit continuation preserve evidence without overwriting files', async t => {
   const root = workspace(t);
   const run = JSON.parse((await call(root, ['run', '--task', 'Compare search choices using bounded evidence.'])).stdout);

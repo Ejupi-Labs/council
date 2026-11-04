@@ -4,10 +4,13 @@ export type Mode = typeof MODES[number];
 export type Permission = 'read' | 'write';
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type ResultStatus = 'completed' | 'failed' | 'cancelled' | 'timeout';
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface AgentConfig {
-  enabled: boolean; profile: string; model?: string;
+  enabled: boolean; profile: string; model?: string; effort?: ReasoningEffort; authority?: number;
   transport?: 'native' | 'acp'; command?: string; args?: string[];
+  skills?: string[];
 }
 export interface CouncilConfig {
   version: 1;
@@ -22,7 +25,7 @@ export interface CouncilConfig {
 }
 export interface AgentRequest {
   agent: string; prompt: string; cwd: string; permission: Permission;
-  timeoutMs: number; signal?: AbortSignal; model?: string;
+  timeoutMs: number; signal?: AbortSignal; model?: string; effort?: ReasoningEffort;
 }
 export interface AgentResult {
   agent: string; status: ResultStatus; output: string; durationMs: number;
@@ -40,6 +43,9 @@ export interface WorkflowInput {
   mode: Mode; task: string; agents: string[]; judge?: string;
   rounds?: number; permission: Permission; context?: string; maxCalls?: number;
   assignments?: Record<string, string>;
+  agentSettings?: Record<string, { model?: string; effort?: ReasoningEffort; skills?: string[] }>;
+  advisors?: Record<string, { agent: string; maxRequests?: number }>;
+  contextLimit?: number | null;
 }
 export interface WorkflowStep {
   id: string; agent: string; role: string; result: AgentResult;

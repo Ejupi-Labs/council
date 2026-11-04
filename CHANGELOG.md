@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- Add local per-agent billing modes, nullable reference prices, shared-account allowance windows, observation provenance/freshness and revision-checked edits/imports without vendor credential access.
+- Add deterministic economy/balanced/quality routing, explicit task classes and capabilities, direct/review/parallel/council presets, and opt-in larger-tier escalation; preserve caller-selected models and report unknown quotas.
+- Ship four assignable collaboration skills, including Don't kill an ant with a bazooka; inject only worker guidance and retain effective assignments and billing/routing admission receipts.
+- Add Agents & billing controls and a manually applied team-sizing preview to the English dashboard, with CLI/MCP inspection, configuration and routed execution.
+- Remove fixed debate-round, call-count and hierarchy-weight caps; use exact plan estimates and decimal voting arithmetic, including scientific notation and overflowing totals.
+- Keep unsent room drafts separate, ignore obsolete dialog responses and append history pages without rebuilding earlier messages.
+- Make room Stop atomic across ready/active transitions and repair failed ownership on close when persistence becomes available.
+- Return consistent selected-result snapshots with complete step metadata; make CLI waits exit nonzero for incomplete work and cancel newly owned advice when its blocking MCP request is cancelled.
+- Preserve cancellation when process cleanup outlasts the agent deadline, and allow complete peer handoffs and project notes beyond the former text caps.
+- Fence room approvals and further task dispatch when project-manager instructions change; preserve in-flight results and completed writes for a fresh discussion.
+- Prevent room-switch races from sending actions to the previous room or replacing the selected room with stale responses; clean up reconnecting update streams and show actionable authorization errors.
+- Inherit omitted room weights from configured authority, reject replacement tasks in failed/cancelled rooms and reject unavailable prerequisites before spending model calls.
+- Preserve complete continuation evidence, all earlier debate rounds and relevant advisor lineage in later handoffs; deduplicate shared step evidence without exposing concurrent peer results.
+- Add an English local project-room UI with weighted proposals, preserved dissent, task dependencies, complete paged history and automatic execution of approved tasks.
+- Add server-side run/room waits and host guidance to avoid repeated model-driven polling while work is pending.
+- Add cross-harness advisors with configurable request quotas, explicit model/effort settings, reserved call budgets, read-only consultations and same-workspace worker resumption.
+- Preserve full task/context/handoff text by default; optional context budgets reject insufficient capacity rather than silently dropping evidence. UI previews do not limit model context.
+- Add explicit native Antigravity CLI transport with stdin NDJSON, plan/write modes, validated terminal results and conservative diagnostic handling; keep ACP compatibility and select the native CLI in this checkout's configuration.
+- Resolve standard Windows Junie installations to their native executable without evaluating batch wrappers, and reject Junie's exact authentication-error answer when ACP incorrectly labels it a completed turn.
+- Preserve provider-initiated cancellation as a cancelled workflow, retain partial evidence, stop dependent stages and use the cancellation artifact-export deadline. Failed or timed-out peers still make a mixed parallel stage fail.
+- Reject explicitly empty CLI agent/model selections and input-file paths instead of silently selecting defaults or omitting input.
+- Keep one captured base commit when worktrees for the same run are created concurrently.
+- Report POSIX process-tree permission failures as unverified cleanup rather than treating them as already terminated processes.
+- Retry immediate SQLite busy errors during cold WAL initialization within one five-second startup budget, preserving the 250 ms runtime timeout and immediate propagation of other storage failures.
+- Give Git worktree test fixtures explicit line-ending settings so Windows user defaults do not change expected file contents.
+
 ## 1.2.0 — 4 November 2026
 
 ### Fair coordination and recovery

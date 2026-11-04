@@ -25,7 +25,8 @@
     },
     "antigravity": {
       "enabled": true,
-      "profile": "antigravity"
+      "profile": "antigravity",
+      "transport": "native"
     }
   }
 }

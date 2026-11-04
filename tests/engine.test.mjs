@@ -48,9 +48,9 @@ test('budget and input validation run before any agent dispatch', async () => {
   const backend = runner();
   const engine = new WorkflowEngine(config(), backend, store());
   for (const bad of [input('council', { maxCalls: 4 }), input('delegate', { agents: ['codex', 'claude'] }),
-    input('debate', { rounds: 4 }), input('council', { permission: 'write' }),
+    input('debate', { rounds: 0 }), input('council', { permission: 'write' }),
     input('parallel', { agents: ['missing'] }), input('parallel', { agents: ['codex', 'codex'] }),
-    input('parallel', { context: 'x'.repeat(MAX_CONTEXT_CHARS + 1) }), input('parallel', { maxCalls: 21 })]) {
+    input('parallel', { context: 7 }), input('parallel', { maxCalls: 21 })]) {
     await assert.rejects(engine.run(bad));
   }
   assert.equal(backend.calls.length, 0);
@@ -264,8 +264,7 @@ test('invalid assignments fail before dispatch and cannot target a judge or an u
     input('delegate', { assignments: { codex: 'An assignment' } }),
     input('parallel', { assignments: { junie: 'Not selected' }, judge: 'junie' }),
     input('parallel', { assignments: { codex: ' ' } }),
-    input('parallel', { assignments: { codex: 'x'.repeat(32_001) } }),
-    input('parallel', { agents, assignments: Object.fromEntries(agents.map(agent => [agent, 'x'.repeat(21_334)])) }),
+    input('parallel', { assignments: null }),
     input('parallel', { assignments: [] }),
   ]) await assert.rejects(engine.run(request), /assignments?|Assignment/);
   assert.equal(backend.calls.length, 0);
@@ -281,6 +280,39 @@ test('failed peers preserve partial results and prevent dependent synthesis', as
   assert.ok(!backend.calls.some(call => call.agent === 'junie'));
 });
 
+test('provider cancellation preserves the workflow outcome and prevents dependent stages', async () => {
+  for (const mode of ['delegate', 'pipeline', 'review', 'parallel', 'debate', 'council']) {
+    const persistence = store();
+    const backend = runner(async request => ({ agent: request.agent, status: 'cancelled', output: 'provider partial evidence', durationMs: 1, error: 'Provider cancelled its turn.' }));
+    const result = await new WorkflowEngine(config(), backend, persistence).run(input(mode, mode === 'parallel' ? { judge: 'junie' } : {}));
+    const expectedCalls = ['delegate', 'pipeline', 'review'].includes(mode) ? 1 : 2;
+    assert.equal(result.status, 'cancelled', mode);
+    assert.equal(backend.calls.length, expectedCalls, mode);
+    assert.ok(result.steps.every(step => step.result.status === 'cancelled'), mode);
+    assert.match(result.error, /Provider cancelled its turn\./, mode);
+    assert.match(result.output, /provider partial evidence/, mode);
+    assert.equal(persistence.getRun(result.id).status, 'cancelled', mode);
+    assert.equal(persistence.log.at(-1).type, 'run.cancelled', mode);
+  }
+});
+
+test('failed and timed-out peers take precedence over provider cancellation in either participant order', async () => {
+  for (const status of ['failed', 'timeout']) {
+    for (const failingAgent of ['codex', 'claude']) {
+      const backend = runner(async request => ({ agent: request.agent,
+        status: request.agent === failingAgent ? status : 'cancelled', output: `${request.agent} partial evidence`, durationMs: 1,
+        error: request.agent === failingAgent ? `Provider ${status} its turn.` : 'Provider cancelled its turn.' }));
+      const result = await new WorkflowEngine(config(), backend, store()).run(input('parallel', { judge: 'junie' }));
+      assert.equal(result.status, 'failed', `${status}: ${failingAgent}`);
+      assert.equal(backend.calls.length, 2);
+      assert.match(result.error, new RegExp(`${failingAgent} worker: Provider ${status} its turn\\.`));
+      assert.match(result.output, /codex partial evidence/);
+      assert.match(result.output, /claude partial evidence/);
+      assert.ok(!backend.calls.some(call => call.agent === 'junie'));
+    }
+  }
+});
+
 test('exceptions from agents become failed steps rather than successful workflows', async () => {
   const backend = runner(async () => { throw new Error('connection lost'); });
   const result = await new WorkflowEngine(config(), backend, store()).run(input('delegate'));
@@ -289,17 +321,17 @@ test('exceptions from agents become failed steps rather than successful workflow
   assert.match(result.error, /connection lost/);
 });
 
-test('handoff context and final output are bounded including multi-byte text', async () => {
+test('an oversized custom-runner output fails honestly while retained partial UTF-8 remains valid', async () => {
   const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: '🌍'.repeat(10000), durationMs: 1 }));
   const result = await new WorkflowEngine(config(process.cwd(), { maxOutputBytes: 100 }), backend, store()).run(input('pipeline', { context: 'x'.repeat(MAX_CONTEXT_CHARS) }));
-  assert.equal(result.status, 'completed');
+  assert.equal(result.status, 'failed'); assert.match(result.error, /output byte limit/);
   assert.ok(Buffer.byteLength(result.output) <= 100);
   assert.ok(result.steps.every(step => Buffer.byteLength(step.result.output) <= 100));
-  assert.ok(backend.calls.every(call => call.prompt.length < MAX_CONTEXT_CHARS + 2000));
+  assert.equal(backend.calls.length, 1); assert.ok(backend.calls[0].prompt.includes('x'.repeat(MAX_CONTEXT_CHARS)));
   assert.ok(!result.output.includes('\ufffd'));
 });
 
-test('maximum project context preserves evidence from every council participant and stage', async () => {
+test('full project context preserves complete evidence from every council participant and stage', async () => {
   const backend = runner(async request => {
     const role = /You are (\S+)/.exec(request.prompt)[1];
     return { agent: request.agent, status: 'completed', output: `EVIDENCE_${role}_${request.agent}\n${'x'.repeat(20000)}`, durationMs: 1 };
@@ -312,17 +344,18 @@ test('maximum project context preserves evidence from every council participant 
     assert.ok(judge.includes(`EVIDENCE_critic_${agent}`), `critique from ${agent}`);
   }
   assert.ok(judge.includes('Untrusted peer transcripts'));
-  assert.ok(judge.length < MAX_CONTEXT_CHARS + 2000);
+  assert.ok(judge.includes('z'.repeat(MAX_CONTEXT_CHARS)));
+  for (const step of result.steps.slice(0, -1)) assert.ok(judge.includes(step.result.output));
 });
 
-test('short peer handoffs return unused context capacity to the project note', async () => {
+test('short peer handoffs preserve the complete project note', async () => {
   const backend = runner();
   const context = `${'x'.repeat(50_000)}IMPORTANT_PROJECT_EVIDENCE${'x'.repeat(13_000)}`;
   const result = await new WorkflowEngine(config(), backend, store()).run(input('pipeline', { context }));
   assert.equal(result.status, 'completed');
   assert.ok(backend.calls[1].prompt.includes('IMPORTANT_PROJECT_EVIDENCE'));
   assert.ok(backend.calls[1].prompt.includes('codex answer'));
-  assert.ok(backend.calls[1].prompt.length < MAX_CONTEXT_CHARS + 2000);
+  assert.ok(backend.calls[1].prompt.includes(context));
 });
 
 function sharedStores(t) {
@@ -609,37 +642,41 @@ test('cancelling a global-slot wait removes its durable waiter before finalizing
   assert.deepEqual(removed, [{ instanceId: 'waiting-owner', waiterId: waiter }]);
 });
 
-test('pipeline stages receive bounded earlier evidence even when the immediate predecessor omits it', async () => {
+test('pipeline stages receive full earlier evidence even when the immediate predecessor omits it', async () => {
   const backend = runner(async (request, count) => ({ agent: request.agent, status: 'completed', output: count === 1 ? 'UNIQUE_FIRST_STAGE_EVIDENCE' : count === 2 ? 'Second-stage handoff omits the earlier fact.' : 'Final stage result.', durationMs: 1 }));
   const result = await new WorkflowEngine(config(), backend, store()).run(input('pipeline', { agents, context: 'P'.repeat(MAX_CONTEXT_CHARS) }));
   assert.equal(result.status, 'completed'); assert.equal(result.output, 'Final stage result.');
   assert.ok(backend.calls[2].prompt.includes('UNIQUE_FIRST_STAGE_EVIDENCE'));
   assert.ok(backend.calls[2].prompt.includes('Second-stage handoff'));
-  assert.ok(backend.calls[2].prompt.length < MAX_CONTEXT_CHARS + 2000);
+  assert.ok(backend.calls[2].prompt.includes('P'.repeat(MAX_CONTEXT_CHARS)));
 });
 
-test('short peer replies survive a maximum project note without estimated-header truncation', async () => {
+test('short peer replies and the full project note survive together without truncation', async () => {
   const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: `COMPLETE_${request.agent}_REPLY`, durationMs: 1 }));
   const result = await new WorkflowEngine(config(), backend, store()).run(input('parallel', { judge: 'junie', context: 'P'.repeat(MAX_CONTEXT_CHARS) }));
   assert.equal(result.status, 'completed');
   const judge = backend.calls.at(-1).prompt;
   assert.ok(judge.includes('COMPLETE_codex_REPLY')); assert.ok(judge.includes('COMPLETE_claude_REPLY'));
-  assert.ok(judge.length < MAX_CONTEXT_CHARS + 2000);
+  assert.ok(judge.includes('P'.repeat(MAX_CONTEXT_CHARS)));
 });
 
-test('parallel selected output fairly represents every worker within its UTF-8 byte budget', async () => {
-  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: `UNIQUE_${request.agent}\n` + '🌍'.repeat(2000), durationMs: 1 }));
+test('parallel selected output that exceeds its configured budget fails with complete retained worker evidence', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: `UNIQUE_${request.agent}\n` + '🌍'.repeat(200), durationMs: 1 }));
   const result = await new WorkflowEngine(config(process.cwd(), { maxOutputBytes: 1024 }), backend, store()).run(input('parallel', { agents }));
-  assert.equal(result.status, 'completed'); assert.ok(Buffer.byteLength(result.output) <= 1024);
+  assert.equal(result.status, 'failed'); assert.match(result.error, /Selected workflow output exceeds configured maxOutputBytes/);
+  assert.ok(Buffer.byteLength(result.output) <= 1024);
   assert.ok(!result.output.includes('\uFFFD'));
-  for (const agent of agents) assert.ok(result.output.includes(`UNIQUE_${agent}`));
+  for (const agent of agents) {
+    const step = result.steps.find(step => step.agent === agent);
+    assert.equal(step.result.status, 'completed'); assert.equal(step.result.output, `UNIQUE_${agent}\n` + '🌍'.repeat(200));
+  }
 });
 
-test('parallel output gives unused short-answer capacity to the remaining worker', async () => {
-  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: request.agent === 'codex' ? 'short' : 'long evidence '.repeat(1000), durationMs: 1 }));
+test('parallel output within its configured budget includes complete short and long worker answers', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: request.agent === 'codex' ? 'short' : 'long evidence '.repeat(30), durationMs: 1 }));
   const result = await new WorkflowEngine(config(process.cwd(), { maxOutputBytes: 1024 }), backend, store()).run(input('parallel'));
-  assert.ok(result.output.includes('short')); assert.ok(result.output.indexOf('[claude]') < 30);
-  assert.ok(result.output.length > 1000); assert.ok(Buffer.byteLength(result.output) <= 1024);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, '[codex]\nshort\n\n[claude]\n' + 'long evidence '.repeat(30));
 });
 
 test('a full durable waiter queue is an operational failure rather than an evidence-write fault', async () => {
@@ -734,6 +771,30 @@ test('cancelled finalization has a bounded artifact budget and retains an export
   assert.equal(readFileSync(join(result.workspaces[0].path, 'retained.txt'), 'utf8'), 'evidence survives cancellation\n');
   const artifact = await new GitWorkspaces(root, join(root, '.council')).export(result.workspaces[0]);
   assert.equal(artifact.exportStatus, 'ready'); assert.match(readFileSync(artifact.patchPath, 'utf8'), /evidence survives cancellation/);
+});
+
+test('provider cancellation applies the short artifact deadline without an external abort', { timeout: 60_000 }, async t => {
+  const { root } = repository(t);
+  const original = GitWorkspaces.prototype.export;
+  GitWorkspaces.prototype.export = async function (_artifact, signal) {
+    t.mock.timers.tick(40);
+    signal.throwIfAborted();
+    throw new Error('Provider cancellation did not apply its artifact deadline.');
+  };
+  let result;
+  try {
+    const backend = runner(async request => {
+      writeFileSync(join(request.cwd, 'retained.txt'), 'evidence survives provider cancellation\n');
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      return { agent: request.agent, status: 'cancelled', output: 'partial provider work', durationMs: 1, error: 'Provider cancelled its turn.' };
+    });
+    result = await new WorkflowEngine(config(root), backend, store(), { artifactTimeoutMs: 1000, cancellationArtifactTimeoutMs: 40 }).run(input('delegate', { permission: 'write' }));
+  } finally { t.mock.timers.reset(); GitWorkspaces.prototype.export = original; }
+  assert.equal(result.status, 'cancelled'); assert.equal(result.workspaces[0].exportStatus, 'pending');
+  assert.match(result.error, /Provider cancelled its turn/); assert.match(result.error, /deadline exceeded/);
+  assert.equal(readFileSync(join(result.workspaces[0].path, 'retained.txt'), 'utf8'), 'evidence survives provider cancellation\n');
+  const artifact = await new GitWorkspaces(root, join(root, '.council')).export(result.workspaces[0]);
+  assert.equal(artifact.exportStatus, 'ready'); assert.match(readFileSync(artifact.patchPath, 'utf8'), /evidence survives provider cancellation/);
 });
 
 test('failed worktree creation retains its pending artifact before filesystem effects', async t => {

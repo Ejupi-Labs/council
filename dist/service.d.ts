@@ -1,6 +1,9 @@
 import { WorkflowEngine } from './engine.js';
 import { CouncilStore } from './store.js';
 import { type RunSummary } from './summary.js';
+import { RoomManager } from './rooms.js';
+import { BillingManager } from './billing.js';
+import type { RoutingInput } from './routing-types.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
 export declare class CouncilService {
     readonly config: CouncilConfig;
@@ -22,10 +25,64 @@ export declare class CouncilService {
     private heartbeatContentions;
     private closePromise?;
     private closing;
+    private readonly shutdownWaits;
+    private roomManager?;
+    private billingManager?;
+    private dashboard?;
+    get rooms(): RoomManager;
+    get billing(): BillingManager;
+    billingView(): {
+        agents: {
+            alias: string;
+            enabled: boolean;
+            profile: string;
+            model: string | null;
+            revision: number;
+            mode: import("./billing-types.js").BillingMode;
+            accountKey: string | null;
+            plan: string | null;
+            source: import("./billing-types.js").BillingSource | null;
+            observedAt: string | null;
+            validUntil: string | null;
+            stale: boolean;
+            windows: import("./billing-types.js").BillingWindow[];
+            prices: import("./billing-types.js").BillingPrices | null;
+            routing: import("./billing-types.js").BillingRouting | null;
+            skills: string[] | null;
+            effectiveSkills: string[];
+            availability: import("./billing-types.js").BillingAvailability;
+        }[];
+        skills: ({
+            id: "dont-kill-an-ant-with-a-bazooka";
+            name: "Don't kill an ant with a bazooka";
+            description: 'Right-size models, effort and collaboration to the task while preserving verification and explicit model choices.';
+        } | {
+            id: "council-implementation-review";
+            name: 'Implementation and review';
+            description: 'Separate implementation, independent review and revision for work that benefits from a second perspective.';
+        } | {
+            id: "council-independent-perspectives";
+            name: 'Independent perspectives';
+            description: 'Keep parallel analyses independent and make disagreements and evidence explicit.';
+        } | {
+            id: "council-advisor";
+            name: 'Focused advisor';
+            description: 'Use a focused read-only consultation when a specific uncertainty warrants another model.';
+        })[];
+    };
+    routePlan(input: RoutingInput): import("./routing-types.js").RoutingPlan;
+    routeRun(input: RoutingInput): {
+        run: RunRecord;
+        selection: import("./routing-types.js").RoutingPlan;
+    };
+    openDashboard(port?: number): Promise<{
+        url: string;
+    }>;
     constructor(config: CouncilConfig, runner?: AgentRunner);
     private heartbeatTick;
     start(value: unknown, provenance?: {
-        previousId: string;
+        previousId?: string;
+        routing?: unknown;
     }): RunRecord;
     run(input: WorkflowInput): Promise<RunRecord>;
     completion(id: string): Promise<RunRecord>;
@@ -35,6 +92,42 @@ export declare class CouncilService {
     private summary;
     waitSummary(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunSummary>;
     wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunRecord>;
+    /** Await results inside the server; elapsed idle time does not dispatch a model. */
+    awaitRuns(ids: string[], timeoutMs?: number, signal?: AbortSignal): Promise<{
+        runs: RunSummary[];
+        timedOut: boolean;
+        waitingInServer: true;
+    }>;
+    /** Full selected answers and step metadata, each taken from one consistent run snapshot. */
+    awaitResults(ids: string[], timeoutMs?: number, signal?: AbortSignal): Promise<{
+        waitingInServer: true;
+        runs: {
+            id: string;
+            status: import("./types.js").RunStatus;
+            error: string | undefined;
+            output: string | undefined;
+            outputTruncated: false;
+            steps: {
+                id: string;
+                agent: string;
+                role: string;
+                status: import("./types.js").ResultStatus;
+                durationMs: number;
+                error: string | undefined;
+            }[];
+            fullResultResource: string;
+        }[];
+        timedOut: boolean;
+    }>;
+    /** A bounded read-only consultation, independent of the requester's harness. */
+    advise(input: {
+        requester: string;
+        advisor: string;
+        question: string;
+        context?: string;
+        model?: string;
+        effort?: import('./types.js').ReasoningEffort;
+    }): RunRecord;
     health(checkIntegrity?: boolean): {
         status: string;
         version: string;

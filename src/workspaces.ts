@@ -165,7 +165,9 @@ export class GitWorkspaces {
         }
         if (kind !== 'tree') throw new Error('The selected project directory is not a committed directory in the captured HEAD.');
       }
-      base = { repo, head: head!, suffix };
+      // Another worker may have captured this run's base while Git metadata was
+      // being read. Select the existing base without another asynchronous gap.
+      base = this.runBases.get(runId) ?? { repo, head: head!, suffix };
       this.runBases.set(runId, base);
     }
     const path = join(this.state, 'worktrees', segment(runId), segment(slot));

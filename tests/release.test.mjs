@@ -54,7 +54,9 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   assert.equal(packed.length, 1);
   assert.equal(packed[0].version, releaseVersion);
   const packagedPaths = packed[0].files.map(file => file.path.replaceAll('\\', '/'));
-  for (const file of ['dist/cli.js', 'plugin.json', 'mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/council/SKILL.md']) {
+  for (const file of ['dist/cli.js', 'plugin.json', 'mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/council/SKILL.md',
+    'skills/dont-kill-an-ant-with-a-bazooka/SKILL.md', 'skills/council-implementation-review/SKILL.md',
+    'skills/council-independent-perspectives/SKILL.md', 'skills/council-advisor/SKILL.md', 'schemas/billing.schema.json', 'schemas/routing.schema.json']) {
     assert.ok(packagedPaths.includes(file), `The release must contain ${file}.`);
   }
   assert.ok(packagedPaths.every(file => !/(^|\/)(?:\.council|\.serena|node_modules|tests)(?:\/|$)/.test(file)), 'Local state, dependencies and test fixtures must not enter the release.');
@@ -106,18 +108,21 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   await client.connect(transport);
   assert.equal(client.getServerVersion().version, releaseVersion);
   const available = (await client.listTools()).tools.map(tool => tool.name);
-  for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel', 'council_health', 'council_run_page', 'council_backup', 'council_prune', 'council_patches']) assert.ok(available.includes(name));
+  for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel', 'council_health', 'council_run_page', 'council_backup', 'council_prune', 'council_patches',
+    'council_billing', 'council_billing_update', 'council_billing_import', 'council_route_plan', 'council_route_run', 'council_skills']) assert.ok(available.includes(name));
   const call = async (name, input) => {
     const response = await client.callTool({ name, arguments: input });
     assert.notEqual(response.isError, true, `Installed MCP tool ${name} failed: ${response.content?.map(item => item.text ?? '').join(' ')}`);
     return JSON.parse(response.content.find(item => item.type === 'text').text);
   };
-  const input = { mode: 'delegate', task: 'Verify the self-contained installed package offline.', agents: ['codex'], permission: 'read' };
+  const input = { mode: 'delegate', task: 'Verify the self-contained installed package offline.', agents: ['codex'], permission: 'read',
+    agentSettings: { codex: { skills: ['dont-kill-an-ant-with-a-bazooka'] } } };
   assert.equal((await call('council_plan', input)).estimatedCalls, 1);
   const queued = await call('council_run', input);
   const completed = await call('council_status', { id: queued.id, waitMs: 3000, includeResults: true });
   assert.equal(completed.status, 'completed');
   assert.ok(completed.steps[0].result.output.includes('[MOCK'));
+  assert.deepEqual(completed.input.agentSettings.codex.skills, ['dont-kill-an-ant-with-a-bazooka']);
   const modes = await client.readResource({ uri: 'council://modes' });
   assert.equal(JSON.parse(modes.contents[0].text).modes.length, 6);
   await close();

@@ -107,8 +107,9 @@ export class CouncilStore {
             const journal = this.statement('PRAGMA journal_mode').get();
             if (initial.user_version !== SCHEMA_VERSION || journal.journal_mode !== 'wal') {
                 // Initialization runs before vendor work; runtime writes retain their short contention bound.
-                this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
-                this.transaction(() => {
+                const deadline = performance.now() + 5000;
+                this.retryStartup(() => this.db.exec('PRAGMA journal_mode = WAL;'), deadline);
+                this.retryStartup(() => this.transaction(() => {
                     // Recheck under the migration lock: another process may have upgraded while opening.
                     const version = this.statement('PRAGMA user_version').get();
                     if (version.user_version > SCHEMA_VERSION)
@@ -173,7 +174,7 @@ export class CouncilStore {
         `);
                     if (version.user_version < 3)
                         this.db.exec("UPDATE runs SET cancel_requested = 1 WHERE cancel_requested = 0 AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.type = 'cancel_requested')");
-                });
+                }), deadline);
                 this.db.exec('PRAGMA busy_timeout = 250;');
             }
             this.restrictDatabaseFiles();
@@ -181,6 +182,23 @@ export class CouncilStore {
         catch (error) {
             this.db.close();
             throw error;
+        }
+    }
+    /** WAL lock upgrades can bypass SQLite's busy handler; retry only startup SQL within one deadline. */
+    retryStartup(operation, deadline) {
+        const wait = new Int32Array(new SharedArrayBuffer(4));
+        for (;;) {
+            this.db.exec(`PRAGMA busy_timeout = ${Math.max(1, Math.ceil(deadline - performance.now()))};`);
+            try {
+                return operation();
+            }
+            catch (error) {
+                const remaining = deadline - performance.now();
+                const code = error && typeof error === 'object' && 'errcode' in error ? error.errcode : undefined;
+                if (typeof code !== 'number' || (code & 0xff) !== 5 || remaining <= 0)
+                    throw error;
+                Atomics.wait(wait, 0, 0, Math.min(25, remaining));
+            }
         }
     }
     /** SQLite inherits the database mode when creating WAL/SHM beside existing state directories. */
@@ -374,7 +392,7 @@ export class CouncilStore {
         text(input.from, 'Sender', 128);
         text(input.to, 'Recipient', 128);
         text(input.subject, 'Message subject', 512);
-        text(input.body, 'Message body', 32 * 1024);
+        text(input.body, 'Message body', MAX_JSON_BYTES);
         if (input.runId !== undefined)
             text(input.runId, 'Run id', 256);
         const message = { ...input, id: randomUUID(), createdAt: new Date().toISOString() };
@@ -483,9 +501,10 @@ export class CouncilStore {
     }
     putContext(key, value, author) {
         text(key, 'Context key', 256);
-        text(value, 'Context value', 64 * 1024);
+        text(value, 'Context value', MAX_JSON_BYTES);
         text(author, 'Context author', 128);
         const entry = { key, value, author, updatedAt: new Date().toISOString() };
+        encode(entry); // Apply the same explicit record-size guard used by peer messages.
         this.statement('INSERT INTO context(key, value, author, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, author = excluded.author, updated_at = excluded.updated_at')
             .run(key, value, author, entry.updatedAt);
         return entry;

@@ -21,6 +21,7 @@ function fixture(t, commit = true) {
   git('init', '--quiet');
   git('config', 'user.email', 'test@example.invalid');
   git('config', 'user.name', 'Council Test');
+  git('config', 'core.autocrlf', 'false');
   writeFileSync(join(root, 'base.txt'), 'committed content\n');
   if (commit) { git('add', '.'); git('commit', '--quiet', '-m', 'base'); }
   return { root, git, dir, state: join(dir, 'state'), manager: new GitWorkspaces(root, join(dir, 'state')) };
@@ -98,6 +99,43 @@ test('all workers in a run retain one base even if the original HEAD changes', a
   const second = await manager.create('shared-base', 'claude');
   assert.equal(first.baseHead, second.baseHead);
   assert.equal(readFileSync(join(second.path, 'base.txt'), 'utf8'), 'committed content\n');
+});
+
+test('concurrent workers retain one base when HEAD advances during Git preflight', { timeout: 60_000 }, async t => {
+  const { manager, root, git } = fixture(t);
+  const originalGit = manager.git.bind(manager);
+  let releaseFirst, capturedFirst;
+  const gate = new Promise(resolve => { releaseFirst = resolve; });
+  const captured = new Promise(resolve => { capturedFirst = resolve; });
+  let preflights = 0;
+  manager.git = async (...args) => {
+    const result = await originalGit(...args);
+    if (args[1][0] === 'rev-parse' && args[1].includes('--show-toplevel') && ++preflights === 1) {
+      capturedFirst();
+      await gate;
+    }
+    return result;
+  };
+  const pending = manager.create('concurrent-base', 'codex');
+  try {
+    await Promise.race([captured, pending]);
+    writeFileSync(join(root, 'base.txt'), 'advanced while first worker waits\n');
+    git('add', '.'); git('commit', '--quiet', '-m', 'advance concurrent original');
+    const advancedHead = git('rev-parse', 'HEAD').trim();
+    const second = await manager.create('concurrent-base', 'claude');
+    releaseFirst();
+    const first = await pending;
+    const third = await manager.create('concurrent-base', 'junie');
+    for (const workspace of [first, second, third]) {
+      assert.equal(workspace.baseHead, advancedHead);
+      assert.equal(readFileSync(join(workspace.cwd, 'base.txt'), 'utf8'), 'advanced while first worker waits\n');
+    }
+    assert.equal(preflights, 2, 'Later workers must reuse the selected base without another preflight.');
+  } finally {
+    releaseFirst();
+    await pending.catch(() => {});
+    manager.git = originalGit;
+  }
 });
 
 test('patch export rejects symlinked managed ancestors', async t => {

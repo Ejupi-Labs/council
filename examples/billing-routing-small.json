@@ -1,0 +1,10 @@
+{
+  "mode": "unknown",
+  "routing": {
+    "tier": "small",
+    "capabilities": ["code", "docs"],
+    "costRank": 1,
+    "qualityRank": 1
+  },
+  "skills": ["dont-kill-an-ant-with-a-bazooka"]
+}

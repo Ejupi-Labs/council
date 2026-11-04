@@ -7,14 +7,12 @@ export function objectSchema(properties, required = []) {
 export function parseSchema(schema, value, label = 'input') {
     // Bound every input branch, including permissive schemas, before allocating parsed copies.
     const pending = [{ value, depth: 0 }];
-    let inspected = 0, textBytes = 0;
+    let inspected = 0;
     while (pending.length) {
         const current = pending.pop();
         if (++inspected > 8192 || current.depth > 64)
             throw new ValidationError('Input exceeds the structural validation limit.');
         const entry = current.value;
-        if (typeof entry === 'string')
-            textBytes += Buffer.byteLength(entry);
         if (typeof entry === 'bigint' || typeof entry === 'symbol' || typeof entry === 'function' || (typeof entry === 'number' && !Number.isFinite(entry)))
             throw new ValidationError('Input must contain JSON-compatible values.');
         if (entry && typeof entry === 'object') {
@@ -24,12 +22,9 @@ export function parseSchema(schema, value, label = 'input') {
                 if (Object.hasOwn(entry, key)) {
                     if (inspected + pending.length >= 8192)
                         throw new ValidationError('Input exceeds the structural validation limit.');
-                    textBytes += Buffer.byteLength(key);
                     pending.push({ value: entry[key], depth: current.depth + 1 });
                 }
         }
-        if (textBytes > 1_048_576)
-            throw new ValidationError('Input text exceeds 1 MiB.');
     }
     let nodes = 0;
     function parse(rule, input, path, depth) {
@@ -38,6 +33,23 @@ export function parseSchema(schema, value, label = 'input') {
         if (input === undefined && rule.default !== undefined)
             input = structuredClone(rule.default);
         const fail = (detail) => { throw new ValidationError(`${path}: ${detail}`); };
+        if (Array.isArray(rule.type)) {
+            for (const type of rule.type) {
+                try {
+                    return parse({ ...rule, type }, input, path, depth);
+                }
+                catch (error) {
+                    if (!(error instanceof ValidationError))
+                        throw error;
+                }
+            }
+            return fail(`must match one of: ${rule.type.join(', ')}.`);
+        }
+        if (rule.type === 'null') {
+            if (input !== null)
+                fail('must be null.');
+            return null;
+        }
         if (rule.const !== undefined && input !== rule.const)
             fail(`must equal ${JSON.stringify(rule.const)}.`);
         if (rule.enum && !rule.enum.includes(input))
@@ -62,6 +74,8 @@ export function parseSchema(schema, value, label = 'input') {
                 fail(`must be at least ${rule.minimum}.`);
             if (rule.maximum !== undefined && number > rule.maximum)
                 fail(`must be at most ${rule.maximum}.`);
+            if (rule.exclusiveMinimum !== undefined && number <= rule.exclusiveMinimum)
+                fail(`must be greater than ${rule.exclusiveMinimum}.`);
             return number;
         }
         if (rule.type === 'boolean') {

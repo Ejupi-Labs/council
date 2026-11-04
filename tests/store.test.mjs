@@ -68,7 +68,20 @@ test('mail is recipient scoped and only that recipient can acknowledge delivery'
   assert.equal(store.acknowledge(message.id, 'junie'), false);
   assert.equal(store.inbox('junie').length, 0);
   assert.ok(store.inbox('junie', false)[0].acknowledgedAt);
-  assert.throws(() => store.sendMessage({ from: 'codex', to: 'junie', subject: 'too large', body: 'x'.repeat(32769) }), /32768/);
+  assert.throws(() => store.sendMessage({ from: 'codex', to: 'junie', subject: 'too large', body: 'x'.repeat(4 * 1024 * 1024 + 1) }), /4194304/);
+});
+
+test('peer handoffs and project notes retain complete evidence beyond former text caps across reopen', t => {
+  const { open } = fixture(t), store = open();
+  const body = 'Peer evidence. '.repeat(9000) + 'PEER_HANDOFF_TAIL';
+  const value = 'Project evidence. '.repeat(9000) + 'PROJECT_NOTE_TAIL';
+  store.sendMessage({ from: 'codex', to: 'junie', subject: 'Complete evidence', body });
+  store.putContext('full-evidence', value, 'PM');
+  const reopened = open();
+  assert.equal(reopened.inboxPage('junie')[0].body, body);
+  assert.equal(reopened.getContext('full-evidence').value, value);
+  assert.throws(() => store.putContext('too-large', 'x'.repeat(4 * 1024 * 1024 + 1), 'PM'), /4194304/);
+  assert.equal(store.getContext('too-large'), undefined);
 });
 
 test('two connections serialize lease ownership and batch conflict rolls back every path', t => {

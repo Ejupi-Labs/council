@@ -33,6 +33,13 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       send({ id: 'fs-request', method: 'fs/write_text_file', params: { sessionId: 'council-fixture-session', path: '/not-used', content: 'Never written' } }); continue;
     }
     if (process.env.COUNCIL_TEST_ACP_CASE === 'hang') { setInterval(() => {}, 1000); continue; }
+    if (['provider-auth-answer', 'provider-auth-example'].includes(process.env.COUNCIL_TEST_ACP_CASE)) {
+      const text = process.env.COUNCIL_TEST_ACP_CASE === 'provider-auth-answer' ? 'Authentication data is invalid or missing'
+        : 'An example authentication diagnostic is "Authentication data is invalid or missing". Sign in again to resolve it.';
+      send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+      send({ id: pendingPrompt, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (!event.params.prompt.some(content => content.type === 'text' && content.text.includes('request-write-permission'))) {
       send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: `Local ACP fixture completed; depth=${process.env.COUNCIL_DEPTH}` } } } });

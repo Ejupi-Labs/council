@@ -1,4 +1,5 @@
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkflowPlan } from './types.js';
+/** Legacy sizing constants retained for callers; these no longer limit workflow inputs. */
 export declare const MAX_TASK_CHARS = 32000;
 export declare const MAX_CONTEXT_CHARS = 64000;
 export interface WorkflowStore {

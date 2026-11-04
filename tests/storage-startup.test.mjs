@@ -80,6 +80,58 @@ test('independent cold processes can initialize the same new workspace', { timeo
   assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 250);
 });
 
+test('cold WAL startup retries immediate busy errors and restores the short runtime timeout', t => {
+  const setup = fixture(t);
+  const nativeExec = DatabaseSync.prototype.exec;
+  let attempts = 0;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (sql === 'PRAGMA journal_mode = WAL;' && ++attempts <= 2) {
+      throw Object.assign(new Error('Injected WAL upgrade contention without a busy-handler wait.'), { errcode: attempts === 1 ? 5 : 261 });
+    }
+    return nativeExec.call(this, sql);
+  };
+  let store;
+  try { store = setup.open(); } finally { DatabaseSync.prototype.exec = nativeExec; }
+  assert.equal(attempts, 3);
+  assert.equal(store.health().schemaVersion, 5);
+  assert.deepEqual(store.checkIntegrity(), ['ok']);
+  assert.equal(store.db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
+  assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 250);
+});
+
+test('cold WAL startup preserves non-contention failures without retrying', t => {
+  const setup = fixture(t);
+  const nativeExec = DatabaseSync.prototype.exec;
+  const failure = Object.assign(new Error('Injected journal I/O failure.'), { errcode: 10 });
+  let attempts = 0;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (sql === 'PRAGMA journal_mode = WAL;') { attempts++; throw failure; }
+    return nativeExec.call(this, sql);
+  };
+  try { assert.throws(() => setup.open(), error => error === failure); }
+  finally { DatabaseSync.prototype.exec = nativeExec; }
+  assert.equal(attempts, 1);
+  assert.equal(setup.open().health().schemaVersion, 5);
+});
+
+test('persistent cold WAL contention exhausts one five-second startup budget', { timeout: 10000 }, t => {
+  const setup = fixture(t);
+  const nativeExec = DatabaseSync.prototype.exec;
+  const failure = Object.assign(new Error('Injected persistent WAL upgrade contention.'), { errcode: 5 });
+  let attempts = 0;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (sql === 'PRAGMA journal_mode = WAL;') { attempts++; throw failure; }
+    return nativeExec.call(this, sql);
+  };
+  const started = performance.now();
+  try { assert.throws(() => setup.open(), error => error === failure); }
+  finally { DatabaseSync.prototype.exec = nativeExec; }
+  const elapsed = performance.now() - started;
+  assert.ok(attempts > 1);
+  assert.ok(elapsed >= 4900 && elapsed < 6500, `Startup contention must consume one bounded five-second budget; observed ${elapsed} ms.`);
+  assert.equal(setup.open().db.prepare('PRAGMA busy_timeout').get().timeout, 250);
+});
+
 test('a contender waits for a slow peer migration and skips DDL after that peer upgrades the schema', { timeout: 30000 }, async t => {
   const setup = fixture(t);
   const legacy = new DatabaseSync(join(setup.directory, 'state.db'));

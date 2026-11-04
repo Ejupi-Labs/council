@@ -32,5 +32,5 @@ export declare class ManagedProcess extends EventEmitter {
     kill(_signal?: NodeJS.Signals): boolean;
     forceKill(): Promise<void>;
 }
-/** Resolve executable paths and recognized npm bins without ever evaluating shell text. */
+/** Resolve executables and recognized installation shims without evaluating shell text. */
 export declare function resolveLaunch(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<ProcessLaunch>;
