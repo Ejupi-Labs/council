@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { WorkspaceArtifact } from './types.js';
-import { ManagedProcess } from './process.js';
+import { ManagedProcess, ProcessCleanupError } from './process.js';
+import { sanitizedGitEnvironment } from './git-env.js';
+import { retryWindowsSharing } from './fs-retry.js';
 
 export interface WorkspaceHandle extends WorkspaceArtifact { cwd: string; baseHead: string }
 interface Manifest { path: string; patchPath: string; agent: string; cwd: string; baseHead: string; gitDir?: string; removed?: boolean }
@@ -62,23 +64,31 @@ export class GitWorkspaces {
     return join(this.state, 'workspace-manifests', parts[0]!, `${parts[1]!}.json`);
   }
 
-  private async atomicWrite(path: string, data: string | Buffer, category: string, exclusive = false): Promise<void> {
+  private async atomicWrite(path: string, data: string | Buffer, category: string, exclusive = false, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     await this.checked(path, category);
+    signal?.throwIfAborted();
     await mkdir(dirname(path), { recursive: true });
     await this.checked(path, category);
+    signal?.throwIfAborted();
     const temporary = `${path}.${randomUUID()}.tmp`;
     let handle;
     try {
       handle = await open(temporary, 'wx', 0o600);
+      signal?.throwIfAborted();
       await handle.writeFile(data);
+      signal?.throwIfAborted();
       await handle.sync();
       await handle.close(); handle = undefined;
       await this.checked(path, category);
+      signal?.throwIfAborted();
       if (exclusive) await link(temporary, path);
-      else await rename(temporary, path);
+      else await retryWindowsSharing(() => rename(temporary, path), signal);
+      signal?.throwIfAborted();
     } finally {
       await handle?.close();
-      await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      // Cleanup must finish even when the caller's publication signal is already aborted.
+      await retryWindowsSharing(() => unlink(temporary)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
     }
   }
 
@@ -86,7 +96,7 @@ export class GitWorkspaces {
     if (signal?.aborted) return Promise.reject(new Error('Git workspace operation cancelled.'));
     return new Promise((accept, reject) => {
       const child = new ManagedProcess({ command: 'git', args: ['-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + join(this.state, 'disabled-hooks'), '-C', cwd, ...args],
-        cwd, environment: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+        cwd, environment: { ...sanitizedGitEnvironment(), GIT_TERMINAL_PROMPT: '0' } });
       const chunks: Buffer[] = [];
       let bytes = 0;
       let diagnostics = '';
@@ -94,12 +104,16 @@ export class GitWorkspaces {
       let forceTimer: ReturnType<typeof setTimeout> | undefined;
       let forceDone: Promise<void> | undefined;
       let stopping = false;
-      const stop = (message: string): void => {
-        failure ??= new Error(message);
+      const stop = (reason: string | Error): void => {
+        const error = typeof reason === 'string' ? new Error(reason) : reason;
+        if (error instanceof ProcessCleanupError) failure = error;
+        else failure ??= error;
         if (stopping) return;
         stopping = true;
         child.kill();
-        forceTimer = setTimeout(() => { forceDone = child.forceKill().catch(() => { /* Close still determines observable process completion. */ }); }, 1500);
+        forceTimer = setTimeout(() => {
+          forceDone = child.forceKill().catch(error => { failure = error instanceof ProcessCleanupError ? error : new ProcessCleanupError(); });
+        }, 1500);
       };
       const abort = (): void => { stop('Git workspace operation cancelled.'); };
       const timer = setTimeout(() => stop('Git workspace operation timed out.'), 60_000);
@@ -111,7 +125,7 @@ export class GitWorkspaces {
       });
       child.stderr.on('data', (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString('utf8')).slice(0, 4096); });
       child.stdin.on('error', () => { /* Process completion determines the result. */ });
-      child.on('error', error => { stop(error.message); });
+      child.on('error', error => { stop(error); });
       child.once('close', async code => {
         clearTimeout(timer);
         clearTimeout(forceTimer);
@@ -131,17 +145,28 @@ export class GitWorkspaces {
   private async createWorktree(runId: string, agent: string, slot: string, signal: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void): Promise<WorkspaceHandle> {
     let base = this.runBases.get(runId);
     if (!base) {
+      let metadata: string;
       try {
-        const [repo, head] = (await this.git(this.root, ['rev-parse', '--show-toplevel', '--verify', 'HEAD^{commit}'], undefined, signal)).toString('utf8').trim().split(/\r?\n/);
-        if (!repo || !head) throw new Error('Git did not return a repository and base commit.');
-        const suffix = relative(resolve(repo), this.root);
-        if (suffix && !inside(resolve(repo), this.root)) throw new Error('Workspace is outside its Git repository.');
-        base = { repo, head, suffix };
-        this.runBases.set(runId, base);
+        metadata = (await this.git(this.root, ['rev-parse', '--show-toplevel', '--verify', 'HEAD^{commit}'], undefined, signal)).toString('utf8');
       } catch (error) {
-        if (signal?.aborted) throw error;
+        if (signal?.aborted || error instanceof ProcessCleanupError) throw error;
         throw new Error('Write workflows require a Git repository with an existing HEAD commit. Commit the project before creating isolated worktrees.');
       }
+      const [repo, head] = metadata.trim().split(/\r?\n/);
+      if (!repo || !/^[a-f0-9]{40,64}$/.test(head ?? '')) throw new Error('Git did not return a repository and base commit.');
+      const suffix = relative(resolve(repo), this.root);
+      if (suffix && !inside(resolve(repo), this.root)) throw new Error('Workspace is outside its Git repository.');
+      if (suffix) {
+        let kind: string;
+        try { kind = (await this.git(this.root, ['cat-file', '-t', `${head}:${suffix.split(sep).join('/')}`], undefined, signal)).toString('utf8').trim(); }
+        catch (error) {
+          if (signal.aborted || error instanceof ProcessCleanupError) throw error;
+          throw new Error('The selected project directory is not present in the captured HEAD commit. Commit that directory or select a committed project before creating isolated worktrees.');
+        }
+        if (kind !== 'tree') throw new Error('The selected project directory is not a committed directory in the captured HEAD.');
+      }
+      base = { repo, head: head!, suffix };
+      this.runBases.set(runId, base);
     }
     const path = join(this.state, 'worktrees', segment(runId), segment(slot));
     const patchPath = join(this.state, 'patches', segment(runId), `${segment(slot)}.patch`);
@@ -152,12 +177,15 @@ export class GitWorkspaces {
     onPrepared?.({ agent, path, patchPath, baseCommit: base.head, changed: false, exportStatus: 'pending' });
     signal.throwIfAborted();
     await mkdir(dirname(path), { recursive: true });
-    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', true);
+    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', true, signal);
     await this.git(this.root, ['worktree', 'add', '--detach', path, base.head], undefined, signal);
     const pointer = /^gitdir: (.+)\s*$/.exec((await readFile(join(path, '.git'), 'utf8')).trim());
     if (!pointer) throw new Error('Git did not create valid worktree metadata.');
     manifest.gitDir = await realpath(resolve(path, pointer[1]!.trim()));
-    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests');
+    await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', false, signal);
+    await this.checked(manifest.cwd, 'worktrees');
+    const directory = await lstat(manifest.cwd).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
+    if (!directory?.isDirectory()) throw new Error('The captured project directory is unavailable in the isolated worktree. Inspect sparse-checkout settings and the retained preparation intent before retrying.');
     return { agent, path, patchPath, changed: false, cwd: manifest.cwd, baseHead: base.head, baseCommit: base.head };
   }
 
@@ -189,9 +217,9 @@ export class GitWorkspaces {
       const common = (await this.git(this.root, ['rev-parse', '--path-format=absolute', '--git-common-dir'], undefined, signal)).toString('utf8').trim();
       if (!inside(join(common, 'worktrees'), actualGitDir)) throw new Error('Incomplete worktree metadata does not belong to this managed repository.');
       const reverse = (await readFile(join(actualGitDir, 'gitdir'), 'utf8')).trim();
-      if (resolve(reverse) !== resolve(pointer)) throw new Error('Incomplete worktree metadata does not belong to this managed repository.');
+      if (resolve(actualGitDir, reverse) !== resolve(pointer)) throw new Error('Incomplete worktree metadata does not belong to this managed repository.');
       manifest.gitDir = actualGitDir;
-      await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests');
+      await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests', false, signal);
     }
     if (actualGitDir !== await realpath(manifest.gitDir)) throw new Error('Managed worktree Git metadata has been redirected.');
     if (!(registered ?? await this.registrations(signal)).has(resolve(manifest.path))) throw new Error('Worktree is no longer registered with the original repository.');
@@ -204,15 +232,34 @@ export class GitWorkspaces {
 
   private async exportWorktree(artifact: WorkspaceArtifact, signal: AbortSignal): Promise<WorkspaceArtifact> {
     const manifest = await this.verify(artifact, signal);
+    await this.assertExportableSubmodules(manifest, signal);
     const untracked = await this.git(manifest.path, ['ls-files', '--others', '--exclude-standard', '-z'], undefined, signal);
     if (untracked.length > 0) await this.git(manifest.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked, signal);
-    const patch = await this.git(manifest.path, ['diff', '--binary', '--no-ext-diff', '--no-textconv', manifest.baseHead, '--'], undefined, signal);
+    const patch = await this.patch(manifest, signal);
     signal.throwIfAborted();
-    await this.atomicWrite(manifest.patchPath, patch, 'patches');
+    await this.atomicWrite(manifest.patchPath, patch, 'patches', false, signal);
+    signal.throwIfAborted();
     return { agent: artifact.agent, path: manifest.path, patchPath: manifest.patchPath, changed: patch.length > 0, baseCommit: manifest.baseHead, exportStatus: 'ready' };
   }
 
   forgetRun(runId: string): void { this.runBases.delete(runId); }
+
+  private patch(manifest: Manifest, signal: AbortSignal): Promise<Buffer> {
+    return this.git(manifest.path, ['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv',
+      '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', '--ignore-submodules=none', '--submodule=short', manifest.baseHead, '--'], undefined, signal);
+  }
+
+  private async assertExportableSubmodules(manifest: Manifest, signal: AbortSignal): Promise<void> {
+    const status = (await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=no', '--ignore-submodules=none'], undefined, signal)).toString('utf8').split('\0');
+    for (let index = 0; index < status.length; index++) {
+      const entry = status[index]!;
+      const submodule = /^[12] [^ ]+ (S[.C][.M][.U]) /.exec(entry)?.[1];
+      if (submodule && (submodule[2] === 'M' || submodule[3] === 'U')) {
+        throw new Error('Uncommitted submodule files cannot be preserved in a parent Git patch. Inspect the retained worktree, then commit or separately export and review nested changes before retrying patch repair or cleanup.');
+      }
+      if (entry.startsWith('2 ')) index++; // A rename record has a second NUL-delimited original path.
+    }
+  }
 
   cleanup(artifact: WorkspaceArtifact, options: CleanupOptions): Promise<void> {
     return this.operation(signal => this.cleanupWorktree(artifact, options, signal), options?.signal);
@@ -225,19 +272,20 @@ export class GitWorkspaces {
     const present = await lstat(manifest.path).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
     // Reconcile a crash after Git removal but before its manifest/event was committed.
     if (!present && !registered.has(resolve(manifest.path))) {
-      if (!manifest.removed) { manifest.removed = true; await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests'); }
+      if (!manifest.removed) { manifest.removed = true; await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests', false, signal); }
       return;
     }
     if (!present) throw new Error('The managed worktree directory is missing but its Git registration remains. Inspect it before cleanup.');
     const patch = await lstat(manifest.patchPath).catch(() => undefined);
     if (!patch?.isFile() || patch.isSymbolicLink()) throw new Error('Export and review a regular patch file before cleanup.');
     await this.verify(artifact, signal, manifest, registered);
-    const current = await this.git(manifest.path, ['diff', '--binary', '--no-ext-diff', '--no-textconv', manifest.baseHead, '--'], undefined, signal);
+    if (options.discardChanges !== true) await this.assertExportableSubmodules(manifest, signal);
+    const current = await this.patch(manifest, signal);
     const saved = await readFile(manifest.patchPath);
     if (options.discardChanges !== true && !current.equals(saved)) throw new Error('The worktree changed since patch export. Export and review it again before cleanup.');
     signal.throwIfAborted();
     await this.git(this.root, ['worktree', 'remove', ...(options.discardChanges === true ? ['--force'] : []), manifest.path], undefined, signal);
     manifest.removed = true;
-    await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests');
+    await this.atomicWrite(this.manifestPath(manifest.path), JSON.stringify(manifest), 'workspace-manifests', false, signal);
   }
 }

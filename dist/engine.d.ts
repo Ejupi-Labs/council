@@ -10,7 +10,8 @@ export interface WorkflowStore {
         sequence?: number;
     }>;
     isCancellationRequested?(runId: string): boolean;
-    acquireSlot?(instanceId: string, runId: string, limit: number): string | undefined;
+    acquireSlot?(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
+    cancelSlotWaiter?(instanceId: string, waiterId: string): void;
     releaseSlot?(token: string, instanceId: string): void;
     finalizeRun?(run: RunRecord): RunRecord;
 }
@@ -30,6 +31,7 @@ export declare class WorkflowEngine {
         instanceId?: string;
         artifactTimeoutMs?: number;
         cancellationArtifactTimeoutMs?: number;
+        onStateFailure?: (error: Error) => void;
     });
     plan(input: WorkflowInput): WorkflowPlan;
     run(input: WorkflowInput, options?: {

@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { metadataLookup, metadataResult } from './metadata.js';
+import { retryWindowsSharing } from './fs-retry.js';
 
 export const MAX_ACP_FILE_BYTES = 1024 * 1024;
 export const MAX_ACP_FILE_RESPONSE_BYTES = 2 * MAX_ACP_FILE_BYTES;
@@ -30,37 +32,57 @@ export class AcpFiles {
     if (typeof cwd !== 'string' || !cwd || cwd.includes('\0')) throw new Error('A valid project directory is required.');
     if (permission !== 'read' && permission !== 'write') throw new Error('File permission must be read or write.');
     this.configured = resolve(cwd);
-    this.root = realpath(this.configured).then(async path => {
-      if (!(await lstat(path)).isDirectory()) throw new Error('The project root must be a directory.');
+    this.root = metadataLookup(() => realpath(this.configured)).then(async path => {
+      if (!(await metadataLookup(() => lstat(path))).isDirectory()) throw new Error('The project root must be a directory.');
       return path;
     });
     // A failed root remains observable to every operation without an unhandled rejection.
     void this.root.catch(() => {});
   }
 
-  private async checked(path: unknown): Promise<string> {
+  private async checked(path: unknown, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\0') || !isAbsolute(path)) throw new Error('ACP file paths must be absolute, nonempty paths of at most 4096 characters.');
-    const root = await this.root;
+    const root = await metadataResult(this.root, signal);
     const input = resolve(path);
     const target = within(root, input) ? input : within(this.configured, input) ? resolve(root, relative(this.configured, input)) : undefined;
     if (!target || !within(root, target)) throw new Error('File path is outside the project root.');
     const parts = relative(root, target).split(sep).filter(Boolean);
     if (parts.some(metadata)) throw new Error('Git control paths and Council state are not available through ACP file callbacks.');
-    const rootInfo = await lstat(root);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || await realpath(root) !== root) throw new Error('The canonical project root has been redirected.');
+    const rootInfo = await metadataLookup(() => lstat(root, { bigint: true }), signal);
+    signal?.throwIfAborted();
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || await metadataLookup(() => realpath(root), signal) !== root) throw new Error('The canonical project root has been redirected.');
+    let claimedRoot = target;
+    for (let index = 0; index < parts.length; index++) claimedRoot = dirname(claimedRoot);
+    if (claimedRoot !== root) {
+      // Windows path comparison folds case even when NTFS has case sensitivity
+      // enabled. A differently spelled prefix must identify the selected directory.
+      const prefix = claimedRoot;
+      const claimedInfo = await metadataLookup(() => lstat(prefix, { bigint: true }), signal);
+      if (!claimedInfo.isDirectory() || claimedInfo.isSymbolicLink() || rootInfo.ino === 0n || claimedInfo.ino === 0n
+        || claimedInfo.dev !== rootInfo.dev || claimedInfo.ino !== rootInfo.ino) throw new Error('File path is outside the selected project root identity.');
+    }
     let current = root;
     for (const [index, part] of parts.entries()) {
       current = join(current, part);
       try {
-        const info = await lstat(current);
+        signal?.throwIfAborted();
+        const info = await metadataLookup(() => lstat(current), signal);
         if (info.isSymbolicLink()) throw new Error('Symlinks and junctions are not supported by ACP file callbacks.');
         if (index < parts.length - 1 && !info.isDirectory()) throw new Error('A file path ancestor is not a directory.');
-        if (!within(root, await realpath(current))) throw new Error('File path resolves outside the project root.');
+        signal?.throwIfAborted();
+        const checkedPath = current;
+        const canonical = await metadataLookup(() => realpath(checkedPath), signal);
+        if (!within(root, canonical)) throw new Error('File path resolves outside the project root.');
+        // Windows 8.3 aliases can name .git/.council without containing their literal names.
+        if (relative(root, canonical).split(sep).some(metadata)) throw new Error('Git control paths and Council state are not available through ACP file callbacks.');
       } catch (error) {
+        if (signal?.aborted) throw signal.reason;
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') break;
         throw error;
       }
     }
+    signal?.throwIfAborted();
     return target;
   }
 
@@ -72,15 +94,18 @@ export class AcpFiles {
     signal?.throwIfAborted();
     if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('File read parameters must be an object.');
     positive(params.line, 'line'); positive(params.limit, 'limit');
-    const path = await this.checked(params.path);
-    const before = await lstat(path, { bigint: true });
+    const path = await this.checked(params.path, signal);
+    signal?.throwIfAborted();
+    const before = await metadataLookup(() => lstat(path, { bigint: true }), signal);
     if (!before.isFile() || before.isSymbolicLink()) throw new Error('Only regular UTF-8 files can be read.');
     if (before.size > BigInt(MAX_ACP_FILE_BYTES)) throw new Error('File exceeds the 1 MiB read limit.');
+    signal?.throwIfAborted();
     const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     let bytes: Buffer;
     try {
+      signal?.throwIfAborted();
       const opened = await file.stat({ bigint: true });
-      await this.checked(params.path);
+      await this.checked(params.path, signal);
       if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('File changed while being opened.');
       const buffer = Buffer.allocUnsafe(MAX_ACP_FILE_BYTES + 1);
       let count = 0;
@@ -115,40 +140,46 @@ export class AcpFiles {
     const data = Buffer.from(params.content, 'utf8');
     if (data.length > MAX_ACP_FILE_BYTES) throw new Error('Content exceeds the 1 MiB write limit.');
     if (data.toString('utf8') !== params.content) throw new Error('File content contains an invalid Unicode sequence.');
-    const path = await this.checked(params.path);
+    const path = await this.checked(params.path, signal);
     const parent = dirname(path);
-    const root = await this.root;
+    const root = await metadataResult(this.root, signal);
     let current = root;
     for (const part of relative(root, parent).split(sep).filter(Boolean)) {
       signal?.throwIfAborted();
       current = join(current, part);
-      await this.checked(current);
+      await this.checked(current, signal);
+      signal?.throwIfAborted();
       await mkdir(current).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; });
-      await this.checked(current);
+      await this.checked(current, signal);
     }
-    await this.checked(params.path);
+    await this.checked(params.path, signal);
     let mode = 0o600;
     try {
-      const previous = await lstat(path);
+      signal?.throwIfAborted();
+      const previous = await metadataLookup(() => lstat(path), signal);
       if (!previous.isFile() || previous.isSymbolicLink()) throw new Error('Only regular text files can be replaced.');
       mode = previous.mode & 0o777;
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    } catch (error) { if (signal?.aborted) throw signal.reason; if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     signal?.throwIfAborted();
     const temporary = join(parent, `.council-write-${randomUUID()}.tmp`);
     let file;
     try {
       file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), mode);
-      await this.checked(temporary);
+      await this.checked(temporary, signal);
+      signal?.throwIfAborted();
       await file.writeFile(data);
+      signal?.throwIfAborted();
       await file.chmod(mode);
+      signal?.throwIfAborted();
       await file.sync();
       await file.close(); file = undefined;
       signal?.throwIfAborted();
-      await this.checked(params.path);
-      await this.checked(temporary);
-      if (await realpath(parent) !== parent) throw new Error('File parent changed before atomic replacement.');
+      await this.checked(params.path, signal);
+      await this.checked(temporary, signal);
       signal?.throwIfAborted();
-      await rename(temporary, path);
+      if (relative(await metadataLookup(() => realpath(parent), signal), parent) !== '') throw new Error('File parent changed before atomic replacement.');
+      signal?.throwIfAborted();
+      await retryWindowsSharing(() => rename(temporary, path), signal);
       return null;
     } finally {
       await file?.close();

@@ -20,6 +20,8 @@ export class CouncilMcpServer {
     closePromise;
     pump;
     outputAbort = new AbortController();
+    inputError = () => { void this.close(); };
+    outputError = () => { void this.close(); };
     modeReader;
     runReader;
     constructor(shutdown) {
@@ -35,6 +37,8 @@ export class CouncilMcpServer {
         return { connected: !!this.input && !this.closed, pendingRequests: this.pending.size, queuedResponseBytes: this.queuedBytes, queuedResponseFrames: this.queuedFrames, outputIsolated: !!this.pump };
     }
     async connect(input = process.stdin, output = process.stdout) {
+        if (this.closed)
+            throw new Error('MCP server is closed.');
         if (this.input)
             throw new Error('MCP server is already connected.');
         this.input = input;
@@ -53,8 +57,8 @@ export class CouncilMcpServer {
             void this.close();
         });
         guard.once('end', () => { void this.close(); });
-        input.once('error', () => { void this.close(); });
-        output.once('error', () => { void this.close(); });
+        input.once('error', this.inputError);
+        output.once('error', this.outputError);
         input.pipe(guard);
     }
     close() {
@@ -63,6 +67,11 @@ export class CouncilMcpServer {
         this.closed = true;
         this.input?.unpipe(this.guard);
         this.input?.pause();
+        const guard = this.guard;
+        this.guard = undefined;
+        guard?.destroy();
+        this.input?.removeListener('error', this.inputError);
+        this.output?.removeListener('error', this.outputError);
         for (const controller of this.pending.values())
             controller.abort();
         this.outputAbort.abort();
@@ -73,7 +82,7 @@ export class CouncilMcpServer {
         }).catch(error => {
             process.stderr.write(`Council shutdown failed: ${error instanceof Error ? error.message : 'unknown failure'}\n`);
             process.exitCode = 1;
-        }).finally(() => { this.guard?.destroy(); });
+        });
         return this.closePromise;
     }
     send(value) {

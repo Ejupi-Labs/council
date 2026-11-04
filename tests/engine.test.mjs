@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { WorkflowEngine, MAX_CONTEXT_CHARS } from '../dist/engine.js';
+import { WorkflowEngine, WorkflowPersistenceError, MAX_CONTEXT_CHARS } from '../dist/engine.js';
 import { CouncilStore } from '../dist/store.js';
 import { GitWorkspaces } from '../dist/workspaces.js';
 
@@ -65,6 +65,163 @@ test('a terminal run ID cannot be reused or have its evidence overwritten', asyn
   await assert.rejects(engine.run(input('delegate', { task: 'Attempt to replace previous evidence.' }), { id: first.id }), /terminal run ID/);
   assert.equal(backend.calls.length, 1); assert.equal(persistence.log.length, events);
   assert.equal(persistence.getRun(first.id).input.task, first.input.task);
+});
+
+test('caller mutation after dispatch cannot change the validated task or later participants', async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const backend = runner(async (request, count) => {
+    if (count === 1) { entered(); await gate; }
+    return { agent: request.agent, status: 'completed', output: 'bounded evidence', durationMs: 1 };
+  });
+  const task = input('pipeline');
+  const running = new WorkflowEngine(config(), backend, store()).run(task);
+  await started; task.agents[1] = 'junie'; task.task = 'Changed after validation'; release();
+  const result = await running;
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(backend.calls.map(call => call.agent), ['codex', 'claude']);
+  assert.equal(result.input.task, 'Assess the implementation');
+  assert.ok(backend.calls.every(call => call.prompt.includes(result.input.task) && !call.prompt.includes(task.task)));
+});
+
+test('an active run ID cannot be reused while its existing call is still quiescing', async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const persistence = store();
+  const backend = runner(async request => { entered(); await gate; return { agent: request.agent, status: 'completed', output: 'first result', durationMs: 1 }; });
+  const engine = new WorkflowEngine(config(), backend, persistence);
+  const first = engine.run(input('delegate'), { id: 'active-id' }); await started;
+  try {
+    await assert.rejects(engine.run(input('delegate', { task: 'Replay while active' }), { id: 'active-id' }), /already running/);
+    assert.equal(backend.calls.length, 1); assert.equal(persistence.getRun('active-id').input.task, 'Assess the implementation');
+  } finally { release(); await first; }
+});
+
+test('an intermediate evidence write failure fences queued calls and remains a failed outcome', async () => {
+  const persistence = store();
+  const original = persistence.appendEvent;
+  let failed = false;
+  persistence.appendEvent = (id, type, data) => {
+    if (type === 'step.finished' && !failed) { failed = true; throw new Error('offline evidence write failure'); }
+    return original(id, type, data);
+  };
+  const backend = runner();
+  let result;
+  await assert.rejects(new WorkflowEngine(config(process.cwd(), { maxConcurrency: 1 }), backend, persistence).run(input('parallel', { agents })), error => {
+    assert.ok(error instanceof WorkflowPersistenceError); result = error.run; return true;
+  });
+  assert.equal(result.status, 'failed'); assert.deepEqual(backend.calls.map(call => call.agent), ['codex']);
+  assert.match(result.error, /Could not persist workflow evidence.*offline evidence write failure/);
+  assert.match(result.output, /codex answer/); assert.equal(persistence.getRun(result.id).status, 'failed');
+});
+
+test('state-failure notification fences other already queued runs before any provider can dispatch', async () => {
+  const persistence = store(), original = persistence.appendEvent;
+  const controllers = [new AbortController(), new AbortController()];
+  let entered, release, failed = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  persistence.appendEvent = (id, type, data) => {
+    if (id === 'fault-origin' && type === 'step.finished' && !failed) { failed = true; throw new Error('offline cross-run evidence fault'); }
+    return original(id, type, data);
+  };
+  const backend = runner(async request => { entered(); await gate; return { agent: request.agent, status: 'completed', output: 'origin evidence', durationMs: 1 }; });
+  const notifications = [];
+  const engine = new WorkflowEngine(config(process.cwd(), { maxConcurrency: 1 }), backend, persistence, {
+    onStateFailure: error => { notifications.push(error); for (const controller of controllers) controller.abort(error); },
+  });
+  const first = engine.run(input('delegate'), { id: 'fault-origin', signal: controllers[0].signal }); await started;
+  const second = engine.run(input('pipeline', { agents: ['claude', 'junie'] }), { id: 'queued-peer', signal: controllers[1].signal });
+  release(); const settled = await Promise.allSettled([first, second]);
+  assert.equal(notifications.length, 1); assert.match(notifications[0].message, /cross-run evidence fault/);
+  assert.equal(settled[0].status, 'rejected'); assert.ok(settled[0].reason instanceof WorkflowPersistenceError);
+  assert.equal(settled[0].reason.run.status, 'failed'); assert.match(settled[0].reason.run.output, /origin evidence/);
+  assert.equal(settled[1].status, 'fulfilled'); assert.equal(settled[1].value.status, 'cancelled');
+  assert.deepEqual(backend.calls.map(call => call.agent), ['codex']);
+});
+
+test('a throwing state-failure notifier cannot replace the retained storage fault', async () => {
+  const persistence = store(), original = persistence.appendEvent;
+  let failed = false;
+  persistence.appendEvent = (id, type, data) => {
+    if (!failed && type === 'step.finished') { failed = true; throw new Error('original storage fault'); }
+    return original(id, type, data);
+  };
+  await assert.rejects(new WorkflowEngine(config(), runner(), persistence, { onStateFailure: () => { throw new Error('notification bug'); } }).run(input('delegate')), error => {
+    assert.ok(error instanceof WorkflowPersistenceError); assert.equal(error.run.status, 'failed');
+    assert.match(error.run.error, /original storage fault/); assert.doesNotMatch(error.run.error, /notification bug/); return true;
+  });
+});
+
+test('evidence write failure drains active siblings and retains their partial output before finalizing', async () => {
+  const persistence = store();
+  const original = persistence.saveRun;
+  let failed = false, siblingStopped = false, siblingEntered;
+  const started = new Promise(resolve => { siblingEntered = resolve; });
+  persistence.saveRun = run => {
+    if (!failed && run.steps.length > 0) { failed = true; throw new Error('offline snapshot write failure'); }
+    return original(run);
+  };
+  const backend = runner(async request => {
+    if (request.agent === 'codex') { await started; return { agent: request.agent, status: 'completed', output: 'first evidence', durationMs: 1 }; }
+    return await new Promise(resolve => {
+      siblingEntered();
+      request.signal.addEventListener('abort', () => setTimeout(() => {
+        siblingStopped = true; resolve({ agent: request.agent, status: 'cancelled', output: 'drained sibling evidence', durationMs: 20 });
+      }, 20), { once: true });
+    });
+  });
+  let result;
+  await assert.rejects(new WorkflowEngine(config(), backend, persistence).run(input('parallel', { agents })), error => {
+    assert.ok(error instanceof WorkflowPersistenceError); result = error.run; return true;
+  });
+  assert.equal(result.status, 'failed'); assert.equal(siblingStopped, true);
+  assert.deepEqual(backend.calls.map(call => call.agent), ['codex', 'claude']);
+  assert.match(result.output, /first evidence/); assert.match(result.output, /drained sibling evidence/);
+});
+
+test('shared slot release failure retains the returned step and fences later calls before raising a storage fault', async () => {
+  const persistence = store();
+  persistence.acquireSlot = () => 'owned-token';
+  persistence.releaseSlot = () => { throw new Error('offline slot release failure'); };
+  const backend = runner();
+  let retained;
+  await assert.rejects(new WorkflowEngine(config(process.cwd(), { maxConcurrency: 1 }), backend, persistence, { instanceId: 'test-host' }).run(input('parallel', { agents })), error => {
+    assert.ok(error instanceof WorkflowPersistenceError); retained = error.run; return true;
+  });
+  assert.equal(retained.status, 'failed'); assert.deepEqual(backend.calls.map(call => call.agent), ['codex']);
+  assert.equal(retained.steps.length, 1); assert.equal(retained.steps[0].result.output, 'codex answer');
+  assert.match(retained.error, /Could not release a shared workflow call slot/);
+  assert.equal(persistence.getRun(retained.id).status, 'failed');
+});
+
+test('a missing terminal event preserves already committed completion without inventing cancellation', async () => {
+  const persistence = store();
+  persistence.finalizeRun = run => { persistence.saveRun(run); return structuredClone(run); };
+  const original = persistence.appendEvent;
+  persistence.appendEvent = (id, type, data) => {
+    if (type === 'run.completed') throw new Error('offline terminal event failure');
+    return original(id, type, data);
+  };
+  await assert.rejects(new WorkflowEngine(config(), runner(), persistence).run(input('delegate')), error => {
+    assert.ok(error instanceof WorkflowPersistenceError);
+    assert.equal(error.run.status, 'completed'); assert.equal(error.run.output, 'codex answer');
+    assert.equal(persistence.getRun(error.run.id).status, 'completed'); return true;
+  });
+});
+
+test('custom runner diagnostics cannot bypass retained output bounds through extra result fields', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'failed', output: 'small evidence',
+    durationMs: Infinity, error: 'problem '.repeat(100_000), stopReason: 'reason '.repeat(1000), diagnostics: 'unbounded extra data '.repeat(100_000) }));
+  const persistence = store();
+  const result = await new WorkflowEngine(config(), backend, persistence).run(input('delegate'));
+  assert.equal(result.status, 'failed'); assert.ok(result.error.length <= 4096);
+  assert.ok(result.steps[0].result.error.length <= 4096); assert.ok(result.steps[0].result.stopReason.length <= 512);
+  assert.ok(Number.isFinite(result.steps[0].result.durationMs));
+  assert.equal(Object.hasOwn(result.steps[0].result, 'diagnostics'), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(persistence.getRun(result.id))) < 20_000);
 });
 
 test('one semaphore bounds agent calls across multiple simultaneous workflows', async () => {
@@ -215,11 +372,49 @@ test('durable cancellation stops a queued global-slot waiter before provider dis
   first.releaseSlot(held, 'first');
   assert.equal(result.status, 'cancelled');
   assert.equal(backend.calls.length, 0);
+  assert.equal(second.health().counts.slotWaiters, 0);
+});
+
+test('a foreign queued call receives the next durable slot before an incumbent pipeline reacquires it', { timeout: 10_000 }, async t => {
+  const { root, first, second, claim } = sharedStores(t);
+  claim(first, 'incumbent-pipeline', 'first'); claim(second, 'foreign-call', 'second');
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const order = [];
+  const incumbent = runner(async (request, count) => {
+    order.push(`incumbent-${request.agent}`);
+    if (count === 1) { entered(); await gate; }
+    return { agent: request.agent, status: 'completed', output: 'pipeline evidence', durationMs: 1 };
+  });
+  const foreign = runner(async request => { order.push('foreign'); return { agent: request.agent, status: 'completed', output: 'foreign evidence', durationMs: 1 }; });
+  const settings = config(root, { maxConcurrency: 1 });
+  const firstRun = new WorkflowEngine(settings, incumbent, first, { instanceId: 'first' }).run(input('pipeline', { agents }), { id: 'incumbent-pipeline' });
+  await started;
+  const secondRun = new WorkflowEngine(settings, foreign, second, { instanceId: 'second' }).run(input('delegate'), { id: 'foreign-call' });
+  try {
+    const until = Date.now() + 3000;
+    while (first.health().counts.slotWaiters < 1 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(first.health().counts.slotWaiters, 1); release();
+    const outcomes = await Promise.all([firstRun, secondRun]);
+    assert.ok(outcomes.every(run => run.status === 'completed'));
+    assert.deepEqual(order, ['incumbent-codex', 'foreign', 'incumbent-claude', 'incumbent-junie']);
+    assert.equal(first.health().counts.slotWaiters, 0); assert.equal(first.health().counts.slots, 0);
+  } finally { release(); await Promise.allSettled([firstRun, secondRun]); }
 });
 
 test('independent Node processes share the workspace agent-call limit', { timeout: 15_000 }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'council-process-slots-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const temporaryBase = realpathSync(tmpdir());
+  const root = mkdtempSync(join(temporaryBase, 'council-process-slots-'));
+  let passed = false;
+  t.after(() => {
+    if (!passed) { t.diagnostic(`Preserved independent-process fixture: ${root}`); return; }
+    const target = realpathSync(root);
+    assert.equal(dirname(target), temporaryBase); assert.ok(basename(target).startsWith('council-process-slots-'));
+    rmSync(target, { recursive: true, force: true });
+  });
+  // Cold migrations have dedicated tests; this case isolates concurrent agent dispatch.
+  const initialized = new CouncilStore(join(root, '.council')); initialized.close();
   const execute = promisify(execFile);
   const source = id => `
 import {appendFileSync,existsSync,writeFileSync} from 'node:fs';
@@ -235,18 +430,53 @@ const input={mode:'delegate',task:'Offline concurrency check.',agents:['codex'],
 const now=new Date().toISOString();
 store.saveRun({id,input,status:'queued',createdAt:now,updatedAt:now,steps:[]});store.claimRun(id,id);
 writeFileSync(join(root,id+'.ready'),'ready');
-while(!existsSync(join(root,'one.ready'))||!existsSync(join(root,'two.ready')))await delay(10);
+while(!existsSync(join(root,'dispatch.ready')))await delay(10);
 const runner={doctor:async()=>[],run:async request=>{appendFileSync(join(root,'calls.log'),'start '+id+'\\n');await delay(80);appendFileSync(join(root,'calls.log'),'end '+id+'\\n');return {agent:request.agent,status:'completed',output:'offline done',durationMs:80};}};
 const result=await new WorkflowEngine(config,runner,store,{instanceId:id}).run(input,{id});
 if(result.status!=='completed')throw new Error(result.error);
 store.unregisterInstance(id);store.close();
 `;
-  const settled = await Promise.allSettled(['one', 'two'].map(id => execute(process.execPath, ['--input-type=module', '-e', source(id)], { windowsHide: true, timeout: 10_000 })));
-  for (const result of settled) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? String(result.reason) : undefined);
+  const jobs = []; let dispatchReleased = false, observedFailure, setupError;
+  const terminatePeers = () => {
+    for (const job of jobs) if (!job.settled) { job.parentTerminated = true; job.child?.kill(); }
+  };
+  const startChild = id => {
+    const work = execute(process.execPath, ['--input-type=module', '-e', source(id)], { windowsHide: true, timeout: 10_000 });
+    const job = { id, child: work.child }; jobs.push(job);
+    const finish = result => {
+      job.settled = result;
+      if (result.status === 'rejected' || !dispatchReleased) {
+        observedFailure ??= { id, phase: dispatchReleased ? 'dispatch' : 'admission' }; terminatePeers();
+      }
+      return result;
+    };
+    job.outcome = work.then(value => finish({ status: 'fulfilled', value }), reason => finish({ status: 'rejected', reason }));
+    return job;
+  };
+  const waitReady = async job => {
+    while (!existsSync(join(root, job.id + '.ready'))) {
+      if (observedFailure) throw new Error(`Child ${observedFailure.id} exited during ${observedFailure.phase}.`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    if (observedFailure) throw new Error(`Child ${observedFailure.id} exited during ${observedFailure.phase}.`);
+  };
+  try {
+    await waitReady(startChild('one')); await waitReady(startChild('two'));
+    writeFileSync(join(root, 'dispatch.ready'), 'dispatch'); dispatchReleased = true;
+  } catch (error) { setupError = error.message; terminatePeers(); }
+  const settled = await Promise.all(jobs.map(job => job.outcome));
+  const diagnostics = settled.map((result, index) => result.status === 'fulfilled'
+    ? { id: jobs[index].id, status: result.status, stdout: result.value.stdout, stderr: result.value.stderr }
+    : { id: jobs[index].id, status: result.status, parentTerminated: jobs[index].parentTerminated === true, message: result.reason.message?.split('\n')[0], code: result.reason.code,
+      signal: result.reason.signal, killed: result.reason.killed, stdout: result.reason.stdout, stderr: result.reason.stderr });
+  const evidence = { fixture: root, dispatchReleased, observedFailure, setupError, children: diagnostics };
+  writeFileSync(join(root, 'child-results.json'), JSON.stringify(evidence, null, 2) + '\n');
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled'], JSON.stringify(evidence, null, 2));
   const events = readFileSync(join(root, 'calls.log'), 'utf8').trim().split('\n');
   let active = 0, peak = 0;
   for (const event of events) { active += event.startsWith('start') ? 1 : -1; peak = Math.max(peak, active); }
   assert.equal(events.length, 4); assert.equal(active, 0); assert.equal(peak, 1);
+  passed = true;
 });
 
 test('atomic finalization honors cancellation arriving after the last engine check', async t => {
@@ -300,6 +530,29 @@ test('a failed cancellation read prevents further dispatch instead of silently i
   assert.equal(backend.calls.length, 0);
 });
 
+test('a dispatch cancellation-read fault fences queued siblings while transient failure preserves active work', async () => {
+  const persistence = store();
+  let firstFinished = false, failedRead = false, siblingEntered, activeWasAborted = false;
+  const ready = new Promise(resolve => { siblingEntered = resolve; });
+  persistence.isCancellationRequested = () => {
+    if (firstFinished && !failedRead) { failedRead = true; throw new Error('offline transient cancellation read'); }
+    return false;
+  };
+  const backend = runner(async request => {
+    if (request.agent === 'codex') {
+      await ready; firstFinished = true;
+      return { agent: request.agent, status: 'completed', output: 'first bounded evidence', durationMs: 1 };
+    }
+    siblingEntered(); request.signal.addEventListener('abort', () => { activeWasAborted = true; }, { once: true });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return { agent: request.agent, status: 'completed', output: 'active work preserved', durationMs: 30 };
+  });
+  const result = await new WorkflowEngine(config(), backend, persistence).run(input('parallel', { agents }));
+  assert.equal(result.status, 'failed'); assert.match(result.error, /Cannot verify durable cancellation state/);
+  assert.deepEqual(backend.calls.map(call => call.agent), ['codex', 'claude']);
+  assert.equal(activeWasAborted, false); assert.match(result.output, /active work preserved/);
+});
+
 test('a transient polling error preserves active work while persistent failures stop it', { timeout: 10_000 }, async () => {
   for (const persistent of [false, true]) {
     const persistence = store(); let running = false, failures = 0;
@@ -326,6 +579,76 @@ test('global-slot polling backs off while cancellation remains responsive', { ti
     const result = await new WorkflowEngine(config(), backend, persistence, { instanceId: 'offline' }).run(input('delegate'), { signal: controller.signal });
     assert.equal(result.status, 'cancelled'); assert.ok(attempts <= 5, `expected backed-off polling, received ${attempts} attempts`); assert.equal(backend.calls.length, 0);
   } finally { clearTimeout(timer); }
+});
+
+test('global-slot retries preserve one durable waiter ID and successful acquisition does not issue redundant cleanup', async () => {
+  const persistence = store();
+  const seen = [], removed = [], released = [];
+  persistence.acquireSlot = (instanceId, runId, limit, waiterId) => { seen.push({ instanceId, runId, limit, waiterId }); return seen.length < 3 ? undefined : 'granted-slot'; };
+  persistence.cancelSlotWaiter = (_instanceId, waiterId) => { removed.push(waiterId); };
+  persistence.releaseSlot = (token, instanceId) => { released.push({ token, instanceId }); };
+  const result = await new WorkflowEngine(config(), runner(), persistence, { instanceId: 'fifo-owner' }).run(input('delegate'));
+  assert.equal(result.status, 'completed'); assert.equal(seen.length, 3);
+  assert.equal(new Set(seen.map(value => value.waiterId)).size, 1); assert.match(seen[0].waiterId, /^[a-f0-9-]{36}$/);
+  assert.ok(seen.every(value => value.instanceId === 'fifo-owner' && value.runId === result.id));
+  assert.deepEqual(removed, []); assert.deepEqual(released, [{ token: 'granted-slot', instanceId: 'fifo-owner' }]);
+});
+
+test('cancelling a global-slot wait removes its durable waiter before finalizing', async () => {
+  const persistence = store(), controller = new AbortController();
+  let entered, waiter;
+  const started = new Promise(resolve => { entered = resolve; });
+  const removed = [];
+  persistence.acquireSlot = (_instanceId, _runId, _limit, waiterId) => { waiter = waiterId; entered(); return undefined; };
+  persistence.cancelSlotWaiter = (instanceId, waiterId) => { removed.push({ instanceId, waiterId }); };
+  persistence.releaseSlot = () => { assert.fail('No slot was granted.'); };
+  const backend = runner();
+  const running = new WorkflowEngine(config(), backend, persistence, { instanceId: 'waiting-owner' }).run(input('delegate'), { signal: controller.signal });
+  await started; controller.abort(); const result = await running;
+  assert.equal(result.status, 'cancelled'); assert.equal(backend.calls.length, 0);
+  assert.deepEqual(removed, [{ instanceId: 'waiting-owner', waiterId: waiter }]);
+});
+
+test('pipeline stages receive bounded earlier evidence even when the immediate predecessor omits it', async () => {
+  const backend = runner(async (request, count) => ({ agent: request.agent, status: 'completed', output: count === 1 ? 'UNIQUE_FIRST_STAGE_EVIDENCE' : count === 2 ? 'Second-stage handoff omits the earlier fact.' : 'Final stage result.', durationMs: 1 }));
+  const result = await new WorkflowEngine(config(), backend, store()).run(input('pipeline', { agents, context: 'P'.repeat(MAX_CONTEXT_CHARS) }));
+  assert.equal(result.status, 'completed'); assert.equal(result.output, 'Final stage result.');
+  assert.ok(backend.calls[2].prompt.includes('UNIQUE_FIRST_STAGE_EVIDENCE'));
+  assert.ok(backend.calls[2].prompt.includes('Second-stage handoff'));
+  assert.ok(backend.calls[2].prompt.length < MAX_CONTEXT_CHARS + 2000);
+});
+
+test('short peer replies survive a maximum project note without estimated-header truncation', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: `COMPLETE_${request.agent}_REPLY`, durationMs: 1 }));
+  const result = await new WorkflowEngine(config(), backend, store()).run(input('parallel', { judge: 'junie', context: 'P'.repeat(MAX_CONTEXT_CHARS) }));
+  assert.equal(result.status, 'completed');
+  const judge = backend.calls.at(-1).prompt;
+  assert.ok(judge.includes('COMPLETE_codex_REPLY')); assert.ok(judge.includes('COMPLETE_claude_REPLY'));
+  assert.ok(judge.length < MAX_CONTEXT_CHARS + 2000);
+});
+
+test('parallel selected output fairly represents every worker within its UTF-8 byte budget', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: `UNIQUE_${request.agent}\n` + '🌍'.repeat(2000), durationMs: 1 }));
+  const result = await new WorkflowEngine(config(process.cwd(), { maxOutputBytes: 1024 }), backend, store()).run(input('parallel', { agents }));
+  assert.equal(result.status, 'completed'); assert.ok(Buffer.byteLength(result.output) <= 1024);
+  assert.ok(!result.output.includes('\uFFFD'));
+  for (const agent of agents) assert.ok(result.output.includes(`UNIQUE_${agent}`));
+});
+
+test('parallel output gives unused short-answer capacity to the remaining worker', async () => {
+  const backend = runner(async request => ({ agent: request.agent, status: 'completed', output: request.agent === 'codex' ? 'short' : 'long evidence '.repeat(1000), durationMs: 1 }));
+  const result = await new WorkflowEngine(config(process.cwd(), { maxOutputBytes: 1024 }), backend, store()).run(input('parallel'));
+  assert.ok(result.output.includes('short')); assert.ok(result.output.indexOf('[claude]') < 30);
+  assert.ok(result.output.length > 1000); assert.ok(Buffer.byteLength(result.output) <= 1024);
+});
+
+test('a full durable waiter queue is an operational failure rather than an evidence-write fault', async () => {
+  const persistence = store(), backend = runner(); let cleared = 0;
+  persistence.acquireSlot = () => { throw Object.assign(new Error('Shared call waiter capacity reached.'), { code: 'COUNCIL_SLOT_QUEUE_FULL' }); };
+  persistence.cancelSlotWaiter = () => { cleared++; }; persistence.releaseSlot = () => {};
+  const result = await new WorkflowEngine(config(), backend, persistence, { instanceId: 'queue-owner' }).run(input('delegate'));
+  assert.equal(result.status, 'failed'); assert.match(result.error, /waiter capacity reached/);
+  assert.equal(backend.calls.length, 0); assert.equal(cleared, 1);
 });
 
 function repository(t) {

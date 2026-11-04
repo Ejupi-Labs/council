@@ -17,10 +17,13 @@ export function renderRun(run: RunRecord): string {
     block(run.output ?? run.error ?? 'No result was produced.'), '',
   ];
   if (run.error) lines.push('## Unresolved issue', '', block(run.error), '');
-  for (const step of run.steps) lines.push(
-    `## ${step.agent}: ${step.role}`, '', `Status: ${step.result.status}; duration: ${step.result.durationMs} ms.`, '',
-    block(step.result.output || step.result.error || 'No output.'), '',
-  );
+  for (const step of run.steps) {
+    lines.push(
+      `## ${step.agent}: ${step.role}`, '', `Status: ${step.result.status}; duration: ${step.result.durationMs} ms.`, '',
+      block(step.result.output || step.result.error || 'No output.'), '',
+    );
+    if (step.result.output && step.result.error) lines.push('Reported error:', '', block(step.result.error), '');
+  }
   if (run.workspaces?.length) {
     lines.push('## Retained artifacts', '');
     for (const artifact of run.workspaces) lines.push(block(JSON.stringify(artifact, null, 2)), '');

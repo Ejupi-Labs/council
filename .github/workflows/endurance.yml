@@ -1,0 +1,63 @@
+name: Offline endurance
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Runner operating system (one job)
+        required: true
+        type: choice
+        default: ubuntu
+        options: [ubuntu, windows, macos]
+      workload:
+        description: Local workload (no provider calls)
+        required: true
+        type: choice
+        default: storage
+        options: [service, storage, artifacts]
+      duration:
+        description: Requested workload duration (setup and cleanup follow)
+        required: true
+        type: choice
+        default: 60s
+        options: [60s, 5m, 10m, 30m]
+
+permissions:
+  contents: read
+
+jobs:
+  endurance:
+    runs-on: ${{ fromJSON('{"ubuntu":"ubuntu-latest","windows":"windows-latest","macos":"macos-latest"}')[inputs.os] }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-fund
+      - run: npm run build
+      - name: Check CI helpers
+        run: node --test .github/scripts/endurance.test.mjs .github/scripts/check-generated.test.mjs
+      - name: Run one offline workload
+        run: node .github/scripts/endurance.mjs
+        env:
+          COUNCIL_ENDURANCE_OS: ${{ inputs.os }}
+          COUNCIL_ENDURANCE_WORKLOAD: ${{ inputs.workload }}
+          COUNCIL_ENDURANCE_DURATION: ${{ inputs.duration }}
+      - name: Upload endurance logs only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-endurance-${{ inputs.os }}-${{ inputs.workload }}-${{ inputs.duration }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            .council/refinement/soak-*.jsonl
+            .council/refinement/soak-*.summary.json
+            .council/refinement/storage-soak-*.jsonl
+            .council/refinement/artifact-soak-*.jsonl
+            .council/refinement/artifact-soak-*.summary.json

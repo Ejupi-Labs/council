@@ -10,6 +10,8 @@ export declare class CouncilStore {
     private lastRecoveryAt;
     private activeBackups;
     constructor(stateDir: string);
+    /** SQLite inherits the database mode when creating WAL/SHM beside existing state directories. */
+    private restrictDatabaseFiles;
     /** Fixed SQL only, with a bounded cache rather than re-preparing every polling query. */
     private statement;
     private migrateMetadata;
@@ -40,15 +42,21 @@ export declare class CouncilStore {
         runId?: string;
     }): Message;
     inbox(agent: string, unreadOnly?: boolean): Message[];
+    /** Complete message bodies with stable timestamp/ID keyset pagination. */
+    inboxPage(agent: string, unreadOnly?: boolean, limit?: number, after?: {
+        createdAt: string;
+        id: string;
+    }): Message[];
+    private decodeMessages;
     acknowledge(id: string, agent: string): boolean;
-    reserve(owner: string, paths: string[], ttlMs: number, runId?: string): Lease[];
-    release(owner: string, paths?: string[]): number;
+    reserve(owner: string, paths: string[], ttlMs: number, runId?: string, instanceId?: string): Lease[];
+    release(owner: string, paths?: string[], runId?: string): number;
     private readLeases;
     leases(): Lease[];
     putContext(key: string, value: string, author: string): ContextEntry;
     getContext(key: string): ContextEntry | undefined;
     listContext(): ContextEntry[];
-    registerInstance(instanceId: string, pid: number): void;
+    registerInstance(instanceId: string, pid: number, slotLimit?: number): void;
     bindInstance(instanceId: string): void;
     heartbeat(instanceId: string): boolean;
     unregisterInstance(instanceId: string): void;
@@ -60,8 +68,11 @@ export declare class CouncilStore {
     updateArtifact(runId: string, artifact: WorkspaceArtifact): RunRecord;
     /** Caller holds the write transaction and has checked its narrow mutation authority. */
     private writeRun;
-    acquireSlot(instanceId: string, runId: string, limit: number): string | undefined;
+    /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
+    acquireSlot(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
     releaseSlot(token: string, instanceId: string): void;
+    /** Idempotent cleanup for a per-call wait that was aborted before admission. */
+    cancelSlotWaiter(instanceId: string, waiterId: string): void;
     /** Heartbeat age alone is never proof that a process is dead. PID reuse is intentionally conservative. */
     recoverOrphans(): RunRecord[];
     private instance;
@@ -87,6 +98,7 @@ export declare class CouncilStore {
             leases: number;
             instances: number;
             slots: number;
+            slotWaiters: number;
             context: number;
         };
         runStatuses: Record<string, number>;

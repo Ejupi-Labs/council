@@ -4,10 +4,26 @@ import { access, open, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-export const PROCESS_KILL_TIMEOUT_MS = 1000;
-export async function killProcessTree(pid) {
+import { metadataLookup, MetadataLimitError } from './metadata.js';
+export const PROCESS_KILL_TIMEOUT_MS = 5000;
+export const PROCESS_STOP_GRACE_MS = PROCESS_KILL_TIMEOUT_MS + 1000;
+export const PROCESS_CLEANUP_ERROR = 'Owned agent process-tree cleanup could not be verified; a descendant may still be running.';
+export class ProcessCleanupError extends Error {
+    constructor() { super(PROCESS_CLEANUP_ERROR); this.name = 'ProcessCleanupError'; }
+}
+const activeKills = new Map();
+export function killProcessTree(pid) {
     if (!Number.isSafeInteger(pid) || pid < 1 || pid === process.pid)
-        return;
+        return Promise.resolve();
+    const existing = activeKills.get(pid);
+    if (existing)
+        return existing;
+    const work = terminateProcessTree(pid);
+    activeKills.set(pid, work);
+    void work.finally(() => { activeKills.delete(pid); }).catch(() => { });
+    return work;
+}
+async function terminateProcessTree(pid) {
     if (process.platform !== 'win32') {
         try {
             process.kill(-pid, 'SIGKILL');
@@ -20,7 +36,7 @@ export async function killProcessTree(pid) {
         }
         return;
     }
-    await new Promise(resolveDone => {
+    await new Promise((resolveDone, reject) => {
         let killer;
         try {
             killer = spawn(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });
@@ -30,7 +46,7 @@ export async function killProcessTree(pid) {
                 process.kill(pid, 'SIGKILL');
             }
             catch { /* Already gone or denied. */ }
-            resolveDone();
+            reject(new ProcessCleanupError());
             return;
         }
         let finished = false;
@@ -49,11 +65,26 @@ export async function killProcessTree(pid) {
                 }
                 catch { /* Helper already exited. */ }
             }
-            resolveDone();
+            if (fallback)
+                reject(new ProcessCleanupError());
+            else
+                resolveDone();
         };
         const timer = setTimeout(() => finish(true), PROCESS_KILL_TIMEOUT_MS);
         killer.on('error', () => finish(true));
-        killer.once('close', code => finish(code !== 0));
+        killer.once('close', code => {
+            if (code === 0) {
+                finish(false);
+                return;
+            }
+            try {
+                process.kill(pid, 0);
+                finish(true);
+            }
+            catch (error) {
+                finish(error.code !== 'ESRCH');
+            }
+        });
     });
 }
 /** The separate IPC supervisor survives parent death long enough to stop billing work. */
@@ -66,6 +97,7 @@ export class ManagedProcess extends EventEmitter {
     vendorPid;
     outcome;
     stopping = false;
+    stoppingAt = 0;
     closed = false;
     forcePromise;
     constructor(options) {
@@ -88,7 +120,7 @@ export class ManagedProcess extends EventEmitter {
                 this.emit('spawn');
             }
             if (value.type === 'closed')
-                this.outcome = { code: typeof value.code === 'number' ? value.code : null, signal: typeof value.signal === 'string' ? value.signal : null };
+                this.outcome = { code: typeof value.code === 'number' ? value.code : null, signal: typeof value.signal === 'string' ? value.signal : null, cleanupFailed: value.cleanupFailed === true };
             if (value.type === 'launch_error')
                 this.emit('error', new Error('Unable to start the configured agent executable.'));
         });
@@ -96,13 +128,18 @@ export class ManagedProcess extends EventEmitter {
         this.supervisor.once('close', (code, signal) => {
             this.closed = true;
             if (this.outcome && code === 0 && signal === null) {
-                this.emit('close', this.outcome.code, this.outcome.signal);
+                if (this.outcome.cleanupFailed)
+                    this.emit('error', new ProcessCleanupError());
+                this.emit('close', this.outcome.cleanupFailed ? 1 : this.outcome.code, this.outcome.signal);
                 return;
             }
             // A supervisor's own successful exit is not evidence of vendor completion.
             void this.forceKill().then(() => {
                 this.emit('error', new Error('Agent supervisor exited without a verified vendor outcome.'));
                 this.emit('close', code && code !== 0 ? code : 1, signal);
+            }, () => {
+                this.emit('error', new ProcessCleanupError());
+                this.emit('close', 1, signal);
             });
         });
         this.supervisor.send({ type: 'start', command: options.command, args: options.args, cwd: options.cwd }, error => {
@@ -117,27 +154,53 @@ export class ManagedProcess extends EventEmitter {
         if (this.stopping)
             return true;
         this.stopping = true;
+        this.stoppingAt = performance.now();
+        const escalate = () => { void this.forceKill().catch(() => { this.emit('error', new ProcessCleanupError()); }); };
         try {
             if (this.supervisor.connected)
                 this.supervisor.send({ type: 'stop' }, error => { if (error)
-                    void this.forceKill(); });
+                    escalate(); });
             else
-                void this.forceKill();
+                escalate();
         }
         catch {
-            void this.forceKill();
+            escalate();
         }
         return true;
     }
     forceKill() {
         if (this.forcePromise)
             return this.forcePromise;
-        const targets = [this.vendorPid && (!this.closed || !this.outcome) ? this.vendorPid : undefined, !this.closed ? this.pid : undefined].filter((pid) => pid !== undefined);
-        this.forcePromise = Promise.all(targets.map(killProcessTree)).then(() => {
-            this.stdin.destroy();
-            this.stdout.destroy();
-            this.stderr.destroy();
-        });
+        this.forcePromise = (async () => {
+            // Let an owned native tree walk finish before killing its supervisor or
+            // creating overlapping taskkill helpers that can sever ancestor links.
+            const remaining = process.platform === 'win32' && this.stopping ? PROCESS_STOP_GRACE_MS - (performance.now() - this.stoppingAt) : 0;
+            if (!this.closed && remaining > 0)
+                await new Promise(resolveDone => {
+                    const done = () => { clearTimeout(timer); this.supervisor.removeListener('close', done); resolveDone(); };
+                    const timer = setTimeout(done, remaining);
+                    this.supervisor.once('close', done);
+                });
+            let failure;
+            try {
+                if (this.closed && this.outcome) {
+                    if (this.outcome.cleanupFailed)
+                        throw new ProcessCleanupError();
+                    return;
+                }
+                if (this.vendorPid)
+                    await killProcessTree(this.vendorPid).catch(error => { failure = error; });
+                if (!this.closed && this.pid)
+                    await killProcessTree(this.pid).catch(error => { failure = error; });
+                if (failure)
+                    throw failure;
+            }
+            finally {
+                this.stdin.destroy();
+                this.stdout.destroy();
+                this.stderr.destroy();
+            }
+        })();
         return this.forcePromise;
     }
 }
@@ -146,26 +209,13 @@ const PACKAGE_BINS = {
     dsh: ['@deepseek-ai/cli', '@deepseek-ai/dsh', 'deepseek-harness'],
     acpx: ['acpx'],
 };
-function abortable(work, signal) {
-    if (!signal)
-        return work;
-    if (signal.aborted) {
-        void work.catch(() => { });
-        return Promise.reject(signal.reason);
-    }
-    return new Promise((resolveValue, reject) => {
-        const abort = () => { reject(signal.reason); };
-        signal.addEventListener('abort', abort, { once: true });
-        void work.then(value => { signal.removeEventListener('abort', abort); resolveValue(value); }, error => { signal.removeEventListener('abort', abort); reject(error); });
-    });
-}
 async function isExecutable(path, signal) {
     signal?.throwIfAborted();
     try {
-        return (await abortable(stat(path), signal)).isFile() && (await abortable(access(path, /\.[cm]?js$/i.test(path) ? constants.R_OK : process.platform === 'win32' ? constants.F_OK : constants.X_OK), signal), true);
+        return (await metadataLookup(() => stat(path), signal)).isFile() && (await metadataLookup(() => access(path, /\.[cm]?js$/i.test(path) ? constants.R_OK : process.platform === 'win32' ? constants.F_OK : constants.X_OK), signal), true);
     }
     catch (error) {
-        if (signal?.aborted)
+        if (signal?.aborted || error instanceof MetadataLimitError)
             throw error;
         return false;
     }
@@ -176,9 +226,9 @@ async function unwrapNpmShim(path, name, signal) {
         const root = join(dirname(path), 'node_modules', packageName);
         try {
             const filename = join(root, 'package.json');
-            if ((await abortable(stat(filename), signal)).size > 64 * 1024)
+            if ((await metadataLookup(() => stat(filename), signal)).size > 64 * 1024)
                 continue;
-            const manifest = JSON.parse(await abortable(readFile(filename, { encoding: 'utf8', signal }), signal));
+            const manifest = JSON.parse(await metadataLookup(() => readFile(filename, { encoding: 'utf8', signal }), signal));
             if (!manifest || typeof manifest !== 'object')
                 continue;
             const value = manifest;
@@ -196,7 +246,7 @@ async function unwrapNpmShim(path, name, signal) {
                 return { command: target, args: [] };
         }
         catch (error) {
-            if (signal?.aborted)
+            if (signal?.aborted || error instanceof MetadataLimitError)
                 throw error; /* Not a recognized npm installation. */
         }
     }
@@ -205,10 +255,13 @@ async function unwrapNpmShim(path, name, signal) {
 async function isWindowsNativeBinary(path, signal) {
     let file;
     try {
+        signal?.throwIfAborted();
         file = await open(path, 'r');
         signal?.throwIfAborted();
         const header = Buffer.alloc(2);
-        return (await file.read(header, 0, 2, 0)).bytesRead === 2 && header[0] === 0x4d && header[1] === 0x5a;
+        const result = await file.read(header, 0, 2, 0);
+        signal?.throwIfAborted();
+        return result.bytesRead === 2 && header[0] === 0x4d && header[1] === 0x5a;
     }
     catch (error) {
         if (signal?.aborted)
@@ -239,7 +292,8 @@ export async function resolveLaunch(command, args, cwd, environment = process.en
                 const unwrapped = await unwrapNpmShim(candidate, command.split(/[\\/]/).pop(), signal);
                 if (unwrapped)
                     return { command: unwrapped.command, args: [...unwrapped.args, ...args] };
-                if (await abortable(isWindowsNativeBinary(candidate, signal), signal))
+                // Drain an opened header handle before returning, even when cancellation arrives.
+                if (await metadataLookup(() => isWindowsNativeBinary(candidate, signal)))
                     return { command: candidate, args: [...args] };
                 if (explicit)
                     throw new Error('Windows shell entrypoints are not executed. Configure an executable or an explicit interpreter with an argument array.');

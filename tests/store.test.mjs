@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -82,7 +82,7 @@ test('two connections serialize lease ownership and batch conflict rolls back ev
   assert.throws(() => two.reserve('claude', ['src'], 60000), /conflict/);
   assert.throws(() => two.reserve('claude', ['**'], 60000), /conflict/);
   assert.equal(two.release('claude', ['src/**']), 0);
-  const [renewed] = two.reserve('codex', ['SRC/**'], 120000);
+  const [renewed] = two.reserve('codex', ['SRC/**'], 120000, 'run');
   assert.equal(renewed.id, lease.id);
   assert.equal(one.leases().length, 1);
   assert.equal(one.release('codex', ['src/**']), 1);
@@ -142,9 +142,17 @@ test('newer schema versions fail closed instead of mutating existing state', t =
   const db = new DatabaseSync(join(directory, 'state.db'));
   db.exec('PRAGMA user_version = 99');
   db.close();
+  if (process.platform !== 'win32') chmodSync(join(directory, 'state.db'), 0o640);
+  const bytes = readFileSync(join(directory, 'state.db'));
+  const mode = statSync(join(directory, 'state.db')).mode;
+  const files = readdirSync(directory).sort();
   assert.throws(() => new CouncilStore(directory), /newer than supported/);
+  assert.deepEqual(readFileSync(join(directory, 'state.db')), bytes, 'Rejecting a newer schema must not change persistent journal configuration.');
+  assert.equal(statSync(join(directory, 'state.db')).mode, mode, 'Rejecting a newer schema must not tighten permissions on unsupported state.');
+  assert.deepEqual(readdirSync(directory).sort(), files);
   const check = new DatabaseSync(join(directory, 'state.db'));
   assert.equal(check.prepare('PRAGMA user_version').get().user_version, 99);
+  assert.equal(check.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
   check.close();
 });
 
@@ -192,7 +200,7 @@ test('schema version one migrates existing results without losing their data', t
   ownedRun(store, 'new-run', 'migrated-owner');
   assert.ok(store.acquireSlot('migrated-owner', 'new-run', 1));
   const check = new DatabaseSync(join(directory, 'state.db'));
-  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 5);
   check.close();
 });
 
@@ -273,6 +281,9 @@ test('orphan recovery keeps live stale-heartbeat owners but fails hard-killed ow
     store.saveRun({id:'child-run',status:'running',createdAt:now,updatedAt:now,input:{mode:'delegate',task:'offline test',agents:['codex'],permission:'read'},steps:[],output:'partial child output'});
     store.claimRun('child-run','child-owner');
     store.acquireSlot('child-owner','child-run',1);
+    store.acquireSlot('child-owner','child-run',1,'child-pending-call');
+    store.reserve('child-maintenance',['.council-maintenance/child-run'],60000,'child-run','child-owner');
+    store.reserve('child-user',['user-reservation.ts'],60000,'child-run');
     console.log('ready');
     setInterval(() => {},1000);`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
@@ -298,7 +309,9 @@ test('orphan recovery keeps live stale-heartbeat owners but fails hard-killed ow
   const survivor = ownedRun(store, 'surviving-run', 'surviving-owner');
   assert.deepEqual(store.recoverOrphans(), []);
   assert.equal(store.getRun('child-run').status, 'running');
-  assert.equal(store.acquireSlot('surviving-owner', survivor.id, 1), undefined);
+  assert.equal(store.leases().length, 2, 'A live owner keeps both maintenance and ordinary leases.');
+  assert.equal(store.acquireSlot('surviving-owner', survivor.id, 1, 'surviving-pending-call'), undefined);
+  assert.equal(store.health().counts.slotWaiters, 2);
   const closed = once(child, 'close');
   child.kill('SIGKILL');
   await closed;
@@ -306,9 +319,11 @@ test('orphan recovery keeps live stale-heartbeat owners but fails hard-killed ow
   assert.deepEqual(recovered.map(run => run.id), ['child-run']);
   assert.equal(store.getRun('child-run').status, 'failed');
   assert.equal(store.getRun('child-run').output, 'partial child output');
+  assert.deepEqual(store.leases().map(lease => lease.owner), ['child-user'], 'Only instance-owned maintenance leases are recovered; user leases retain their TTL.');
   assert.match(store.getRun('child-run').error, /no task was retried/);
   assert.equal(store.getRun('unowned-run').status, 'running', 'An unowned run has no proven-dead PID');
-  assert.ok(store.acquireSlot('surviving-owner', survivor.id, 1));
+  assert.equal(store.health().counts.slotWaiters, 1, 'Dead owner waiters must be removed without losing surviving queue positions.');
+  assert.ok(store.acquireSlot('surviving-owner', survivor.id, 1, 'surviving-pending-call'));
   assert.deepEqual(store.recoverOrphans(), [], 'Recovery is idempotent');
   assert.throws(() => store.claimRun('child-run', 'surviving-owner'), /terminal state/);
   assert.ok(store.events('child-run').some(event => event.type === 'run.failed' && event.data.reason === 'owner_exited'));
@@ -418,7 +433,7 @@ test('health and integrity diagnostics expose counts without returning run paylo
   store.sendMessage({ from: 'codex', to: 'claude', subject: 'Review', body: 'A bounded note' });
   store.putContext('api', 'Small contract', 'codex');
   const health = store.health();
-  assert.equal(health.schemaVersion, 3);
+  assert.equal(health.schemaVersion, 5);
   assert.equal(health.sqliteVersion, process.versions.sqlite);
   assert.equal(health.journalMode, 'wal');
   assert.equal(health.counts.runs, 1);
@@ -557,7 +572,7 @@ test('a live version-two owner blocks migration before ALTER and migration succe
   inspection.close();
   const closed = once(child, 'close'); child.kill('SIGKILL'); await closed;
   const migrated = setup.open();
-  assert.equal(migrated.health().schemaVersion, 3);
+  assert.equal(migrated.health().schemaVersion, 5);
   assert.equal(migrated.getRunSummary('old-live-run').status, 'queued');
   assert.deepEqual(migrated.recoverOrphans().map(run => run.id), ['old-live-run']);
 });
@@ -646,4 +661,419 @@ test('a refresh event failure rolls back artifact metadata instead of leaving an
   assert.deepEqual(store.getRun(run.id), run);
   assert.deepEqual(store.getRunSummary(run.id), before);
   assert.deepEqual(store.events(run.id), []);
+});
+
+test('concurrent runs using one agent label cannot renew or release each other scoped leases', t => {
+  const { open } = fixture(t);
+  const first = open();
+  const second = open();
+  const [lease] = first.reserve('codex', ['src/**'], 60000, 'run-a');
+  assert.throws(() => second.reserve('codex', ['src/main.ts'], 60000, 'run-b'), /conflict/);
+  assert.equal(first.leases()[0].runId, 'run-a');
+  assert.equal(first.reserve('codex', ['src/**'], 120000, 'run-a')[0].id, lease.id);
+  second.reserve('codex', ['docs/readme.md'], 60000, 'run-b');
+  assert.equal(second.release('codex', ['src/**', 'docs/readme.md'], 'run-b'), 1);
+  assert.deepEqual(first.leases().map(value => value.runId), ['run-a']);
+  second.reserve('codex', ['docs/readme.md'], 60000, 'run-b');
+  assert.equal(second.release('codex', undefined, 'run-b'), 1);
+  assert.equal(first.leases()[0].id, lease.id);
+  assert.equal(first.release('codex', undefined, 'run-a'), 1);
+});
+
+test('scoped and unscoped renewals conflict while legacy unscoped ownership remains compatible', t => {
+  const store = fixture(t).open();
+  const [legacy] = store.reserve('claude', ['shared/file.ts'], 60000);
+  assert.throws(() => store.reserve('claude', ['shared/file.ts'], 60000, 'scoped-run'), /conflict/);
+  assert.equal(store.release('claude', undefined, 'scoped-run'), 0);
+  assert.equal(store.reserve('claude', ['shared/file.ts'], 120000)[0].id, legacy.id);
+  assert.equal(store.release('claude'), 1);
+  store.reserve('claude', ['shared/file.ts'], 60000, 'scoped-run');
+  assert.throws(() => store.reserve('claude', ['shared/**'], 60000), /conflict/);
+  assert.equal(store.release('claude'), 1, 'Omitting runId deliberately preserves legacy release behavior.');
+});
+
+test('an idle low-limit host constrains new dispatch while existing slots drain and unregistering relaxes the limit', t => {
+  const { open } = fixture(t);
+  const high = open();
+  const idle = open();
+  high.registerInstance('high-limit', process.pid, 3);
+  const run = { ...record('limit-drain'), status: 'queued' };
+  high.createRun(run, 'high-limit');
+  const first = high.acquireSlot('high-limit', run.id, 3);
+  const second = high.acquireSlot('high-limit', run.id, 3);
+  assert.ok(first && second);
+  idle.registerInstance('idle-low-limit', process.pid, 1);
+  idle.registerInstance('idle-low-limit', process.pid);
+  assert.equal(high.acquireSlot('high-limit', run.id, 3), undefined);
+  high.releaseSlot(first, 'high-limit');
+  assert.equal(high.acquireSlot('high-limit', run.id, 3), undefined, 'One existing slot still fills the reduced limit.');
+  high.releaseSlot(second, 'high-limit');
+  const only = high.acquireSlot('high-limit', run.id, 3);
+  assert.ok(only);
+  assert.equal(high.acquireSlot('high-limit', run.id, 3), undefined);
+  high.releaseSlot(only, 'high-limit');
+  idle.unregisterInstance('idle-low-limit');
+  const relaxed = Array.from({ length: 3 }, () => high.acquireSlot('high-limit', run.id, 3));
+  assert.ok(relaxed.every(Boolean));
+  assert.equal(high.acquireSlot('high-limit', run.id, 3), undefined);
+  for (const token of relaxed) high.releaseSlot(token, 'high-limit');
+  for (const invalid of [0, 33, NaN]) assert.throws(() => idle.registerInstance('invalid-limit', process.pid, invalid), /limit/);
+  assert.equal(idle.heartbeat('invalid-limit'), false);
+});
+
+test('retention preview reads a consistent WAL snapshot without taking a reserved writer lock', t => {
+  const { directory, open } = fixture(t);
+  const store = open();
+  store.saveRun(record('preview-old', '2020-01-01T00:00:00.000Z'));
+  store.appendEvent('preview-old', 'evidence', {});
+  const writer = new DatabaseSync(join(directory, 'state.db'));
+  writer.exec('BEGIN IMMEDIATE');
+  try {
+    const preview = store.prune({ before: '2025-01-01T00:00:00Z', keepLatest: 0 });
+    assert.deepEqual(preview.candidateIds, ['preview-old']);
+    assert.equal(preview.deletedRuns, 0);
+    assert.equal(store.events('preview-old').length, 1);
+    assert.throws(() => store.prune({ before: '2025-01-01T00:00:00Z', keepLatest: 0, dryRun: false }), /locked|busy/i);
+  } finally { writer.exec('ROLLBACK'); writer.close(); }
+  assert.ok(store.getRun('preview-old'));
+});
+
+test('health counts remain coherent when another writer commits between metadata queries', t => {
+  const { open } = fixture(t);
+  const reader = open();
+  const writer = open();
+  reader.saveRun(record('before-health'));
+  const statement = reader.statement.bind(reader);
+  let injected = false;
+  reader.statement = sql => {
+    if (!injected && sql === 'SELECT status, COUNT(*) AS count FROM runs GROUP BY status') {
+      writer.saveRun(record('during-health'));
+      injected = true;
+    }
+    return statement(sql);
+  };
+  const snapshot = reader.health();
+  assert.equal(injected, true);
+  assert.ok(writer.getRun('during-health'), 'The read snapshot must not block the concurrent WAL writer.');
+  assert.equal(snapshot.counts.runs, 1);
+  assert.equal(Object.values(snapshot.runStatuses).reduce((sum, count) => sum + count, 0), snapshot.counts.runs);
+  assert.equal(reader.health().counts.runs, 2);
+});
+
+test('schema version three upgrades queue metadata without rebuilding existing run summaries', t => {
+  const { directory, open } = fixture(t);
+  const original = open();
+  const run = record('v3-preserved', '2020-01-01T00:00:00.000Z');
+  original.saveRun(run);
+  const [lease] = original.reserve('legacy-user', ['legacy/file.ts'], 60000, run.id);
+  const summary = original.getRunSummary(run.id);
+  original.close();
+  const old = new DatabaseSync(join(directory, 'state.db'));
+  old.exec('DROP TABLE slot_waiters; DROP INDEX leases_instance; ALTER TABLE leases DROP COLUMN instance_id; PRAGMA user_version = 3;');
+  old.close();
+  const migrate = CouncilStore.prototype.migrateMetadata;
+  CouncilStore.prototype.migrateMetadata = () => { throw new Error('Version three metadata must not be rebuilt.'); };
+  let upgraded;
+  try { upgraded = open(); } finally { CouncilStore.prototype.migrateMetadata = migrate; }
+  assert.deepEqual(upgraded.getRun(run.id), run);
+  assert.deepEqual(upgraded.getRunSummary(run.id), summary);
+  assert.deepEqual(upgraded.leases(), [lease]);
+  assert.equal(upgraded.health().schemaVersion, 5);
+  assert.equal(upgraded.health().counts.slotWaiters, 0);
+});
+
+test('a live version three host prevents queue migration before any schema mutation', t => {
+  const { directory, open } = fixture(t);
+  const old = open();
+  old.registerInstance('v3-live-host', process.pid, 1);
+  old.close();
+  const raw = new DatabaseSync(join(directory, 'state.db'));
+  raw.exec('DROP TABLE slot_waiters; DROP INDEX leases_instance; ALTER TABLE leases DROP COLUMN instance_id; PRAGMA user_version = 3;');
+  assert.throws(() => new CouncilStore(directory), /Stop older Council hosts/);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare("SELECT 1 FROM sqlite_master WHERE name = 'slot_waiters'").get(), undefined);
+  raw.prepare('DELETE FROM instances WHERE id = ?').run('v3-live-host');
+  raw.close();
+  assert.equal(open().health().schemaVersion, 5);
+});
+
+test('independent process waiters receive the next slot before an incumbent can start another call', { timeout: 15000 }, async t => {
+  const setup = fixture(t);
+  const incumbent = setup.open();
+  incumbent.registerInstance('fifo-incumbent', process.pid, 1);
+  const run = { ...record('fifo-incumbent-run'), status: 'queued' };
+  incumbent.createRun(run, 'fifo-incumbent');
+  const held = incumbent.acquireSlot('fifo-incumbent', run.id, 1);
+  const moduleUrl = pathToFileURL(resolve('dist/store.js')).href;
+  const code = `import { CouncilStore } from ${JSON.stringify(moduleUrl)};
+    const store = new CouncilStore(process.env.COUNCIL_TEST_STATE);
+    store.registerInstance('fifo-foreign', process.pid, 1);
+    const now = new Date().toISOString();
+    const run = {id:'fifo-foreign-run',status:'queued',createdAt:now,updatedAt:now,input:{mode:'delegate',task:'offline FIFO test',agents:['codex'],permission:'read'},steps:[]};
+    store.createRun(run,'fifo-foreign');
+    if (store.acquireSlot('fifo-foreign',run.id,1,'foreign-call') !== undefined) throw new Error('Incumbent slot must still be held.');
+    process.send({type:'queued'});
+    let token;
+    process.on('message', message => {
+      if (message.type === 'acquire') {
+        token = store.acquireSlot('fifo-foreign',run.id,1,'foreign-call');
+        if (!token) throw new Error('Foreign waiter lost its FIFO position.');
+        process.send({type:'acquired'});
+      } else if (message.type === 'finish') {
+        store.releaseSlot(token,'fifo-foreign');
+        store.finalizeRun({...run,status:'completed'});
+        store.unregisterInstance('fifo-foreign');
+        store.close();process.disconnect();
+      }
+    });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, COUNCIL_TEST_STATE: setup.directory }, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+  });
+  setup.cleanup(async () => {
+    if (child.exitCode === null && child.signalCode === null) { const closed = once(child, 'close'); child.kill('SIGKILL'); await closed; }
+  });
+  let diagnostics = '';
+  child.stderr.on('data', chunk => { diagnostics += chunk; });
+  const message = type => new Promise((resolveMessage, reject) => {
+    const receive = value => { if (value.type === type) { cleanup(); resolveMessage(value); } };
+    const exit = () => { cleanup(); reject(new Error(`FIFO child exited unexpectedly: ${diagnostics}`)); };
+    const cleanup = () => { child.off('message', receive); child.off('exit', exit); child.off('error', reject); };
+    child.on('message', receive); child.once('exit', exit); child.once('error', reject);
+  });
+  await message('queued');
+  assert.equal(incumbent.health().counts.slotWaiters, 1);
+  incumbent.releaseSlot(held, 'fifo-incumbent');
+  assert.equal(incumbent.acquireSlot('fifo-incumbent', run.id, 1), undefined, 'Legacy try-acquire cannot jump a durable waiter.');
+  for (let index = 0; index < 5; index++) assert.equal(incumbent.acquireSlot('fifo-incumbent', run.id, 1, 'next-incumbent-call'), undefined);
+  assert.equal(incumbent.health().counts.slotWaiters, 2, 'Retries reuse their original queue position.');
+  const acquired = message('acquired');
+  child.send({ type: 'acquire' });
+  await acquired;
+  assert.equal(incumbent.acquireSlot('fifo-incumbent', run.id, 1, 'next-incumbent-call'), undefined);
+  const closed = once(child, 'close');
+  child.send({ type: 'finish' });
+  await closed;
+  assert.equal(child.exitCode, 0, diagnostics);
+  const next = incumbent.acquireSlot('fifo-incumbent', run.id, 1, 'next-incumbent-call');
+  assert.ok(next);
+  assert.equal(incumbent.health().counts.slotWaiters, 0);
+  incumbent.releaseSlot(next, 'fifo-incumbent');
+});
+
+test('aborted, cancelled and terminal waits leave FIFO capacity available to following calls', t => {
+  const { open } = fixture(t);
+  const first = open(), second = open(), third = open();
+  const stores = [first, second, third];
+  const runs = stores.map((store, index) => {
+    store.registerInstance(`fifo-owner-${index}`, process.pid, 1);
+    const run = { ...record(`fifo-run-${index}`), status: 'queued' };
+    store.createRun(run, `fifo-owner-${index}`);
+    return run;
+  });
+  const held = first.acquireSlot('fifo-owner-0', runs[0].id, 1);
+  assert.equal(second.acquireSlot('fifo-owner-1', runs[1].id, 1, 'abort-call'), undefined);
+  assert.equal(second.acquireSlot('fifo-owner-1', runs[1].id, 1, 'cancel-call'), undefined);
+  assert.equal(third.acquireSlot('fifo-owner-2', runs[2].id, 1, 'last-call'), undefined);
+  third.cancelSlotWaiter('fifo-owner-2', 'abort-call');
+  assert.equal(first.health().counts.slotWaiters, 3, 'A different instance cannot cancel another instance waiter ID.');
+  second.cancelSlotWaiter('fifo-owner-1', 'abort-call');
+  second.cancelSlotWaiter('fifo-owner-1', 'abort-call');
+  assert.equal(first.health().counts.slotWaiters, 2);
+  second.requestCancellation(runs[1].id);
+  assert.equal(first.health().counts.slotWaiters, 1);
+  first.releaseSlot(held, 'fifo-owner-0');
+  const last = third.acquireSlot('fifo-owner-2', runs[2].id, 1, 'last-call');
+  assert.ok(last);
+  assert.equal(first.acquireSlot('fifo-owner-0', runs[0].id, 1, 'terminal-call'), undefined);
+  first.finalizeRun({ ...runs[0], status: 'failed', error: 'Offline fixture failure.' });
+  assert.equal(first.health().counts.slotWaiters, 0);
+  third.releaseSlot(last, 'fifo-owner-2');
+});
+
+test('slot waiter identity and capacity limits fail without disturbing existing queue positions', t => {
+  const { open } = fixture(t);
+  const owner = open();
+  owner.registerInstance('bounded-fifo-owner', process.pid, 1);
+  const run = { ...record('bounded-fifo-run'), status: 'queued' };
+  const other = { ...run, id: 'other-bounded-fifo-run' };
+  owner.createRun(run, 'bounded-fifo-owner');
+  owner.createRun(other, 'bounded-fifo-owner');
+  const held = owner.acquireSlot('bounded-fifo-owner', run.id, 1);
+  for (let index = 0; index < 32; index++) assert.equal(owner.acquireSlot('bounded-fifo-owner', run.id, 1, `call-${index}`), undefined);
+  assert.throws(() => owner.acquireSlot('bounded-fifo-owner', other.id, 1, 'call-0'), /cannot be reused/);
+  assert.throws(() => owner.acquireSlot('bounded-fifo-owner', run.id, 1, 'call-32'), error => error.code === 'COUNCIL_SLOT_QUEUE_FULL');
+  assert.equal(owner.health().counts.slotWaiters, 32);
+  owner.releaseSlot(held, 'bounded-fifo-owner');
+  assert.equal(owner.acquireSlot('bounded-fifo-owner', run.id, 1, 'call-31'), undefined);
+  const first = owner.acquireSlot('bounded-fifo-owner', run.id, 1, 'call-0');
+  assert.ok(first);
+  owner.releaseSlot(first, 'bounded-fifo-owner');
+  owner.finalizeRun({ ...run, status: 'completed' });
+  assert.equal(owner.health().counts.slotWaiters, 0);
+});
+
+test('free slots admit the reserved waiter prefix while retaining capacity for an older sleeping caller', t => {
+  const { open } = fixture(t);
+  const jobs = Array.from({ length: 5 }, (_, index) => {
+    const store = open();
+    const owner = `prefix-owner-${index}`;
+    store.registerInstance(owner, process.pid, 3);
+    const run = { ...record(`prefix-run-${index}`), status: 'queued' };
+    store.createRun(run, owner);
+    return { store, owner, run };
+  });
+  const [holder, a, b, c, later] = jobs;
+  const acquire = (job, id) => job.store.acquireSlot(job.owner, job.run.id, 3, id);
+  const release = (job, token) => job.store.releaseSlot(token, job.owner);
+  const held = Array.from({ length: 3 }, () => acquire(holder));
+  for (const job of [a, b, c]) assert.equal(acquire(job, job.owner), undefined);
+  for (const token of held) release(holder, token);
+  const cToken = acquire(c, c.owner);
+  const bToken = acquire(b, b.owner);
+  assert.ok(cToken && bToken, 'B and C can use their reserved slots without waiting for A to poll.');
+  assert.equal(holder.store.health().counts.slots, 2);
+  assert.equal(acquire(later, 'later-d'), undefined);
+  assert.equal(acquire(later, 'later-e'), undefined);
+  for (let index = 0; index < 3; index++) assert.equal(acquire(later, 'later-d'), undefined);
+  assert.equal(acquire(holder), undefined, 'An anonymous call cannot consume the remaining slot reserved for A.');
+  assert.equal(holder.store.health().counts.slotWaiters, 3);
+  const aToken = acquire(a, a.owner);
+  assert.ok(aToken, 'A retains its reserved capacity even though B and C started first.');
+  release(c, cToken);
+  assert.equal(acquire(later, 'later-e'), undefined, 'E cannot take the one free slot reserved for older D.');
+  const dToken = acquire(later, 'later-d');
+  assert.ok(dToken);
+  release(b, bToken);
+  const eToken = acquire(later, 'later-e');
+  assert.ok(eToken);
+  assert.equal(holder.store.health().counts.slotWaiters, 0);
+  for (const [job, token] of [[a, aToken], [later, dToken], [later, eToken]]) release(job, token);
+});
+
+test('instance-owned maintenance leases fence renewals and clear on safe unregister without deleting user reservations', t => {
+  const { open } = fixture(t);
+  const first = open(), second = open();
+  first.registerInstance('lease-instance-a', process.pid, 1);
+  second.registerInstance('lease-instance-b', process.pid, 1);
+  first.reserve('user-owner', ['src/user.ts'], 60000, 'terminal-run');
+  const [lease] = first.reserve('maintenance-owner', ['.council-maintenance/terminal-run'], 60000, 'terminal-run', 'lease-instance-a');
+  assert.equal(lease.instanceId, 'lease-instance-a');
+  assert.equal(first.reserve('maintenance-owner', lease.paths, 120000, 'terminal-run', 'lease-instance-a')[0].id, lease.id);
+  assert.throws(() => second.reserve('maintenance-owner', lease.paths, 60000, 'terminal-run', 'lease-instance-b'), /conflict/);
+  assert.throws(() => second.reserve('maintenance-owner', lease.paths, 60000, 'terminal-run'), /conflict/);
+  assert.throws(() => second.reserve('other', ['other.ts'], 60000, undefined, 'lease-instance-a'), /not bound/);
+  assert.throws(() => first.reserve('other', ['other.ts'], 60000, undefined, 'missing-instance'), /not registered/);
+  first.unregisterInstance('lease-instance-a');
+  assert.deepEqual(second.leases().map(value => value.owner), ['user-owner']);
+  assert.equal(second.leases()[0].instanceId, undefined);
+  assert.equal(second.reserve('maintenance-owner', lease.paths, 60000, 'terminal-run', 'lease-instance-b')[0].instanceId, 'lease-instance-b');
+  second.unregisterInstance('lease-instance-b');
+  assert.deepEqual(second.leases().map(value => value.owner), ['user-owner']);
+});
+
+test('the global waiter bound rejects excess admission and cancelled waits free capacity without reordering survivors', t => {
+  const { open } = fixture(t);
+  const store = open();
+  const owner = 'global-queue-owner';
+  store.registerInstance(owner, process.pid, 1);
+  for (let index = 0; index < 26; index++) store.createRun({ ...record(`global-run-${index}`), status: 'queued' }, owner);
+  const held = store.acquireSlot(owner, 'global-run-0', 1);
+  const insert = store.db.prepare('INSERT INTO slot_waiters(instance_id, run_id, waiter_id) VALUES (?, ?, ?)');
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    for (let run = 0; run < 25; run++) for (let call = 0; call < 32; call++) insert.run(owner, `global-run-${run}`, `global-${run}-${call}`);
+    store.db.exec('COMMIT');
+  } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+  assert.equal(store.health().counts.slotWaiters, 800);
+  assert.throws(() => store.acquireSlot(owner, 'global-run-25', 1, 'excess-call'), error => error.code === 'COUNCIL_SLOT_QUEUE_FULL');
+  assert.equal(store.health().counts.slotWaiters, 800);
+  store.cancelSlotWaiter(owner, 'global-0-0');
+  assert.equal(store.acquireSlot(owner, 'global-run-25', 1, 'excess-call'), undefined);
+  assert.equal(store.health().counts.slotWaiters, 800);
+  store.releaseSlot(held, owner);
+  assert.equal(store.acquireSlot(owner, 'global-run-25', 1, 'excess-call'), undefined);
+  const oldest = store.acquireSlot(owner, 'global-run-0', 1, 'global-0-1');
+  assert.ok(oldest);
+  store.releaseSlot(oldest, owner);
+});
+
+test('message pages preserve complete large bodies, timestamp ties and recipient scope through acknowledgements', t => {
+  const { open } = fixture(t);
+  const store = open();
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const body = '\u0001'.repeat(32000);
+  const insert = store.db.prepare('INSERT INTO messages(id,sender,recipient,created_at,document) VALUES (?,?,?,?,?)');
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    for (let index = 99; index >= 0; index--) {
+      const message = { id: `message-${String(index).padStart(3, '0')}`, from: 'codex', to: 'claude', subject: 'Complete evidence', body, createdAt: timestamp };
+      insert.run(message.id, message.from, message.to, message.createdAt, JSON.stringify(message));
+      if (index % 10 === 0) insert.run(`other-${index}`, 'codex', 'junie', timestamp, JSON.stringify({ ...message, id: `other-${index}`, to: 'junie' }));
+    }
+    store.db.exec('COMMIT');
+  } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+  for (let index = 0; index < 100; index += 3) store.acknowledge(`message-${String(index).padStart(3, '0')}`, 'claude');
+  const readAll = (unreadOnly, acknowledgePage = false) => {
+    const result = [];
+    let cursor;
+    for (;;) {
+      const page = store.inboxPage('claude', unreadOnly, 7, cursor);
+      if (!page.length) break;
+      for (const message of page) {
+        assert.equal(message.to, 'claude');
+        assert.equal(message.body, body, 'Pagination must never shorten an individual handoff.');
+        if (acknowledgePage) assert.equal(store.acknowledge(message.id, 'claude'), true);
+      }
+      result.push(...page);
+      const last = page.at(-1);
+      cursor = { createdAt: last.createdAt, id: last.id };
+    }
+    return result;
+  };
+  const unread = readAll(true, true);
+  assert.deepEqual(unread.map(value => value.id), Array.from({ length: 100 }, (_, index) => index).filter(index => index % 3 !== 0).map(index => `message-${String(index).padStart(3, '0')}`));
+  assert.deepEqual(store.inboxPage('claude'), []);
+  const history = readAll(false);
+  assert.equal(history.length, 100);
+  assert.ok(history.every(message => message.acknowledgedAt));
+  assert.equal(new Set(history.map(message => message.id)).size, 100);
+  assert.equal(store.inboxPage('junie', true, 100).length, 10);
+  assert.ok(store.inboxPage('junie', true, 100, { createdAt: timestamp, id: 'message-000' }).every(message => message.to === 'junie'));
+  assert.equal(store.inbox('claude', false).length, 100, 'Legacy inbox retains its original full-batch behavior.');
+  for (const limit of [0, 101, 1.5, NaN]) assert.throws(() => store.inboxPage('claude', true, limit), /limit/);
+  assert.throws(() => store.inboxPage('claude', 'yes'), /boolean/);
+  assert.throws(() => store.inboxPage('claude', true, 20, { createdAt: '', id: 'id' }), /timestamp/);
+  assert.throws(() => store.inboxPage('claude', true, 20, { createdAt: timestamp, id: '' }), /cursor id/);
+});
+
+test('supported POSIX databases and existing WAL sidecars remain private inside precreated state directories', { skip: process.platform === 'win32' }, t => {
+  const { directory, open } = fixture(t);
+  chmodSync(directory, 0o755);
+  const first = open();
+  first.putContext('private-note', 'Local task evidence.', 'codex');
+  const files = ['state.db', 'state.db-wal', 'state.db-shm'].map(name => join(directory, name));
+  for (const path of files) assert.equal(statSync(path).mode & 0o777, 0o600);
+  for (const path of files) chmodSync(path, 0o644);
+  const reopened = open();
+  assert.equal(reopened.getContext('private-note').value, 'Local task evidence.');
+  reopened.putContext('private-note', 'Updated local evidence.', 'claude');
+  for (const path of files) assert.equal(statSync(path).mode & 0o777, 0o600, `Expected private permissions on ${path}.`);
+  assert.equal(statSync(directory).mode & 0o777, 0o755, 'Existing parent directory permissions are not changed.');
+});
+
+test('future POSIX WAL databases preserve their file modes and committed bytes when rejected', { skip: process.platform === 'win32' }, t => {
+  const { directory } = fixture(t);
+  const raw = new DatabaseSync(join(directory, 'state.db'));
+  try {
+    raw.exec('PRAGMA journal_mode = WAL; PRAGMA user_version = 99; CREATE TABLE future_state(value TEXT); INSERT INTO future_state VALUES (\'preserved\');');
+    assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 99);
+    const files = ['state.db', 'state.db-wal', 'state.db-shm'].map(name => join(directory, name));
+    for (const path of files) chmodSync(path, 0o640);
+    const before = files.map(path => ({ path, mode: statSync(path).mode, bytes: readFileSync(path) }));
+    assert.throws(() => new CouncilStore(directory), /newer than supported/);
+    for (const file of before) {
+      assert.equal(statSync(file.path).mode, file.mode, 'Unsupported databases and journals must retain their original permissions.');
+      assert.deepEqual(readFileSync(file.path), file.bytes, 'Read-only version preflight must preserve future committed state.');
+    }
+  } finally { raw.close(); }
 });

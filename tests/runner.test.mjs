@@ -8,18 +8,22 @@ import { AcpxRunner, NativeRunner, MockRunner, createRunner } from '../dist/runn
 
 const fixture = fileURLToPath(new URL('./fixtures/fake-acpx.mjs', import.meta.url));
 const cwd = fileURLToPath(new URL('..', import.meta.url));
+// Protocol cases allow cold Node startup and owned Windows cleanup under parallel I/O.
+// Dedicated deadline cases override this budget explicitly.
+const FUNCTIONAL_FIXTURE_TIMEOUT_MS = 15_000;
 const config = overrides => ({ version: 1, workspaceRoot: cwd, stateDir: join(cwd, '.council'), backend: 'acpx', maxConcurrency: 2,
-  timeoutMs: 5000, maxOutputBytes: 16_384, maxCalls: 8, agents: { codex: { enabled: true, profile: 'codex' }, off: { enabled: false, profile: 'claude' } }, ...overrides });
-const request = (prompt, overrides) => ({ agent: 'codex', prompt, cwd, permission: 'read', timeoutMs: 5000, ...overrides });
+  timeoutMs: FUNCTIONAL_FIXTURE_TIMEOUT_MS, maxOutputBytes: 16_384, maxCalls: 8, agents: { codex: { enabled: true, profile: 'codex' }, off: { enabled: false, profile: 'claude' } }, ...overrides });
+const request = (prompt, overrides) => ({ agent: 'codex', prompt, cwd, permission: 'read', timeoutMs: FUNCTIONAL_FIXTURE_TIMEOUT_MS, ...overrides });
 const runner = overrides => new AcpxRunner(config(overrides), { acpxEntrypoint: fixture });
 
 test('ACPX parses only assistant text and preserves Unicode split across process chunks', async () => {
   const result = await runner().run(request('ciao'));
-  assert.equal(result.status, 'completed'); assert.equal(result.output, 'Hello 🌍: ciao'); assert.equal(result.stopReason, 'end_turn');
+  assert.equal(result.status, 'completed', result.error); assert.equal(result.output, 'Hello 🌍: ciao'); assert.equal(result.stopReason, 'end_turn');
 });
 
 test('ACPX passes prompt over stdin and explicit denial policy for read runs', async () => {
   const result = await runner().run(request('args'));
+  assert.equal(result.status, 'completed', result.error);
   const args = JSON.parse(result.output);
   assert.ok(args.includes('--deny-all')); assert.ok(args.includes('--json-strict')); assert.ok(args.includes('--file'));
   assert.equal(args[args.indexOf('--permission-policy') + 1], '{"defaultAction":"deny"}');
@@ -28,21 +32,36 @@ test('ACPX passes prompt over stdin and explicit denial policy for read runs', a
 
 test('write permission and model are explicit argv values', async () => {
   const result = await runner().run(request('args', { permission: 'write', model: 'custom-model' }));
+  assert.equal(result.status, 'completed', result.error);
   const args = JSON.parse(result.output);
   assert.ok(args.includes('--approve-all')); assert.ok(!args.includes('--deny-all'));
   assert.equal(args[args.indexOf('--model') + 1], 'custom-model');
 });
 
-for (const scenario of ['malformed', 'error', 'oversize', 'stderr-oversize', 'answer-oversize', 'nonzero', 'partial', 'empty', 'max-tokens', 'wrong-id', 'late-text']) {
+const rejectedScenarios = {
+  malformed: /malformed|partial JSON/,
+  error: /protocol error/,
+  oversize: /protocol (?:frame|traffic).*exceeded/,
+  'stderr-oversize': /diagnostics.*exceeded/,
+  'answer-oversize': /answer.*exceeded/,
+  nonzero: /exited with code 2/,
+  partial: /without a successful terminal completion/,
+  empty: /empty answer/,
+  'max-tokens': /max_tokens/,
+  'wrong-id': /invalid completion sequence/,
+  'late-text': /after terminal completion/,
+};
+for (const [scenario, expectedFailure] of Object.entries(rejectedScenarios)) {
   test(`ACPX rejects ${scenario} instead of reporting partial success`, async () => {
     const result = await runner().run(request(scenario));
-    assert.equal(result.status, 'failed'); assert.ok(result.error); assert.ok(!JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'));
+    assert.equal(result.status, 'failed', result.error); assert.match(result.error, expectedFailure);
+    assert.ok(!JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'));
   });
 }
 
 test('large echoed prompts do not consume the assistant-answer byte allowance', async () => {
   const result = await runner({ maxOutputBytes: 1024 }).run(request(`large-input:${'x'.repeat(32_000)}`));
-  assert.equal(result.status, 'completed'); assert.equal(result.output, 'Large input accepted.');
+  assert.equal(result.status, 'completed', result.error); assert.equal(result.output, 'Large input accepted.');
 });
 
 test('startup dependency failures provide an actionable summary without leaking provider diagnostics', async () => {
@@ -59,13 +78,13 @@ test('a complete known provider failure envelope cannot masquerade as successful
 
 test('ordinary review text containing provider-error examples remains a successful answer', async () => {
   const result = await runner().run(request('provider-error-example'));
-  assert.equal(result.status, 'completed'); assert.match(result.output, /model_not_found/);
+  assert.equal(result.status, 'completed', result.error); assert.match(result.output, /model_not_found/);
 });
 
 test('child environments increment Council depth to prevent recursive delegation', async () => {
   const local = new AcpxRunner(config(), { acpxEntrypoint: fixture, environment: { ...process.env, COUNCIL_DEPTH: '3' } });
   const result = await local.run(request('depth'));
-  assert.equal(result.status, 'completed'); assert.equal(result.output, '4');
+  assert.equal(result.status, 'completed', result.error); assert.equal(result.output, '4');
 });
 
 test('direct ACP executes a local adapter with explicit model and permission handling', async () => {
@@ -107,6 +126,22 @@ test('ACPX supports pre-aborted and active cancellation', async () => {
   const running = runner().run(request('hang', { signal: controller.signal }));
   setTimeout(() => controller.abort(), 100);
   assert.equal((await running).status, 'cancelled');
+});
+
+test('external ACPX structural limits preserve partial text and permit quoted tool output', async () => {
+  for (const scenario of ['structure-deep', 'structure-wide', 'structure-quoted']) {
+    const result = await runner().run(request(scenario));
+    assert.equal(result.status, scenario === 'structure-quoted' ? 'completed' : 'failed', result.error);
+    assert.match(result.output, /Partial offline evidence/);
+    if (result.status === 'failed') assert.match(result.error, /JSON depth 64|65536 structural tokens/);
+  }
+});
+
+test('external ACPX rejects a contradictory terminal result and error envelope', async () => {
+  const result = await runner().run(request('mixed-result-error'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /invalid.*envelope/i);
+  assert.match(result.output, /Partial offline evidence/);
 });
 
 test('ACPX handles unavailable entrypoints and disabled agents without throwing', async () => {

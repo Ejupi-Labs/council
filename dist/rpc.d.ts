@@ -27,6 +27,8 @@ export declare class CouncilMcpServer {
     private closePromise?;
     private pump?;
     private readonly outputAbort;
+    private readonly inputError;
+    private readonly outputError;
     private modeReader?;
     private runReader?;
     constructor(shutdown: () => Promise<void>);

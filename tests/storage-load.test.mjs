@@ -86,3 +86,46 @@ test('cancellation after a thousand events remains constant-size and immediately
     assert.throws(() => store.acquireSlot('cancel-load-owner', 'cancel-load', 1), /Cancellation/);
   } finally { JSON.parse = nativeParse; }
 });
+
+test('unread mailbox polls use a partial index instead of rescanning acknowledged history', t => {
+  const { root, store } = fixture(t);
+  const raw = new DatabaseSync(join(root, 'state.db'));
+  raw.exec('BEGIN IMMEDIATE');
+  const insert = raw.prepare("INSERT INTO messages(id,sender,recipient,created_at,acknowledged_at,document) VALUES (?,'claude','codex','2020-01-01T00:00:00.000Z','2020-01-02T00:00:00.000Z','{}')");
+  for (let index = 0; index < 50000; index++) insert.run(`acknowledged-${index}`);
+  raw.exec('COMMIT');
+  const plan = raw.prepare('EXPLAIN QUERY PLAN SELECT document, acknowledged_at FROM messages INDEXED BY messages_unread WHERE recipient = ? AND acknowledged_at IS NULL ORDER BY created_at, rowid LIMIT 100').all('codex');
+  raw.close();
+  assert.ok(plan.some(row => row.detail.includes('messages_unread')));
+  assert.ok(plan.every(row => !row.detail.includes('TEMP B-TREE')));
+  const message = store.sendMessage({ from: 'claude', to: 'codex', subject: 'Fresh review', body: 'The acknowledged history must not slow unread delivery.' });
+  const elapsedMs = elapsed(() => assert.deepEqual(store.inbox('codex').map(value => value.id), [message.id]), 100);
+  assert.equal(store.inbox('codex', false).length, 100, 'The explicit historical mailbox remains available.');
+  assert.equal(store.health().counts.unreadMessages, 1);
+  assert.equal(store.acknowledge(message.id, 'codex'), true);
+  assert.deepEqual(store.inbox('codex'), []);
+  assert.equal(store.health().counts.unreadMessages, 0);
+  t.diagnostic(JSON.stringify({ acknowledgedMessages: 50000, unreadPolls: 100, elapsedMs }));
+});
+
+test('expired lease histories use indexed health counts and are removed atomically on the next reservation', t => {
+  const { root, store } = fixture(t);
+  const raw = new DatabaseSync(join(root, 'state.db'));
+  raw.exec('BEGIN IMMEDIATE');
+  const insert = raw.prepare('INSERT INTO leases(id,owner,path,path_key,expires_at) VALUES (?,?,?,?,?)');
+  for (let index = 0; index < 100000; index++) {
+    const path = `expired/${index}.ts`;
+    insert.run(`expired-${index}`, 'past-owner', path, path, 1);
+  }
+  insert.run('live-lease', 'live-owner', 'live.ts', 'live.ts', Date.now() + 60000);
+  raw.exec('COMMIT');
+  const plan = raw.prepare('EXPLAIN QUERY PLAN SELECT COUNT(*) FROM leases WHERE expires_at > ?').all(Date.now());
+  assert.ok(plan.some(row => row.detail.includes('COVERING INDEX leases_expiry')));
+  const elapsedMs = elapsed(() => assert.equal(store.health().counts.leases, 1), 100);
+  store.reserve('next-owner', ['expired/0.ts'], 60000);
+  assert.equal(store.health().counts.leases, 2);
+  assert.equal(raw.prepare('SELECT COUNT(*) AS count FROM leases').get().count, 2);
+  assert.deepEqual(store.leases().map(value => value.owner).sort(), ['live-owner', 'next-owner']);
+  raw.close();
+  t.diagnostic(JSON.stringify({ expiredLeases: 100000, healthCalls: 100, elapsedMs }));
+});

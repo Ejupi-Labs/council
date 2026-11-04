@@ -3,7 +3,7 @@ import { chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtem
 import { basename, dirname, join, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { summarizeEvent, summarizeRun } from './summary.js';
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUN_JSON_BYTES = 16 * 1024 * 1024;
 function requireSafeSqliteRuntime() {
@@ -98,41 +98,57 @@ export class CouncilStore {
         const databasePath = this.databasePath = join(resolve(stateDir), 'state.db');
         this.db = new DatabaseSync(databasePath);
         try {
-            this.db.exec('PRAGMA busy_timeout = 250; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-            this.transaction(() => {
-                // Recheck under the migration lock: another process may have upgraded while opening.
-                const version = this.statement('PRAGMA user_version').get();
-                if (version.user_version > SCHEMA_VERSION)
-                    throw new Error(`Council state schema ${version.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
-                if (version.user_version > 0 && version.user_version < 3 && this.statement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instances'").get()) {
-                    const owners = this.statement('SELECT pid FROM instances').all();
-                    if (owners.some(owner => processAlive(owner.pid)))
-                        throw new Error('Stop older Council hosts using this workspace before upgrading storage, then retry.');
-                }
-                this.db.exec(`
+            this.db.exec('PRAGMA busy_timeout = 250; PRAGMA foreign_keys = ON;');
+            // Journal mode is persistent: reject unsupported state before changing it.
+            const initial = this.statement('PRAGMA user_version').get();
+            if (initial.user_version > SCHEMA_VERSION)
+                throw new Error(`Council state schema ${initial.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
+            this.restrictDatabaseFiles();
+            const journal = this.statement('PRAGMA journal_mode').get();
+            if (initial.user_version !== SCHEMA_VERSION || journal.journal_mode !== 'wal') {
+                // Initialization runs before vendor work; runtime writes retain their short contention bound.
+                this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
+                this.transaction(() => {
+                    // Recheck under the migration lock: another process may have upgraded while opening.
+                    const version = this.statement('PRAGMA user_version').get();
+                    if (version.user_version > SCHEMA_VERSION)
+                        throw new Error(`Council state schema ${version.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
+                    if (version.user_version === SCHEMA_VERSION)
+                        return;
+                    if (version.user_version < SCHEMA_VERSION && this.statement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instances'").get()) {
+                        const owners = this.statement('SELECT pid FROM instances').all();
+                        if (owners.some(owner => processAlive(owner.pid)))
+                            throw new Error('Stop older Council hosts using this workspace before upgrading storage, then retry.');
+                    }
+                    this.db.exec(`
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, document TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id, sequence);
           CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, created_at TEXT NOT NULL, acknowledged_at TEXT, document TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS messages_inbox ON messages(recipient, created_at);
+          CREATE INDEX IF NOT EXISTS messages_unread ON messages(recipient, created_at) WHERE acknowledged_at IS NULL;
+          CREATE INDEX IF NOT EXISTS messages_recipient_page ON messages(recipient, created_at, id);
+          CREATE INDEX IF NOT EXISTS messages_unread_page ON messages(recipient, created_at, id) WHERE acknowledged_at IS NULL;
           CREATE TABLE IF NOT EXISTS leases (id TEXT PRIMARY KEY, owner TEXT NOT NULL, path TEXT NOT NULL, path_key TEXT NOT NULL UNIQUE, run_id TEXT, expires_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS context (key TEXT PRIMARY KEY, value TEXT NOT NULL, author TEXT NOT NULL, updated_at TEXT NOT NULL);
         `);
-                if (version.user_version < 2)
-                    this.db.exec(`
+                    if (version.user_version < 2)
+                        this.db.exec(`
           ALTER TABLE runs ADD COLUMN owner_instance TEXT;
           ALTER TABLE runs ADD COLUMN owner_pid INTEGER;
           ALTER TABLE runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
         `);
-                this.db.exec(`
+                    this.db.exec(`
           CREATE INDEX IF NOT EXISTS runs_owner ON runs(owner_instance);
           CREATE TABLE IF NOT EXISTS instances (id TEXT PRIMARY KEY, pid INTEGER NOT NULL, registered_at INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL, slot_limit INTEGER);
           CREATE TABLE IF NOT EXISTS slots (token TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, run_id TEXT NOT NULL, acquired_at INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS slots_instance ON slots(instance_id);
         `);
-                if (version.user_version < 3)
-                    this.migrateMetadata();
-                this.db.exec(`
+                    if (version.user_version < 3)
+                        this.migrateMetadata();
+                    if (version.user_version < 5)
+                        this.db.exec('ALTER TABLE leases ADD COLUMN instance_id TEXT REFERENCES instances(id) ON DELETE CASCADE;');
+                    this.db.exec(`
           DROP INDEX IF EXISTS runs_unfinished_owner;
           CREATE INDEX IF NOT EXISTS runs_active_owner ON runs(owner_instance, status) WHERE status IN ('queued', 'running');
           CREATE INDEX IF NOT EXISTS runs_recent ON runs(updated_at DESC, id DESC);
@@ -143,17 +159,43 @@ export class CouncilStore {
           CREATE INDEX IF NOT EXISTS runs_prunable ON runs(status, has_artifacts, updated_at, id);
           CREATE INDEX IF NOT EXISTS events_run_type_sequence ON events(run_id, type, sequence);
           CREATE INDEX IF NOT EXISTS events_compact_page ON events(run_id, sequence, type, summary, created_at);
-          PRAGMA user_version = 3;
+          CREATE INDEX IF NOT EXISTS leases_instance ON leases(instance_id) WHERE instance_id IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS leases_expiry ON leases(expires_at);
+          CREATE TABLE IF NOT EXISTS slot_waiters (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            waiter_id TEXT NOT NULL,
+            UNIQUE(instance_id, waiter_id)
+          );
+          CREATE INDEX IF NOT EXISTS slot_waiters_run ON slot_waiters(run_id);
+          PRAGMA user_version = ${SCHEMA_VERSION};
         `);
-                if (version.user_version < 3)
-                    this.db.exec("UPDATE runs SET cancel_requested = 1 WHERE cancel_requested = 0 AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.type = 'cancel_requested')");
-            });
-            if (process.platform !== 'win32')
-                chmodSync(databasePath, 0o600);
+                    if (version.user_version < 3)
+                        this.db.exec("UPDATE runs SET cancel_requested = 1 WHERE cancel_requested = 0 AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.type = 'cancel_requested')");
+                });
+                this.db.exec('PRAGMA busy_timeout = 250;');
+            }
+            this.restrictDatabaseFiles();
         }
         catch (error) {
             this.db.close();
             throw error;
+        }
+    }
+    /** SQLite inherits the database mode when creating WAL/SHM beside existing state directories. */
+    restrictDatabaseFiles() {
+        if (process.platform === 'win32')
+            return;
+        chmodSync(this.databasePath, 0o600);
+        for (const path of [`${this.databasePath}-wal`, `${this.databasePath}-shm`]) {
+            try {
+                chmodSync(path, 0o600);
+            }
+            catch (error) {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            }
         }
     }
     /** Fixed SQL only, with a bounded cache rather than re-preparing every polling query. */
@@ -195,8 +237,8 @@ export class CouncilStore {
             sequence = row.sequence;
         }
     }
-    transaction(operation) {
-        this.db.exec('BEGIN IMMEDIATE');
+    transaction(operation, write = true) {
+        this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
         try {
             const result = operation();
             this.db.exec('COMMIT');
@@ -226,6 +268,8 @@ export class CouncilStore {
             const revision = (existing?.revision ?? 0) + 1;
             this.statement('INSERT INTO runs(id, updated_at, document, status, revision, summary, has_artifacts) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, document = excluded.document, status = excluded.status, revision = excluded.revision, summary = excluded.summary, has_artifacts = excluded.has_artifacts')
                 .run(run.id, run.updatedAt, document, run.status, revision, encode(summarizeRun(run, revision)), (run.workspaces?.length ?? 0) > 0 ? 1 : 0);
+            if (!['queued', 'running'].includes(run.status))
+                this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(run.id);
         });
     }
     /** Creation, ownership and the queued event commit together, leaving no unowned crash window. */
@@ -299,8 +343,10 @@ export class CouncilStore {
         const event = { sequence: 0, runId, type, data, createdAt };
         const result = this.statement('INSERT INTO events(run_id, type, data, created_at, summary) VALUES (?, ?, ?, ?, ?)')
             .run(runId, type, encode(data), createdAt, encode(summarizeEvent(event).data));
-        if (type === 'cancel_requested')
+        if (type === 'cancel_requested') {
             this.statement('UPDATE runs SET cancel_requested = 1, revision = revision + 1 WHERE id = ? AND cancel_requested = 0').run(runId);
+            this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(runId);
+        }
         return { ...event, sequence: Number(result.lastInsertRowid) };
     }
     events(runId, after = 0) {
@@ -338,8 +384,32 @@ export class CouncilStore {
     }
     inbox(agent, unreadOnly = true) {
         text(agent, 'Agent', 128);
-        const rows = this.statement('SELECT document, acknowledged_at FROM messages WHERE recipient = ? AND (? = 0 OR acknowledged_at IS NULL) ORDER BY created_at, rowid LIMIT 100')
-            .all(agent, unreadOnly ? 1 : 0);
+        const rows = (unreadOnly
+            ? this.statement('SELECT document, acknowledged_at FROM messages INDEXED BY messages_unread WHERE recipient = ? AND acknowledged_at IS NULL ORDER BY created_at, rowid LIMIT 100').all(agent)
+            : this.statement('SELECT document, acknowledged_at FROM messages WHERE recipient = ? ORDER BY created_at, rowid LIMIT 100').all(agent));
+        return this.decodeMessages(rows);
+    }
+    /** Complete message bodies with stable timestamp/ID keyset pagination. */
+    inboxPage(agent, unreadOnly = true, limit = 20, after) {
+        text(agent, 'Agent', 128);
+        if (typeof unreadOnly !== 'boolean')
+            throw new Error('Unread-only must be a boolean.');
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+            throw new Error('Inbox page limit must be from 1 to 100.');
+        if (after) {
+            text(after.createdAt, 'Inbox cursor timestamp', 64);
+            text(after.id, 'Inbox cursor id', 256);
+        }
+        const rows = (unreadOnly
+            ? after
+                ? this.statement('SELECT document, acknowledged_at FROM messages INDEXED BY messages_unread_page WHERE recipient = ? AND acknowledged_at IS NULL AND (created_at, id) > (?, ?) ORDER BY created_at, id LIMIT ?').all(agent, after.createdAt, after.id, limit)
+                : this.statement('SELECT document, acknowledged_at FROM messages INDEXED BY messages_unread_page WHERE recipient = ? AND acknowledged_at IS NULL ORDER BY created_at, id LIMIT ?').all(agent, limit)
+            : after
+                ? this.statement('SELECT document, acknowledged_at FROM messages INDEXED BY messages_recipient_page WHERE recipient = ? AND (created_at, id) > (?, ?) ORDER BY created_at, id LIMIT ?').all(agent, after.createdAt, after.id, limit)
+                : this.statement('SELECT document, acknowledged_at FROM messages INDEXED BY messages_recipient_page WHERE recipient = ? ORDER BY created_at, id LIMIT ?').all(agent, limit));
+        return this.decodeMessages(rows);
+    }
+    decodeMessages(rows) {
         return rows.map(row => {
             const message = JSON.parse(row.document);
             if (row.acknowledged_at)
@@ -354,7 +424,7 @@ export class CouncilStore {
             .run(new Date().toISOString(), id, agent);
         return result.changes > 0;
     }
-    reserve(owner, paths, ttlMs, runId) {
+    reserve(owner, paths, ttlMs, runId, instanceId) {
         text(owner, 'Lease owner', 128);
         if (!Array.isArray(paths) || paths.length < 1 || paths.length > 100)
             throw new Error('Reserve between 1 and 100 paths');
@@ -362,38 +432,51 @@ export class CouncilStore {
             throw new Error('Lease TTL must be between 1 ms and 24 hours');
         if (runId !== undefined)
             text(runId, 'Run id', 256);
+        if (instanceId !== undefined)
+            text(instanceId, 'Lease instance id', 128);
         const normalized = [...new Map(paths.map(path => { const value = normalizePath(path); return [value.toLowerCase(), value]; })).values()];
         return this.transaction(() => {
+            if (instanceId !== undefined) {
+                this.assertInstance(instanceId);
+                if (this.boundInstance !== instanceId)
+                    throw new Error('The store connection is not bound to this lease owner instance.');
+            }
             const now = Date.now();
             this.statement('DELETE FROM leases WHERE expires_at <= ?').run(now);
             const active = this.readLeases(now);
             for (const requested of normalized) {
-                const conflict = active.find(lease => lease.owner !== owner && lease.paths.some(path => overlaps(path, requested)));
+                const conflict = active.find(lease => (lease.owner !== owner || lease.runId !== runId || lease.instanceId !== instanceId) && lease.paths.some(path => overlaps(path, requested)));
                 if (conflict)
                     throw new Error(`Reservation conflict: ${requested} overlaps ${conflict.paths[0]} owned by ${conflict.owner} until ${conflict.expiresAt}`);
             }
             const expiresAt = new Date(now + ttlMs).toISOString();
             return normalized.map(path => {
                 const existing = active.find(lease => lease.owner === owner && lease.paths[0]?.toLowerCase() === path.toLowerCase());
-                const lease = { id: existing?.id ?? randomUUID(), owner, paths: [path], expiresAt, ...(runId === undefined ? {} : { runId }) };
-                this.statement('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET id = excluded.id, owner = excluded.owner, path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at')
-                    .run(lease.id, owner, path, path.toLowerCase(), runId ?? null, now + ttlMs);
+                const lease = { id: existing?.id ?? randomUUID(), owner, paths: [path], expiresAt, ...(runId === undefined ? {} : { runId }), ...(instanceId === undefined ? {} : { instanceId }) };
+                this.statement('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at, instance_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET id = excluded.id, owner = excluded.owner, path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at, instance_id = excluded.instance_id')
+                    .run(lease.id, owner, path, path.toLowerCase(), runId ?? null, now + ttlMs, instanceId ?? null);
                 return lease;
             });
         });
     }
-    release(owner, paths) {
+    release(owner, paths, runId) {
         text(owner, 'Lease owner', 128);
+        if (runId !== undefined)
+            text(runId, 'Run id', 256);
         if (paths === undefined)
-            return Number(this.statement('DELETE FROM leases WHERE owner = ?').run(owner).changes);
+            return Number(runId === undefined
+                ? this.statement('DELETE FROM leases WHERE owner = ?').run(owner).changes
+                : this.statement('DELETE FROM leases WHERE owner = ? AND run_id = ?').run(owner, runId).changes);
         if (!Array.isArray(paths) || paths.length > 100)
             throw new Error('Release at most 100 paths');
         const normalized = paths.map(normalizePath);
-        return this.transaction(() => normalized.reduce((count, path) => count + Number(this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ?').run(owner, path.toLowerCase()).changes), 0));
+        return this.transaction(() => normalized.reduce((count, path) => count + Number(runId === undefined
+            ? this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ?').run(owner, path.toLowerCase()).changes
+            : this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ? AND run_id = ?').run(owner, path.toLowerCase(), runId).changes), 0));
     }
     readLeases(now = Date.now()) {
-        const rows = this.statement('SELECT id, owner, path, run_id, expires_at FROM leases WHERE expires_at > ? ORDER BY path_key').all(now);
-        return rows.map(row => ({ id: row.id, owner: row.owner, paths: [row.path], expiresAt: new Date(row.expires_at).toISOString(), ...(row.run_id === null ? {} : { runId: row.run_id }) }));
+        const rows = this.statement('SELECT id, owner, path, run_id, expires_at, instance_id FROM leases WHERE expires_at > ? ORDER BY path_key').all(now);
+        return rows.map(row => ({ id: row.id, owner: row.owner, paths: [row.path], expiresAt: new Date(row.expires_at).toISOString(), ...(row.run_id === null ? {} : { runId: row.run_id }), ...(row.instance_id === null ? {} : { instanceId: row.instance_id }) }));
     }
     leases() {
         return this.readLeases();
@@ -416,17 +499,19 @@ export class CouncilStore {
         const rows = this.statement('SELECT key, value, author, updated_at FROM context ORDER BY updated_at DESC, key LIMIT 100').all();
         return rows.map(row => ({ key: row.key, value: row.value, author: row.author, updatedAt: row.updated_at }));
     }
-    registerInstance(instanceId, pid) {
+    registerInstance(instanceId, pid, slotLimit) {
         text(instanceId, 'Instance id', 128);
         if (!Number.isSafeInteger(pid) || pid !== process.pid)
             throw new Error('A Council instance must register its own process PID.');
+        if (slotLimit !== undefined && (!Number.isInteger(slotLimit) || slotLimit < 1 || slotLimit > 32))
+            throw new Error('The shared concurrency limit must be from 1 to 32.');
         this.transaction(() => {
             const existing = this.instance(instanceId);
             if (existing && existing.pid !== pid)
                 throw new Error('This Council instance ID is already registered by another process.');
             const now = Date.now();
-            this.statement('INSERT INTO instances(id, pid, registered_at, heartbeat_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at')
-                .run(instanceId, pid, now, now);
+            this.statement('INSERT INTO instances(id, pid, registered_at, heartbeat_at, slot_limit) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at, slot_limit = COALESCE(excluded.slot_limit, instances.slot_limit)')
+                .run(instanceId, pid, now, now, slotLimit ?? null);
         });
         this.boundInstance ??= instanceId;
     }
@@ -547,12 +632,17 @@ export class CouncilStore {
     writeRun(run, revision) {
         this.statement('UPDATE runs SET document = ?, updated_at = ?, status = ?, revision = ?, summary = ?, has_artifacts = ? WHERE id = ?')
             .run(encode(run, MAX_RUN_JSON_BYTES), run.updatedAt, run.status, revision, encode(summarizeRun(run, revision)), (run.workspaces?.length ?? 0) > 0 ? 1 : 0, run.id);
+        if (!['queued', 'running'].includes(run.status))
+            this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(run.id);
     }
-    acquireSlot(instanceId, runId, limit) {
+    /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
+    acquireSlot(instanceId, runId, limit, waiterId) {
         text(instanceId, 'Instance id', 128);
         text(runId, 'Run id', 256);
         if (!Number.isInteger(limit) || limit < 1 || limit > 32)
             throw new Error('The shared concurrency limit must be from 1 to 32.');
+        if (waiterId !== undefined)
+            text(waiterId, 'Slot waiter id', 128);
         return this.transaction(() => {
             this.assertInstance(instanceId);
             const now = Date.now();
@@ -568,12 +658,38 @@ export class CouncilStore {
             if (this.isCancellationRequested(runId))
                 throw new Error('Cancellation has been requested for this run.');
             this.statement('UPDATE instances SET slot_limit = ? WHERE id = ? AND (slot_limit IS NULL OR slot_limit <> ?)').run(limit, instanceId, limit);
+            // Metadata-only cleanup also handles interrupted callers and old manually edited databases.
+            this.statement("DELETE FROM slot_waiters WHERE NOT EXISTS (SELECT 1 FROM runs INDEXED BY runs_metadata_lookup WHERE runs.id = slot_waiters.run_id AND runs.owner_instance = slot_waiters.instance_id AND runs.status IN ('queued', 'running') AND runs.cancel_requested = 0) OR NOT EXISTS (SELECT 1 FROM instances WHERE instances.id = slot_waiters.instance_id)").run();
+            if (waiterId !== undefined) {
+                const existing = this.statement('SELECT run_id FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').get(instanceId, waiterId);
+                if (existing && existing.run_id !== runId)
+                    throw new Error('A slot waiter ID cannot be reused for a different run.');
+                if (!existing) {
+                    const count = this.statement('SELECT COUNT(*) AS total, SUM(run_id = ?) AS own FROM slot_waiters').get(runId);
+                    if (count.total >= 800 || (count.own ?? 0) >= 32)
+                        throw Object.assign(new Error('The Council slot waiter queue is full; cancel abandoned waits before retrying.'), { code: 'COUNCIL_SLOT_QUEUE_FULL' });
+                    this.statement('INSERT INTO slot_waiters(instance_id, run_id, waiter_id) VALUES (?, ?, ?)').run(instanceId, runId, waiterId);
+                }
+            }
             const minimum = this.statement('SELECT MIN(slot_limit) AS value FROM instances WHERE slot_limit IS NOT NULL').get();
             const active = this.statement('SELECT COUNT(*) AS value FROM slots').get();
-            if (active.value >= minimum.value)
+            const available = minimum.value - active.value;
+            if (available <= 0)
                 return undefined;
+            if (waiterId === undefined) {
+                if (this.statement('SELECT 1 FROM slot_waiters LIMIT 1').get())
+                    return undefined;
+            }
+            else {
+                const older = this.statement('SELECT COUNT(*) AS value FROM slot_waiters WHERE sequence < (SELECT sequence FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?)').get(instanceId, waiterId);
+                // Each older waiter keeps one slot reserved even while it is between polling attempts.
+                if (older.value >= available)
+                    return undefined;
+            }
             const token = randomUUID();
             this.statement('INSERT INTO slots(token, instance_id, run_id, acquired_at) VALUES (?, ?, ?, ?)').run(token, instanceId, runId, Date.now());
+            if (waiterId !== undefined)
+                this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').run(instanceId, waiterId);
             return token;
         });
     }
@@ -581,6 +697,13 @@ export class CouncilStore {
         text(token, 'Slot token', 256);
         text(instanceId, 'Instance id', 128);
         this.statement('DELETE FROM slots WHERE token = ? AND instance_id = ?').run(token, instanceId);
+    }
+    /** Idempotent cleanup for a per-call wait that was aborted before admission. */
+    cancelSlotWaiter(instanceId, waiterId) {
+        text(instanceId, 'Instance id', 128);
+        text(waiterId, 'Slot waiter id', 128);
+        this.assertInstance(instanceId);
+        this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').run(instanceId, waiterId);
     }
     /** Heartbeat age alone is never proof that a process is dead. PID reuse is intentionally conservative. */
     recoverOrphans() {
@@ -636,15 +759,16 @@ export class CouncilStore {
         return recovered;
     }
     health() {
-        const size = (path) => { try {
-            return statSync(path).size;
-        }
-        catch (error) {
-            if (error.code === 'ENOENT')
-                return 0;
-            throw error;
-        } };
-        const counts = this.statement(`SELECT
+        const inspect = () => {
+            const size = (path) => { try {
+                return statSync(path).size;
+            }
+            catch (error) {
+                if (error.code === 'ENOENT')
+                    return 0;
+                throw error;
+            } };
+            const counts = this.statement(`SELECT
       (SELECT COUNT(*) FROM runs) AS runs,
       (SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running')) AS activeRuns,
       (SELECT COUNT(*) FROM events) AS events,
@@ -653,15 +777,18 @@ export class CouncilStore {
       (SELECT COUNT(*) FROM leases WHERE expires_at > ?) AS leases,
       (SELECT COUNT(*) FROM instances) AS instances,
       (SELECT COUNT(*) FROM slots) AS slots,
+      (SELECT COUNT(*) FROM slot_waiters) AS slotWaiters,
       (SELECT COUNT(*) FROM context) AS context`).get(Date.now());
-        const statuses = this.statement('SELECT status, COUNT(*) AS count FROM runs GROUP BY status').all();
-        const mode = this.statement('PRAGMA journal_mode').get();
-        return {
-            schemaVersion: SCHEMA_VERSION, sqliteVersion: this.sqliteVersion, journalMode: mode.journal_mode,
-            databaseBytes: size(this.databasePath), walBytes: size(`${this.databasePath}-wal`),
-            preparedStatements: this.statements.size, workspaceActiveRunLimit: 100, counts,
-            runStatuses: Object.fromEntries(statuses.map(row => [row.status, row.count])),
+            const statuses = this.statement('SELECT status, COUNT(*) AS count FROM runs GROUP BY status').all();
+            const mode = this.statement('PRAGMA journal_mode').get();
+            return {
+                schemaVersion: SCHEMA_VERSION, sqliteVersion: this.sqliteVersion, journalMode: mode.journal_mode,
+                databaseBytes: size(this.databasePath), walBytes: size(`${this.databasePath}-wal`),
+                preparedStatements: this.statements.size, workspaceActiveRunLimit: 100, counts,
+                runStatuses: Object.fromEntries(statuses.map(row => [row.status, row.count])),
+            };
         };
+        return this.db.isTransaction ? inspect() : this.transaction(inspect, false);
     }
     checkIntegrity() {
         return this.statement('PRAGMA quick_check').all().map(row => row.quick_check);
@@ -688,14 +815,23 @@ export class CouncilStore {
         const temporary = mkdtempSync(join(parent, '.council-backup-'));
         const snapshot = join(temporary, 'snapshot.db');
         this.activeBackups++;
+        let reader;
+        let failed = false;
         try {
             const deadline = performance.now() + 60_000;
-            await backup(this.db, snapshot, { rate: 128, progress: () => {
+            // Pin one WAL snapshot on an isolated connection: foreign commits otherwise restart each batch.
+            // The application connection remains free to write while this read transaction is active.
+            reader = new DatabaseSync(source, { readOnly: true });
+            reader.exec('PRAGMA busy_timeout = 250; BEGIN;');
+            reader.prepare('SELECT name FROM sqlite_schema LIMIT 1').get();
+            await backup(reader, snapshot, { rate: 128, progress: () => {
                     signal?.throwIfAborted();
                     if (performance.now() > deadline)
                         throw new Error('Council backup exceeded its 60-second deadline.');
                 } });
             signal?.throwIfAborted();
+            if (performance.now() > deadline)
+                throw new Error('Council backup exceeded its 60-second deadline.');
             if (process.platform !== 'win32')
                 chmodSync(snapshot, 0o600);
             const descriptor = openSync(snapshot, 'r+');
@@ -709,12 +845,37 @@ export class CouncilStore {
             linkSync(snapshot, destination);
             return destination;
         }
+        catch (error) {
+            failed = true;
+            throw error;
+        }
         finally {
+            let cleanupError;
+            try {
+                if (reader?.isTransaction)
+                    reader.exec('ROLLBACK');
+            }
+            catch (error) {
+                cleanupError = error;
+            }
+            try {
+                reader?.close();
+            }
+            catch (error) {
+                cleanupError ??= error;
+            }
             this.activeBackups--;
             // This directory was created exclusively by this invocation under the resolved parent.
-            if (dirname(temporary) !== parent || !basename(temporary).startsWith('.council-backup-'))
-                throw new Error('Refusing to remove an unexpected backup staging directory.');
-            rmSync(temporary, { recursive: true, force: true });
+            try {
+                if (dirname(temporary) !== parent || !basename(temporary).startsWith('.council-backup-'))
+                    throw new Error('Refusing to remove an unexpected backup staging directory.');
+                rmSync(temporary, { recursive: true, force: true });
+            }
+            catch (error) {
+                cleanupError ??= error;
+            }
+            if (!failed && cleanupError)
+                throw cleanupError;
         }
     }
     prune(options) {
@@ -736,7 +897,7 @@ export class CouncilStore {
                 result.deletedRuns += Number(this.statement('DELETE FROM runs WHERE id = ?').run(id).changes);
             }
             return result;
-        });
+        }, options.dryRun === false);
     }
     close() {
         if (this.activeBackups > 0)

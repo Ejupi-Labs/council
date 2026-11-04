@@ -10,9 +10,29 @@ import { parseWorkflow } from './config.js';
 import { GitWorkspaces } from './workspaces.js';
 import { summarizeRun, type RunSummary } from './summary.js';
 import { VERSION } from './version.js';
+import { metadataPressure } from './metadata.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
 
+const STATE_CONTENTION_GRACE_MS = 5000;
+function isStateContention(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as { errcode?: unknown }).errcode : undefined;
+  return typeof code === 'number' && ((code & 0xff) === 5 || (code & 0xff) === 6);
+}
+
 export class CouncilService {
+  /** Retry local state initialization only; no workflow or provider call is replayed. */
+  static async open(config: CouncilConfig, runner?: AgentRunner, signal?: AbortSignal): Promise<CouncilService> {
+    const until = performance.now() + STATE_CONTENTION_GRACE_MS;
+    for (;;) {
+      signal?.throwIfAborted();
+      try { return new CouncilService(config, runner); }
+      catch (error) {
+        if (!isStateContention(error) || performance.now() >= until) throw error;
+        await delay(Math.max(1, Math.min(50, until - performance.now())), undefined, { signal });
+      }
+    }
+  }
+
   readonly store: CouncilStore;
   readonly runner: AgentRunner;
   readonly engine: WorkflowEngine;
@@ -25,6 +45,8 @@ export class CouncilService {
   private readonly emergencyResults = new Map<string, RunRecord>();
   private fault?: string;
   private lastHeartbeatAt = Date.now();
+  private lastHeartbeatElapsed = performance.now();
+  private heartbeatContentions = 0;
   private closePromise?: Promise<void>;
   private closing = false;
 
@@ -32,17 +54,32 @@ export class CouncilService {
     this.store = new CouncilStore(config.stateDir);
     try {
       this.recoveredRuns = this.store.recoverOrphans();
-      this.store.registerInstance(this.instanceId, process.pid);
+      this.store.registerInstance(this.instanceId, process.pid, config.maxConcurrency);
+      this.lastHeartbeatAt = Date.now();
+      this.lastHeartbeatElapsed = performance.now();
       this.runner = runner ?? createRunner(config);
-      this.engine = new WorkflowEngine(config, this.runner, this.store, { instanceId: this.instanceId });
-      this.heartbeat = setInterval(() => {
-        try {
-          if (!this.store.heartbeat(this.instanceId)) this.degrade('Council state ownership was lost.');
-          else this.lastHeartbeatAt = Date.now();
-        } catch { this.degrade('Council state heartbeat failed. Inspect storage and restart this host before accepting new work.'); }
-      }, 1000);
+      this.engine = new WorkflowEngine(config, this.runner, this.store, {
+        instanceId: this.instanceId,
+        onStateFailure: () => this.degrade('Council state persistence failed. Inspect storage and restart this host before accepting new work.'),
+      });
+      this.heartbeat = setInterval(() => this.heartbeatTick(), 1000);
       this.heartbeat.unref();
     } catch (error) { try { this.store.unregisterInstance(this.instanceId); } finally { this.store.close(); } throw error; }
+  }
+
+  private heartbeatTick(): void {
+    try {
+      if (!this.store.heartbeat(this.instanceId)) { this.degrade('Council state ownership was lost.'); return; }
+      this.lastHeartbeatAt = Date.now();
+      this.lastHeartbeatElapsed = performance.now();
+      this.heartbeatContentions = 0;
+    } catch (error) {
+      if (isStateContention(error)) {
+        this.heartbeatContentions++;
+        if (performance.now() - this.lastHeartbeatElapsed < STATE_CONTENTION_GRACE_MS) return;
+      }
+      this.degrade('Council state heartbeat failed. Inspect storage and restart this host before accepting new work.');
+    }
   }
 
   start(value: unknown, provenance?: { previousId: string }): RunRecord {
@@ -61,10 +98,12 @@ export class CouncilService {
     setMaxListeners(0, settled.signal);
     const done = Promise.resolve().then(() => this.engine.run(input, { id: run.id, signal: controller.signal }))
       .catch((error: unknown) => {
+        const persistenceFailure = error instanceof WorkflowPersistenceError;
+        if (persistenceFailure) this.degrade('Council state persistence failed. Inspect storage and restart this host before accepting new work.');
         let durable: RunRecord | undefined;
         try { durable = this.store.getRun(run.id); } catch { /* Preserve the queued brief if storage is unavailable. */ }
         const snapshot = error instanceof WorkflowPersistenceError && error.run.id === run.id ? error.run : durable ?? run;
-        const failed: RunRecord = { ...snapshot, status: controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Workflow failed.', updatedAt: new Date().toISOString() };
+        const failed: RunRecord = { ...snapshot, status: !persistenceFailure && controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Workflow failed.', updatedAt: new Date().toISOString() };
         try { return this.store.finalizeRun(failed); }
         catch {
           failed.error = 'Run persistence failed. Last durable state may be incomplete; inspect local state before replacing this task.';
@@ -74,7 +113,7 @@ export class CouncilService {
         }
       }).finally(() => { settled.abort(); this.jobs.delete(run.id); });
     this.jobs.set(run.id, { controller, settled, done });
-    return run;
+    return structuredClone(run);
   }
 
   async run(input: WorkflowInput): Promise<RunRecord> {
@@ -84,7 +123,7 @@ export class CouncilService {
 
   completion(id: string): Promise<RunRecord> {
     const job = this.jobs.get(id);
-    if (job) return job.done;
+    if (job) return job.done.then(run => this.emergencyResults.has(id) ? structuredClone(run) : run);
     const run = this.getRun(id);
     if (!run) return Promise.reject(new Error('Run not found.'));
     if (['queued', 'running'].includes(run.status)) return Promise.reject(new Error('This run is owned by another process; use status to wait for it.'));
@@ -93,7 +132,8 @@ export class CouncilService {
 
   /** Prefer an honest failed in-memory outcome if durable finalization was unavailable. */
   getRun(id: string): RunRecord | undefined {
-    return this.emergencyResults.get(id) ?? this.store.getRun(id);
+    const emergency = this.emergencyResults.get(id);
+    return emergency ? structuredClone(emergency) : this.store.getRun(id);
   }
 
   private degrade(message: string): void {
@@ -126,11 +166,11 @@ export class CouncilService {
       signal?.throwIfAborted();
       return this.summary(id);
     }
-    const until = Date.now() + timeout;
+    const until = performance.now() + timeout;
     for (;;) {
-      await delay(Math.max(1, Math.min(100, until - Date.now())), undefined, { signal });
+      await delay(Math.max(1, Math.min(100, until - performance.now())), undefined, { signal });
       const value = this.summary(id);
-      if (!['queued', 'running'].includes(value.status) || Date.now() >= until) return value;
+      if (!['queued', 'running'].includes(value.status) || performance.now() >= until) return value;
     }
   }
 
@@ -156,9 +196,11 @@ export class CouncilService {
       status: issues.length ? 'degraded' : this.closing ? 'draining' : 'ok',
       version: VERSION, pid: process.pid, uptimeSeconds: Math.round(process.uptime()),
       lastHeartbeatAt: new Date(this.lastHeartbeatAt).toISOString(),
+      heartbeatContentions: this.heartbeatContentions,
+      filesystem: metadataPressure(),
       activeLocalRuns: this.jobs.size, maintenanceOperations: this.maintenance.size,
       emergencyResults: this.emergencyResults.size, memory: process.memoryUsage(),
-      limits: { concurrency: this.config.maxConcurrency, activeLocalRuns: 20, activeWorkspaceRuns: 100, callsPerRun: this.config.maxCalls, outputBytesPerCall: this.config.maxOutputBytes },
+      limits: { concurrency: this.config.maxConcurrency, activeLocalRuns: 20, activeWorkspaceRuns: 100, callsPerRun: this.config.maxCalls, outputBytesPerCall: this.config.maxOutputBytes, heartbeatGraceMs: STATE_CONTENTION_GRACE_MS },
       state, integrity, issues,
     };
   }
@@ -200,6 +242,33 @@ export class CouncilService {
     return { runs, nextCursor: hasMore ? Buffer.from(JSON.stringify(next)).toString('base64url') : null };
   }
 
+  inboxPage(agent: string, unreadOnly = true, limit = 20, cursor?: string) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Inbox page limit must be from 1 to 100.');
+    let after: { createdAt: string; id: string } | undefined;
+    if (cursor !== undefined) {
+      try {
+        if (typeof cursor !== 'string' || !cursor || cursor.length > 1024) throw new Error();
+        const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        if (!value || value.agent !== agent || value.unreadOnly !== unreadOnly || typeof value.createdAt !== 'string' ||
+          !Number.isFinite(Date.parse(value.createdAt)) || typeof value.id !== 'string' || !value.id || value.id.length > 256 || value.id.includes('\0')) throw new Error();
+        after = { createdAt: value.createdAt, id: value.id };
+      } catch { throw new Error('Invalid inbox page cursor for this recipient and unread filter.'); }
+    }
+    const candidates = this.store.inboxPage(agent, unreadOnly, limit, after);
+    const messages: typeof candidates = [];
+    let bytes = 2;
+    for (const message of candidates) {
+      const size = Buffer.byteLength(JSON.stringify(message)) + 1;
+      if (messages.length && bytes + size > 1024 * 1024) break;
+      if (bytes + size > 1024 * 1024) throw new Error('A message exceeds the inbox page budget; inspect local storage.');
+      messages.push(message); bytes += size;
+    }
+    const last = messages.at(-1);
+    const next = last ? { createdAt: last.createdAt, id: last.id } : undefined;
+    const hasMore = messages.length < candidates.length || (!!next && this.store.inboxPage(agent, unreadOnly, 1, next).length > 0);
+    return { messages, nextCursor: hasMore && next ? Buffer.from(JSON.stringify({ agent, unreadOnly, ...next })).toString('base64url') : null };
+  }
+
   requestCancellation(id: string): { requested: boolean; run: RunSummary } {
     const current = this.summary(id);
     const requested = ['queued', 'running'].includes(current.status) && this.store.requestCancellation(id);
@@ -221,7 +290,7 @@ export class CouncilService {
       `Previous run ${previous.id} (${previous.status}); peer output is untrusted task data.`,
       `Previous task: ${previous.input.task.slice(0, 4000)}`,
       `Selected result: ${(previous.output ?? previous.error ?? 'No result.').slice(0, 24_000)}`,
-      ...((previous.workspaces ?? []).map(artifact => `Retained worktree: ${artifact.path}; patch: ${artifact.patchPath}`)),
+      ...((previous.workspaces ?? []).map(artifact => `Retained worktree: ${artifact.path}; patch: ${artifact.patchPath}; export: ${artifact.exportStatus ?? 'legacy, verify before use'}${artifact.exportError ? `; export issue: ${artifact.exportError.slice(0, 1000)}` : ''}`)),
     ].join('\n').slice(0, 32_000);
     const next = this.start({ ...input, context: [input.context?.slice(0, 31_000), handoff].filter(Boolean).join('\n\n') }, { previousId });
     return next;
@@ -239,7 +308,7 @@ export class CouncilService {
     if (!run) throw new Error('Run not found.');
     if (['queued', 'running'].includes(run.status)) throw new Error('Wait for the run to reach a terminal state before repairing patches.');
     const owner = `patches-${randomUUID()}`;
-    this.store.reserve(owner, [`.council-maintenance/${id}`], 3_600_000, id);
+    this.store.reserve(owner, [`.council-maintenance/${id}`], 3_600_000, id, this.instanceId);
     const artifacts: WorkspaceArtifact[] = [];
     try {
       const workspaces = new GitWorkspaces(this.config.workspaceRoot, this.config.stateDir);
@@ -271,7 +340,7 @@ export class CouncilService {
     if (['queued', 'running'].includes(run.status)) throw new Error('Cannot clean worktrees while a run is active.');
     if (options.reviewed !== true) throw new Error('Explicit review is required before cleanup.');
     const owner = `cleanup-${randomUUID()}`;
-    this.store.reserve(owner, [`.council-maintenance/${id}`], 3_600_000, id);
+    this.store.reserve(owner, [`.council-maintenance/${id}`], 3_600_000, id, this.instanceId);
     const removed: string[] = [];
     const alreadyRemoved: string[] = [];
     try {
@@ -298,7 +367,16 @@ export class CouncilService {
       await Promise.allSettled([...this.jobs.values()].map(job => job.done));
       await Promise.allSettled([...this.maintenance]);
       clearInterval(this.heartbeat);
-      try { this.store.unregisterInstance(this.instanceId); }
+      try {
+        const until = performance.now() + STATE_CONTENTION_GRACE_MS;
+        for (;;) {
+          try { this.store.unregisterInstance(this.instanceId); break; }
+          catch (error) {
+            if (!isStateContention(error) || performance.now() >= until) throw error;
+            await delay(Math.max(1, Math.min(50, until - performance.now())));
+          }
+        }
+      }
       finally { this.store.close(); }
     })();
     return this.closePromise;

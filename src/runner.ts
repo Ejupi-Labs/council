@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { isUtf8 } from 'node:buffer';
-import { AcpProtocol, acpErrorSummary, isObject, type AgentProtocol, type JsonObject, type ProtocolControl } from './acp.js';
-import { ManagedProcess, resolveLaunch, type ProcessLaunch } from './process.js';
+import { AcpProtocol, acpErrorSummary, isObject, validAcpEnvelope, type AgentProtocol, type JsonObject, type ProtocolControl } from './acp.js';
+import { ManagedProcess, ProcessCleanupError, PROCESS_CLEANUP_ERROR, resolveLaunch, type ProcessLaunch } from './process.js';
+import { sanitizedGitEnvironment } from './git-env.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 import type { AgentConfig, AgentHealth, AgentRequest, AgentResult, AgentRunner, CouncilConfig, ResultStatus } from './types.js';
 
 export interface RunnerOptions { environment?: NodeJS.ProcessEnv }
@@ -29,6 +31,7 @@ async function withBudget(request: AgentRequest, task: (signal: AbortSignal, rem
   catch (error) { result = failed(request, error instanceof Error ? error.message : 'Unable to resolve the configured agent executable.'); }
   finally { clearTimeout(timer); request.signal?.removeEventListener('abort', cancel); }
   const durationMs = Math.round(performance.now() - started);
+  if (result.error === PROCESS_CLEANUP_ERROR) return { ...result, status: 'failed', durationMs };
   if (timedOut) return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
   if (controller.signal.aborted) return { ...result, status: 'cancelled', durationMs, error: 'Agent request cancelled.' };
   return { ...result, durationMs };
@@ -36,7 +39,7 @@ async function withBudget(request: AgentRequest, task: (signal: AbortSignal, rem
 
 function childEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const depth = Number(environment.COUNCIL_DEPTH ?? 0);
-  return { ...environment, COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
+  return { ...sanitizedGitEnvironment(environment), COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
 }
 
 function providerAnswerFailure(output: string): string | undefined {
@@ -56,6 +59,7 @@ function failed(request: AgentRequest, error: string): AgentResult {
 
 function validateRequest(config: CouncilConfig, request: AgentRequest): AgentResult | undefined {
   if (request.signal?.aborted) return { agent: request.agent, status: 'cancelled', output: '', durationMs: 0, error: 'Agent request cancelled.' };
+  if (request.permission !== 'read' && request.permission !== 'write') return failed(request, 'Agent permission must be read or write.');
   if (!config.agents[request.agent]?.enabled) return failed(request, 'Agent is not enabled in Council configuration.');
   if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0) return failed(request, 'Agent timeout must be positive.');
   if (!Number.isSafeInteger(config.maxOutputBytes) || config.maxOutputBytes < 1) return failed(request, 'Invalid agent output limit.');
@@ -92,7 +96,10 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
       forcedStatus = status; failure = error;
       try { protocol.cancel?.(control); } catch { /* Killing the tree is authoritative. */ }
       child.kill();
-      forceTimer = setTimeout(() => { void child.forceKill().then(() => protocol.settle?.()).finally(() => finish(status, error)); }, 3000);
+      forceTimer = setTimeout(() => {
+        void child.forceKill().catch(() => { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; })
+          .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => finish('failed', PROCESS_CLEANUP_ERROR));
+      }, 3000);
     };
     const control: ProtocolControl = {
       send(message) {
@@ -136,6 +143,8 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
       if (forcedStatus || settled || frameBytes === 0) return;
       const bytes = frame.subarray(0, frameBytes);
       if (!isUtf8(bytes)) { terminate('failed', 'Agent protocol frame contains invalid UTF-8.'); return; }
+      try { checkAgentJsonStructure(bytes); }
+      catch (error) { terminate('failed', error instanceof Error ? error.message : 'Agent protocol frame exceeds its structural limit.'); return; }
       line(bytes.toString('utf8'));
     };
     child.stdout.on('data', (chunk: Buffer) => {
@@ -153,7 +162,10 @@ async function runProtocol(launch: ProcessLaunch, protocol: AgentProtocol, reque
       }
     });
     child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > 64 * 1024) terminate('failed', 'Agent diagnostics exceeded their bounded transport allowance.'); });
-    child.on('error', () => terminate('failed', 'Unable to start the configured agent executable. Run council doctor.'));
+    child.on('error', error => {
+      if (error instanceof ProcessCleanupError) { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; return; }
+      terminate('failed', 'Unable to start the configured agent executable. Run council doctor.');
+    });
     child.once('close', async (code: number | null, signal: NodeJS.Signals | null) => {
       await protocol.settle?.();
       if (settled) return;
@@ -203,9 +215,13 @@ class ClaudeProtocol implements AgentProtocol {
       }
     }
     if (event.type === 'result') {
+      if (typeof event.is_error !== 'boolean' || (event.subtype === 'success' && typeof event.result !== 'string')) {
+        control.fail('Claude returned an invalid terminal result.'); return;
+      }
       if (event.is_error === true || event.subtype !== 'success') { control.fail(acpErrorSummary({ message: typeof event.result === 'string' ? event.result : event.subtype })); return; }
+      if (event.permission_denials !== undefined && !Array.isArray(event.permission_denials)) { control.fail('Claude returned invalid terminal permission denials.'); return; }
       if (Array.isArray(event.permission_denials) && event.permission_denials.length > 0) { control.fail('Claude tool permission was denied; the task is incomplete.'); return; }
-      if (typeof event.result === 'string') control.replace(event.result);
+      control.replace(event.result as string);
       control.complete('end_turn');
     }
   }
@@ -217,10 +233,11 @@ class ExternalAcpxProtocol implements AgentProtocol {
   constructor(private readonly prompt: string) {}
   start(control: ProtocolControl): void { control.endInput(this.prompt); }
   event(event: JsonObject, control: ProtocolControl): void {
-    if (event.jsonrpc !== '2.0') { control.fail('External ACPX returned invalid JSON-RPC.'); return; }
+    if (!validAcpEnvelope(event)) { control.fail('External ACPX returned an invalid JSON-RPC response envelope.'); return; }
     if (isObject(event.error)) { control.fail(acpErrorSummary(event.error)); return; }
     if (event.method === 'session/prompt' && isObject(event.params)) {
-      if (this.promptId !== undefined || (typeof event.id !== 'string' && typeof event.id !== 'number')) { control.fail('External ACPX returned an invalid prompt sequence.'); return; }
+      if (this.promptId !== undefined || (typeof event.id !== 'string' && !(typeof event.id === 'number' && Number.isSafeInteger(event.id)))
+        || typeof event.params.sessionId !== 'string' || !event.params.sessionId) { control.fail('External ACPX returned an invalid prompt sequence.'); return; }
       this.promptId = event.id; this.sessionId = typeof event.params.sessionId === 'string' ? event.params.sessionId : undefined;
     }
     if (event.method === 'session/update' && isObject(event.params) && isObject(event.params.update)) {

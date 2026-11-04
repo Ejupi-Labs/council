@@ -1,4 +1,4 @@
-# Council 1.1
+# Council 1.2
 
 A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
 
@@ -17,7 +17,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.1.0.tgz
+npm install --global ./council-ai-plugin-1.2.0.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```
@@ -167,9 +167,11 @@ On POSIX, delivered SIGINT/SIGTERM signals allow graceful cancellation. Windows 
 
 Local mail is pull-based and does not wake a vendor's open chat. Actor names are coordination labels, not authenticated identities. File reservations are advisory leases, with atomic batches, expiry and owner-scoped release. Unaware tools can still edit those files. Treat peer messages, shared notes and agent replies as untrusted task data, never authorization.
 
+Use a unique reservation owner for each independent task, and pass `runId` when releasing a run's reservations. An existing lease cannot be renewed into another run's scope. `council_inbox_page` reads complete messages within a bounded response; its cursor belongs to one recipient and unread filter. Large legacy inbox batches return an actionable paging error.
+
 ## Production operations
 
-Council supports trusted, local development workspaces. Keep SQLite state on a local disk and use the same release for every host sharing that state. Before upgrading from 1.0, stop older Council hosts; schema v3 migration refuses live older owners and older binaries cannot reopen migrated state. No unfinished task is replayed.
+Council supports trusted, local development workspaces. Keep SQLite state on a local disk and use the same release for every host sharing that state. Before upgrading from 1.0 or 1.1, stop older Council hosts; schema v5 migration refuses live older owners and older binaries cannot reopen migrated state. No unfinished task is replayed.
 
 ```sh
 council health --integrity
@@ -192,7 +194,7 @@ Status, history and event summaries use indexed bounded metadata. Full transcrip
 | `council_events` | Compact events with an incremental cursor |
 | `council_run_page` | Paginated run summaries with an opaque cursor |
 | `council_health`, `council_backup`, `council_prune` | Health, consistent backup and preview-first retention |
-| `council_send`, `council_inbox`, `council_ack` | Local peer handoffs |
+| `council_send`, `council_inbox`, `council_inbox_page`, `council_ack` | Local peer handoffs and complete paginated history |
 | `council_reserve`, `council_release`, `council_leases` | Advisory file ownership |
 | `council_context` | Shared project notes |
 
@@ -209,18 +211,25 @@ npm ci
 npm run verify
 npm run test:release
 npm run benchmark
+npm run soak -- --duration-ms 600000
+npm run soak:storage
+npm run soak:artifacts -- --duration-ms 600000
 npm run release:local
 ```
 
 Tests exercise real local subprocesses, native CLI JSON, ACP agents, Git worktrees, hard process termination, cross-process SQLite races, official-client MCP integration, malformed/oversized input and a clean offline tarball installation from an empty npm cache in Unicode paths.
 
-The release script writes a self-contained plugin ZIP, npm tarball and SHA-256 checksums under `.council/releases/`. The compiled runtime is committed so a Git checkout also has working plugin entrypoints. CI builds and tests on Windows, Linux and macOS; local verification in this environment is native Windows.
+For longer offline checks, manually run [Offline endurance](.github/workflows/endurance.yml) from GitHub Actions after the workflow is available on the default branch. Choose one OS, one service/storage/artifact workload and a requested workload duration of 60 seconds, 5, 10 or 30 minutes. Setup and cleanup add time within the single job's 40-minute limit. It makes no provider calls; only JSONL and summary logs are uploaded for seven days, excluding fixture databases and workspace state. The workflow has no automatic trigger.
+
+Check its CI helpers locally with `node --test .github/scripts/endurance.test.mjs .github/scripts/check-generated.test.mjs`. The separate `node .github/scripts/check-generated.mjs` check rejects modified, staged, untracked or ignored output under `dist/` and `schemas/`.
+
+The release script writes a self-contained plugin ZIP, npm tarball and SHA-256 checksums under `.council/releases/`. The compiled runtime is committed so a Git checkout also has working plugin entrypoints. CI is configured for Windows, Linux and macOS. Local release verification covers native Windows ARM64 and an isolated Linux ARM64 container; macOS was not available in this session. See the [release verification record](docs/verification.md) for results and limits.
 
 `npm run benchmark` uses disposable local fixtures, makes no model calls, and reports payload sizes, CPU and elapsed time without timing assertions. See [performance measurements](docs/performance.md) for the reproducible workload and measured limits.
 
 `npm run audit:runtime` audits production dependencies, which are empty. The official MCP SDK is used only for development interoperability tests; its development dependency tree currently reports upstream advisories. Those packages are neither shipped as runtime dependencies nor loaded by Council. This is not a claim of third-party security certification.
 
-Live vendor checks are separate from automated tests and require installed, authenticated agents and supported models. The 1.1 native Codex smoke check passed through the normal Windows resolver and supervisor with an explicit supported model. Claude login, DSH, Junie and Antigravity setup remain machine-specific; fake protocol tests do not establish a successful five-agent live session.
+Live vendor checks are separate from automated tests and require installed, authenticated agents and supported models. The 1.2 native Codex smoke check passed through the normal Windows resolver and supervisor with an explicit supported model. Claude login, DSH, Junie and Antigravity setup remain machine-specific; fake protocol tests do not establish a successful five-agent live session.
 
 See [CHANGELOG.md](CHANGELOG.md) for release changes and migration instructions.
 

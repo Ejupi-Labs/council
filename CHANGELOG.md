@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.2.0 — 4 November 2026
+
+### Fair coordination and recovery
+
+- Add durable call waiters and fair admission that reserves capacity for older requests while using available parallel slots.
+- Advertise each host's concurrency limit at startup, scope lease renewal/release by run, and bind internal maintenance leases to their owning instance.
+- Recover dead cleanup/patch-repair owners without clearing ordinary user file leases.
+- Migrate supported state to schema 5 after stopping older hosts; inspect future schema versions before changing journal mode or file permissions.
+- Keep health queries in one read snapshot, use read-only transactions for retention previews, and index unread mail and lease expiry.
+- Add complete, byte-bounded inbox pages with recipient/filter-bound cursors; oversized legacy batches suggest the paged tool.
+- Retry brief heartbeat and shutdown-unregister contention within five seconds while retaining immediate failure for lost ownership and fatal storage errors.
+- Avoid migration locks for current-schema WAL opens and add startup-only asynchronous state retries before accepting any workflow.
+- Pin a dedicated read snapshot for chunked online backups so continuous writes cannot repeatedly restart the copy; retain cancellation and the existing deadline.
+
+### Evidence and artifacts
+
+- Snapshot workflow inputs, reject active run ID replay, validate bounded runner results, and prevent caller mutation of queued/emergency outcomes.
+- Stop all queued host work immediately after an evidence-write failure, drain active calls, preserve partial results and keep the originating outcome failed.
+- Preserve bounded earlier pipeline evidence and fairly allocate parallel result/context budgets among participants.
+- Isolate Git environment redirection, generate canonical applicable patches, validate committed nested workspaces and repair relative Git pointers.
+- Detect dirty submodule contents before patch publication or ordinary cleanup; honor cancellation around atomic patch publication and preserve peer errors in Markdown reports.
+
+### Runtime and verification
+
+- Remove closed-session stream listeners, stop queued input parsing during shutdown and enforce actual readable backpressure with bounded parsing turns.
+- Validate Claude terminal envelopes, direct-runner permissions and ACP/ACPX response consistency; support optional ACP model-category metadata.
+- Bound unresolved filesystem metadata work and expose its pressure in health; cancel side-effect-free lookups without abandoning issued file mutations.
+- Reject Windows short-name metadata bypasses and verify canonical directory identity where case-insensitive aliases could cross a case-sensitive root.
+- Bound agent JSON graphs before allocation and accelerate large quoted payload scans without weakening escape/structural validation.
+- Tighten supported SQLite database and sidecar permissions on POSIX without changing parent-directory permissions.
+- Retry transient Windows atomic-publication sharing failures within a bounded, cancellable window while preserving the previous file.
+- Coalesce Windows process-tree termination, preserve the supervisor during native cleanup and report unverified termination instead of disguising surviving descendants as ordinary cancellation.
+- Add reusable offline service, storage and artifact endurance workloads plus regression coverage for actual contention, disk-full rollback, crash recovery and cross-platform behavior.
+- Add a manual, single-job endurance CI workflow with bounded durations and log-only uploads; pin official actions, restrict CI permissions and reject uncommitted generated modules, including untracked or ignored files.
+
 ## 1.1.0 — 3 November 2026
 
 ### Operational readiness

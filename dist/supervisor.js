@@ -3,6 +3,10 @@ import { killProcessTree } from './process.js';
 let vendor;
 let finished = false;
 let stopping = false;
+let cleanup;
+function cleanupVendor() {
+    return cleanup ??= vendor?.pid ? killProcessTree(vendor.pid) : Promise.resolve();
+}
 function send(message) {
     if (process.connected)
         process.send?.(message, () => { });
@@ -11,9 +15,14 @@ async function finish(code, signal) {
     if (finished)
         return;
     finished = true;
-    if (vendor?.pid)
-        await killProcessTree(vendor.pid);
-    send({ type: 'closed', code, signal });
+    let cleanupFailed = false;
+    try {
+        await cleanupVendor();
+    }
+    catch {
+        cleanupFailed = true;
+    }
+    send({ type: 'closed', code, signal, cleanupFailed });
     process.stdin.destroy();
     process.stdout.end();
     process.stderr.end();
@@ -24,11 +33,7 @@ function stop() {
     if (stopping || finished)
         return;
     stopping = true;
-    vendor?.stdin.destroy();
-    if (vendor?.pid)
-        void killProcessTree(vendor.pid).then(() => finish(null, 'SIGKILL'));
-    else
-        void finish(null, 'SIGKILL');
+    void finish(null, 'SIGKILL');
 }
 process.on('disconnect', stop);
 process.on('SIGTERM', stop);

@@ -16,6 +16,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     } } });
   } else if (event.method === 'session/prompt') {
     pendingPrompt = event.id;
+    if (process.env.COUNCIL_TEST_ACP_CASE?.startsWith('structure-')) {
+      send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Partial offline evidence.\n' } } } });
+      if (process.env.COUNCIL_TEST_ACP_CASE === 'structure-deep') process.stdout.write('{"jsonrpc":"2.0","method":"fixture/progress","params":{"payload":' + '['.repeat(300_000) + '0' + ']'.repeat(300_000) + '}}\n');
+      else if (process.env.COUNCIL_TEST_ACP_CASE === 'structure-wide') send({ method: 'fixture/progress', params: { payload: Array(70_000).fill(0) } });
+      else send({ method: 'fixture/progress', params: { payload: '[{"nested":"\\\"🌍"}]'.repeat(10_000) } });
+    }
     if (['fs-read', 'fs-write', 'fs-flood', 'fs-session'].includes(process.env.COUNCIL_TEST_ACP_CASE)) {
       const kind = process.env.COUNCIL_TEST_ACP_CASE;
       for (let index = 0; index < (kind === 'fs-flood' ? 9 : 1); index++) send({ id: `fixture-file-${index}`, method: kind === 'fs-write' ? 'fs/write_text_file' : 'fs/read_text_file',
@@ -30,7 +36,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     if (!event.params.prompt.some(content => content.type === 'text' && content.text.includes('request-write-permission'))) {
       send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: `Local ACP fixture completed; depth=${process.env.COUNCIL_DEPTH}` } } } });
-      send({ id: pendingPrompt, result: { stopReason: 'end_turn' } });
+      send({ id: pendingPrompt, result: { stopReason: 'end_turn' }, ...(process.env.COUNCIL_TEST_ACP_CASE === 'mixed-result-error' ? { error: 'provider failure' } : {}) });
       continue;
     }
     send({ id: 'fixture-permission', method: 'session/request_permission', params: { sessionId: 'council-fixture-session',

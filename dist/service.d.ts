@@ -4,6 +4,8 @@ import { type RunSummary } from './summary.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
 export declare class CouncilService {
     readonly config: CouncilConfig;
+    /** Retry local state initialization only; no workflow or provider call is replayed. */
+    static open(config: CouncilConfig, runner?: AgentRunner, signal?: AbortSignal): Promise<CouncilService>;
     readonly store: CouncilStore;
     readonly runner: AgentRunner;
     readonly engine: WorkflowEngine;
@@ -16,9 +18,12 @@ export declare class CouncilService {
     private readonly emergencyResults;
     private fault?;
     private lastHeartbeatAt;
+    private lastHeartbeatElapsed;
+    private heartbeatContentions;
     private closePromise?;
     private closing;
     constructor(config: CouncilConfig, runner?: AgentRunner);
+    private heartbeatTick;
     start(value: unknown, provenance?: {
         previousId: string;
     }): RunRecord;
@@ -36,6 +41,11 @@ export declare class CouncilService {
         pid: number;
         uptimeSeconds: number;
         lastHeartbeatAt: string;
+        heartbeatContentions: number;
+        filesystem: {
+            pending: number;
+            limit: number;
+        };
         activeLocalRuns: number;
         maintenanceOperations: number;
         emergencyResults: number;
@@ -46,6 +56,7 @@ export declare class CouncilService {
             activeWorkspaceRuns: number;
             callsPerRun: number;
             outputBytesPerCall: number;
+            heartbeatGraceMs: number;
         };
         state: {
             schemaVersion: number;
@@ -64,6 +75,7 @@ export declare class CouncilService {
                 leases: number;
                 instances: number;
                 slots: number;
+                slotWaiters: number;
                 context: number;
             };
             runStatuses: Record<string, number>;
@@ -76,6 +88,10 @@ export declare class CouncilService {
     private trackMaintenance;
     runPage(limit?: number, cursor?: string): {
         runs: RunSummary[];
+        nextCursor: string | null;
+    };
+    inboxPage(agent: string, unreadOnly?: boolean, limit?: number, cursor?: string): {
+        messages: import("./types.js").Message[];
         nextCursor: string | null;
     };
     requestCancellation(id: string): {

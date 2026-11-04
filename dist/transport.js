@@ -65,34 +65,65 @@ function checkGraph(value) {
 export class BoundedMcpInput extends Transform {
     frame = Buffer.allocUnsafe(MAX_MCP_FRAME_BYTES);
     length = 0;
+    active;
+    processing = false;
+    scheduled;
     constructor() { super({ decodeStrings: true, autoDestroy: true }); }
     _transform(chunk, _encoding, callback) {
+        this.active = { chunk, offset: 0, callback };
+        this.processChunk();
+    }
+    _read(size) {
+        super._read(size);
+        this.processChunk();
+    }
+    processChunk() {
+        if (this.processing || this.scheduled || this.destroyed || !this.active)
+            return;
+        const work = this.active;
+        const startOffset = work.offset;
+        let frames = 0;
+        this.processing = true;
         try {
-            let start = 0;
-            while (start < chunk.length) {
-                const newline = chunk.indexOf(0x0a, start);
-                const end = newline < 0 ? chunk.length : newline;
-                const bytes = end - start;
+            while (work.offset < work.chunk.length) {
+                const newline = work.chunk.indexOf(0x0a, work.offset);
+                const end = newline < 0 ? work.chunk.length : newline;
+                const bytes = end - work.offset;
                 if (this.length + bytes > MAX_MCP_FRAME_BYTES)
                     throw new Error('Council MCP input frame exceeds 1048576 bytes.');
-                chunk.copy(this.frame, this.length, start, end);
+                work.chunk.copy(this.frame, this.length, work.offset, end);
                 this.length += bytes;
+                work.offset = newline < 0 ? end : newline + 1;
                 if (newline < 0)
                     break;
-                this.forwardFrame();
+                const ready = this.forwardFrame();
                 this.length = 0;
-                start = newline + 1;
+                if (this.destroyed || this.active !== work)
+                    return;
+                if (!ready)
+                    return; // Resume only when the readable consumer requests more data.
+                if (work.offset < work.chunk.length && (++frames >= 64 || work.offset - startOffset >= 64 * 1024)) {
+                    this.scheduled = setImmediate(() => { this.scheduled = undefined; this.processChunk(); });
+                    return;
+                }
             }
-            callback();
+            this.active = undefined;
+            this.processing = false;
+            work.callback();
         }
         catch (error) {
-            callback(error instanceof Error ? error : new Error('Council MCP input validation failed.'));
+            this.active = undefined;
+            this.processing = false;
+            work.callback(error instanceof Error ? error : new Error('Council MCP input validation failed.'));
+        }
+        finally {
+            this.processing = false;
         }
     }
     forwardFrame() {
         const frame = this.frame.subarray(0, this.length);
         if (whitespace(frame))
-            return;
+            return true;
         if (!isUtf8(frame))
             throw new Error('Council MCP input must contain valid UTF-8.');
         checkNesting(frame);
@@ -108,7 +139,16 @@ export class BoundedMcpInput extends Transform {
         const output = Buffer.allocUnsafe(frame.length + 1);
         frame.copy(output);
         output[frame.length] = 0x0a;
-        this.push(output);
+        return this.push(output);
+    }
+    _destroy(error, callback) {
+        if (this.scheduled)
+            clearImmediate(this.scheduled);
+        this.scheduled = undefined;
+        const work = this.active;
+        this.active = undefined;
+        work?.callback(error ?? undefined);
+        callback(error);
     }
     _flush(callback) {
         if (whitespace(this.frame.subarray(0, this.length)))

@@ -10,8 +10,14 @@ export declare const MAX_MCP_DEPTH = 64;
 export declare class BoundedMcpInput extends Transform {
     private readonly frame;
     private length;
+    private active?;
+    private processing;
+    private scheduled?;
     constructor();
     _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void;
+    _read(size: number): void;
+    private processChunk;
     private forwardFrame;
+    _destroy(error: Error | null, callback: (error?: Error | null) => void): void;
     _flush(callback: TransformCallback): void;
 }

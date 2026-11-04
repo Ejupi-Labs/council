@@ -68,7 +68,7 @@ export interface Message {
   runId?: string; createdAt: string; acknowledgedAt?: string;
 }
 export interface Lease {
-  id: string; owner: string; paths: string[]; runId?: string; expiresAt: string;
+  id: string; owner: string; paths: string[]; runId?: string; instanceId?: string; expiresAt: string;
 }
 export interface ContextEntry {
   key: string; value: string; author: string; updatedAt: string;

@@ -120,6 +120,7 @@ export interface Lease {
     owner: string;
     paths: string[];
     runId?: string;
+    instanceId?: string;
     expiresAt: string;
 }
 export interface ContextEntry {

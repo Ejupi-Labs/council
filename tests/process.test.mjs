@@ -6,8 +6,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ManagedProcess, killProcessTree, resolveLaunch, PROCESS_KILL_TIMEOUT_MS } from '../dist/process.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { ManagedProcess, killProcessTree, ProcessCleanupError, resolveLaunch, PROCESS_KILL_TIMEOUT_MS } from '../dist/process.js';
 
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/supervised-host.mjs', import.meta.url));
@@ -72,7 +72,10 @@ test('Windows process termination remains bounded when its taskkill helper stall
       return original(command, args, options);
     };
     syncBuiltinESMExports();
-    const started = performance.now(); await killProcessTree(target.pid);
+    const started = performance.now(); const first = killProcessTree(target.pid), duplicate = killProcessTree(target.pid);
+    assert.equal(first, duplicate, 'Concurrent cleanup of one owned tree must share its native helper.');
+    await assert.rejects(first, ProcessCleanupError);
+    assert.equal(helpers.length, 1);
     assert.ok(performance.now() - started < PROCESS_KILL_TIMEOUT_MS + 2000, 'A stalled native helper must not block cleanup indefinitely.');
     await pause(100); assert.equal(alive(target.pid), false); assert.ok(helpers.every(helper => !alive(helper.pid)));
   } finally { cp.spawn = original; syncBuiltinESMExports(); target.kill('SIGKILL'); for (const helper of helpers) helper.kill('SIGKILL'); }
@@ -88,11 +91,16 @@ test('an unexpected supervisor exit cannot masquerade as a successful vendor out
     process.kill(managed.pid, 'SIGKILL');
     const outcome = await closed;
     assert.notEqual(outcome.code, 0); assert.ok(errors.some(error => /verified vendor outcome/.test(error)));
-    if (managed.vendorPid) assert.equal(alive(managed.vendorPid), false);
+    if (managed.vendorPid) {
+      // POSIX signal delivery can finish just after the failed supervisor close event.
+      const deadline = Date.now() + 2000;
+      while (alive(managed.vendorPid) && Date.now() < deadline) await pause(10);
+      assert.equal(alive(managed.vendorPid), false, 'The owned vendor must actually stop within the cleanup bound.');
+    }
   } finally { await managed.forceKill(); }
 });
 
-test('forceKill is idempotent and bounds vendor/supervisor helpers concurrently', { skip: process.platform !== 'win32', timeout: 8000 }, async () => {
+test('forceKill is idempotent and drains the vendor attempt before stopping its supervisor', { skip: process.platform !== 'win32', timeout: 2 * PROCESS_KILL_TIMEOUT_MS + 5000 }, async () => {
   const original = cp.spawn;
   const managed = new ManagedProcess({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], cwd });
   managed.stdout.resume(); managed.stderr.resume(); managed.stdin.end(); managed.on('error', () => {});
@@ -100,14 +108,20 @@ test('forceKill is idempotent and bounds vendor/supervisor helpers concurrently'
   try {
     await new Promise(resolve => managed.once('spawn', resolve));
     cp.spawn = (command, args, options) => {
-      if (String(command).toLowerCase().endsWith('taskkill.exe')) { const helper = original(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); helpers.push(helper); return helper; }
+      if (String(command).toLowerCase().endsWith('taskkill.exe')) {
+        if (helpers.length > 0) assert.equal(helpers[0].terminationRequested, true, 'The vendor-tree attempt must settle before killing its supervisor.');
+        const helper = original(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+        const kill = helper.kill.bind(helper);
+        helper.kill = (...values) => { helper.terminationRequested = true; return kill(...values); };
+        helpers.push(helper); return helper;
+      }
       return original(command, args, options);
     };
     syncBuiltinESMExports();
     const started = performance.now(); const first = managed.forceKill(); const second = managed.forceKill();
-    assert.equal(first, second); await first;
-    assert.equal(helpers.length, 2); assert.ok(performance.now() - started < PROCESS_KILL_TIMEOUT_MS + 2000);
-  } finally { cp.spawn = original; syncBuiltinESMExports(); await managed.forceKill(); for (const helper of helpers) helper.kill('SIGKILL'); }
+    assert.equal(first, second); await assert.rejects(first, ProcessCleanupError);
+    assert.equal(helpers.length, 2); assert.ok(performance.now() - started < 2 * PROCESS_KILL_TIMEOUT_MS + 2000);
+  } finally { cp.spawn = original; syncBuiltinESMExports(); await managed.forceKill().catch(() => {}); for (const helper of helpers) helper.kill('SIGKILL'); }
 });
 
 test('normal vendor-leader exit also cleans its same-tree background child', { timeout: 8000 }, async () => {
@@ -121,4 +135,39 @@ test('normal vendor-leader exit also cleans its same-tree background child', { t
     pid = Number(await readFile(pidFile, 'utf8')); assert.equal(outcome, 0);
     await pause(100); assert.equal(alive(pid), false);
   } finally { if (pid && alive(pid)) await killProcessTree(pid); await rm(temporary, { recursive: true, force: true }); }
+});
+
+test('a slow Windows native tree walk finishes before escalation can orphan its descendant', { skip: process.platform !== 'win32', timeout: 25000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'council-slow-tree-walk-'));
+  const pidFile = join(temporary, 'pids.json'), killLog = join(temporary, 'kill.jsonl');
+  const preload = pathToFileURL(fileURLToPath(new URL('./fixtures/delayed-taskkill-preload.mjs', import.meta.url))).href;
+  const vendor = fileURLToPath(new URL('./fixtures/fake-native.mjs', import.meta.url));
+  const managed = new ManagedProcess({ command: process.execPath, args: [vendor], cwd: temporary,
+    environment: { ...process.env, NODE_OPTIONS: `--import=${preload}`, COUNCIL_TEST_PID_FILE: pidFile, COUNCIL_TEST_KILL_LOG: killLog } });
+  managed.stdout.resume(); managed.stderr.resume(); managed.stdin.end('tree-hang');
+  const errors = []; managed.on('error', error => errors.push(error));
+  const closed = new Promise(resolve => managed.once('close', resolve));
+  let pids, forceTimer, force;
+  try {
+    const readyUntil = Date.now() + 10000;
+    while (Date.now() < readyUntil) {
+      try { pids = JSON.parse(await readFile(pidFile, 'utf8')); break; } catch { await pause(20); }
+    }
+    assert.ok(pids?.vendor && pids?.grandchild, 'The owned tree must be alive before cancellation.');
+    managed.kill();
+    forceTimer = setTimeout(() => { force = managed.forceKill(); force.catch(() => {}); }, 1500);
+    await closed;
+    if (force) await force;
+    const stopUntil = Date.now() + 3000;
+    while (Date.now() < stopUntil && (alive(pids.vendor) || alive(pids.grandchild))) await pause(20);
+    assert.equal(alive(pids.vendor), false);
+    assert.equal(alive(pids.grandchild), false, 'The descendant must actually stop, not outlive a cancelled tree walk.');
+    assert.equal(errors.some(error => error instanceof ProcessCleanupError), false);
+    assert.equal((await readFile(killLog, 'utf8')).trim().split('\n').length, 1, 'Stop/close/escalation must not create competing native tree walks.');
+  } finally {
+    clearTimeout(forceTimer);
+    await managed.forceKill().catch(() => {});
+    if (pids?.grandchild && alive(pids.grandchild)) await killProcessTree(pids.grandchild);
+    await rm(temporary, { recursive: true, force: true });
+  }
 });

@@ -18,6 +18,9 @@ if (prompt === 'hang' || prompt === 'tree-hang') {
   request(); chunk('partial answer'); process.stdout.write('{broken');
 } else if (prompt === 'error') {
   request(); send({ id: 'prompt-1', error: { code: -32000, message: 'SECRET_ACCESS_TOKEN=do-not-print' } });
+} else if (prompt === 'mixed-result-error') {
+  request(); chunk('Partial offline evidence.');
+  send({ id: 'prompt-1', result: { stopReason: 'end_turn' }, error: 'provider failure' });
 } else if (prompt === 'dependency-error') {
   request(); send({ id: 'prompt-1', error: { code: -32603, message: 'ETARGET No matching version found for dependency. SECRET_ACCESS_TOKEN=do-not-print', data: { detailCode: 'AGENT_STARTUP_FAILED' } } });
 } else if (prompt === 'provider-model-error') {
@@ -29,6 +32,12 @@ if (prompt === 'hang' || prompt === 'tree-hang') {
   process.stdout.write('x'.repeat(5 * 1024 * 1024)); setInterval(() => {}, 1000);
 } else if (prompt === 'stderr-oversize') {
   process.stderr.write('SECRET_ACCESS_TOKEN=do-not-print'.repeat(5000)); setInterval(() => {}, 1000);
+} else if (prompt.startsWith('structure-')) {
+  request(); chunk('Partial offline evidence.\n');
+  if (prompt === 'structure-deep') process.stdout.write('{"jsonrpc":"2.0","method":"fixture/progress","params":{"payload":' + '['.repeat(300_000) + '0' + ']'.repeat(300_000) + '}}\n');
+  else if (prompt === 'structure-wide') send({ method: 'fixture/progress', params: { payload: Array(70_000).fill(0) } });
+  else send({ method: 'fixture/progress', params: { payload: '[{"nested":"\\\"🌍"}]'.repeat(10_000) } });
+  chunk('Complete offline evidence.'); complete();
 } else if (prompt === 'answer-oversize') {
   request(); chunk('x'.repeat(20_000)); complete();
 } else if (prompt === 'nonzero') {

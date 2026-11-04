@@ -29,6 +29,8 @@ export class CouncilMcpServer {
   private closePromise?: Promise<void>;
   private pump?: OutputPump;
   private readonly outputAbort = new AbortController();
+  private readonly inputError = (): void => { void this.close(); };
+  private readonly outputError = (): void => { void this.close(); };
   private modeReader?: () => unknown;
   private runReader?: (id: string) => unknown;
 
@@ -46,6 +48,7 @@ export class CouncilMcpServer {
   }
 
   async connect(input: Readable = process.stdin, output: Writable = process.stdout): Promise<void> {
+    if (this.closed) throw new Error('MCP server is closed.');
     if (this.input) throw new Error('MCP server is already connected.');
     this.input = input; this.output = output;
     if (output === process.stdout) this.pump = new OutputPump();
@@ -59,8 +62,8 @@ export class CouncilMcpServer {
       void this.close();
     });
     guard.once('end', () => { void this.close(); });
-    input.once('error', () => { void this.close(); });
-    output.once('error', () => { void this.close(); });
+    input.once('error', this.inputError);
+    output.once('error', this.outputError);
     input.pipe(guard);
   }
 
@@ -69,6 +72,11 @@ export class CouncilMcpServer {
     this.closed = true;
     this.input?.unpipe(this.guard);
     this.input?.pause();
+    const guard = this.guard;
+    this.guard = undefined;
+    guard?.destroy();
+    this.input?.removeListener('error', this.inputError);
+    this.output?.removeListener('error', this.outputError);
     for (const controller of this.pending.values()) controller.abort();
     this.outputAbort.abort();
     this.closePromise = Promise.allSettled([this.shutdown(), this.pump?.close()]).then(results => {
@@ -77,7 +85,7 @@ export class CouncilMcpServer {
     }).catch(error => {
       process.stderr.write(`Council shutdown failed: ${error instanceof Error ? error.message : 'unknown failure'}\n`);
       process.exitCode = 1;
-    }).finally(() => { this.guard?.destroy(); });
+    });
     return this.closePromise;
   }
 

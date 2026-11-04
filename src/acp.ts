@@ -4,6 +4,18 @@ import { VERSION } from './version.js';
 
 export type JsonObject = Record<string, unknown>;
 export const isObject = (value: unknown): value is JsonObject => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** A response cannot carry both success and failure, including malformed error values. */
+export function validAcpEnvelope(event: JsonObject): boolean {
+  if (event.jsonrpc !== '2.0') return false;
+  const method = Object.hasOwn(event, 'method'), result = Object.hasOwn(event, 'result'), error = Object.hasOwn(event, 'error');
+  const id = Object.hasOwn(event, 'id');
+  if (method && (typeof event.method !== 'string' || result || error)) return false;
+  if (id && typeof event.id !== 'string' && !(typeof event.id === 'number' && Number.isSafeInteger(event.id))
+    && !(event.id === null && error && !method)) return false;
+  if (error && (!isObject(event.error) || result || !id || !Number.isInteger(event.error.code) || typeof event.error.message !== 'string')) return false;
+  return method || (id && result !== error);
+}
 export interface ProtocolControl {
   send(message: JsonObject): void;
   append(text: string): void;
@@ -97,7 +109,10 @@ export class AcpProtocol implements AgentProtocol {
   private selectModel(control: ProtocolControl): void {
     if (!this.model) { this.prompt(control); return; }
     const options = Array.isArray(this.session.configOptions) ? this.session.configOptions.filter(isObject) : [];
-    const modelOption = options.find(option => option.category === 'model' && typeof option.id === 'string');
+    const selectors = options.filter(option => option.type === 'select' && typeof option.id === 'string' && option.id && Array.isArray(option.options));
+    // Category is optional presentation metadata. Prefer an explicit model control
+    // before a broader category that may also contain provider selectors.
+    const modelOption = selectors.find(option => option.id === 'model') ?? selectors.find(option => option.category === 'model');
     if (modelOption) {
       const pending: Array<{ value: unknown; depth: number }> = [{ value: modelOption.options, depth: 0 }];
       let advertised = false;
@@ -124,7 +139,7 @@ export class AcpProtocol implements AgentProtocol {
   }
 
   event(event: JsonObject, control: ProtocolControl): void {
-    if (event.jsonrpc !== '2.0') { control.fail('Agent returned invalid ACP JSON-RPC.'); return; }
+    if (!validAcpEnvelope(event)) { control.fail('Agent returned an invalid ACP JSON-RPC response envelope.'); return; }
     if (typeof event.method === 'string' && event.id !== undefined) {
       if (typeof event.id !== 'string' && !(typeof event.id === 'number' && Number.isSafeInteger(event.id))) {
         control.fail('ACP agent returned an invalid client request identity.'); return;

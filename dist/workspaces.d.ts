@@ -28,6 +28,8 @@ export declare class GitWorkspaces {
     export(artifact: WorkspaceArtifact, signal?: AbortSignal): Promise<WorkspaceArtifact>;
     private exportWorktree;
     forgetRun(runId: string): void;
+    private patch;
+    private assertExportableSubmodules;
     cleanup(artifact: WorkspaceArtifact, options: CleanupOptions): Promise<void>;
     private cleanupWorktree;
 }

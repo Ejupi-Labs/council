@@ -5,6 +5,7 @@ import { MODES } from './types.js';
 import { GitWorkspaces } from './workspaces.js';
 export const MAX_TASK_CHARS = 32_000;
 export const MAX_CONTEXT_CHARS = 64_000;
+const MAX_ERROR_CHARS = 4096;
 class Cancelled extends Error {
     constructor() { super('Workflow cancelled'); }
 }
@@ -76,11 +77,31 @@ function clipBytes(value, bytes) {
         end--;
     return data.subarray(0, end).toString('utf8');
 }
+function fairBudgets(lengths, available) {
+    const budgets = lengths.map(() => 0);
+    let remaining = Math.max(0, available), participants = lengths.length;
+    for (const { length, index } of lengths.map((length, index) => ({ length, index })).sort((a, b) => a.length - b.length || a.index - b.index)) {
+        const allowance = Math.min(length, Math.floor(remaining / participants--));
+        budgets[index] = allowance;
+        remaining -= allowance;
+    }
+    return budgets;
+}
 function handoff(steps, maxChars = MAX_CONTEXT_CHARS) {
     if (steps.length === 0)
         return '';
-    const allowance = Math.max(1, Math.floor((maxChars - steps.length * 160) / steps.length));
-    return clip(steps.map(step => `\n--- ${step.id}: ${step.agent} (${step.role}; ${step.result.status}) ---\n${clip(step.result.output, allowance)}`).join('\n'), maxChars);
+    const headers = steps.map(step => `\n--- ${step.id}: ${step.agent} (${step.role}; ${step.result.status}) ---\n`);
+    const fixed = headers.reduce((total, header) => total + header.length, steps.length - 1);
+    const budgets = fairBudgets(steps.map(step => step.result.output.length), maxChars - fixed);
+    return clip(steps.map((step, index) => headers[index] + clip(step.result.output, budgets[index])).join('\n'), maxChars);
+}
+function selectedOutput(steps, maxBytes) {
+    if (steps.length === 1)
+        return clipBytes(steps[0].result.output, maxBytes);
+    const headers = steps.map(step => `[${step.agent}]\n`);
+    const fixed = headers.reduce((total, header) => total + Buffer.byteLength(header), Math.max(0, steps.length - 1) * 2);
+    const budgets = fairBudgets(steps.map(step => Buffer.byteLength(step.result.output)), maxBytes - fixed);
+    return clipBytes(steps.map((step, index) => headers[index] + clipBytes(step.result.output, budgets[index])).join('\n\n'), maxBytes);
 }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
 export class WorkflowEngine {
@@ -199,12 +220,15 @@ export class WorkflowEngine {
     }
     async run(input, options = {}) {
         const plan = this.plan(input); // Validate the full budget before any worktree or agent dispatch.
+        input = structuredClone(input); // Keep dispatch and durable evidence independent of caller mutation.
         const id = options.id ?? randomUUID();
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(id))
             throw new Error('Run id must contain only letters, digits, hyphens and underscores');
         const existing = this.store.getRun?.(id);
         if (existing && !['queued', 'running'].includes(existing.status))
             throw new Error('A terminal run ID cannot be reused. Start an explicitly requested continuation with a new run ID.');
+        if (existing?.status === 'running')
+            throw new Error('This run ID is already running. Existing work cannot be replayed.');
         const controller = new AbortController();
         const externalAbort = () => { controller.abort(options.signal?.reason); };
         if (options.signal?.aborted)
@@ -216,6 +240,8 @@ export class WorkflowEngine {
         let cancellationFailures = 0;
         let firstCancellationFailure = 0;
         let monitorFailure;
+        let dispatchFailure;
+        let persistenceFailure;
         const pollCancellation = (strict = false) => {
             if (signal.aborted) {
                 if (strict && monitorFailure)
@@ -246,8 +272,10 @@ export class WorkflowEngine {
                     monitorFailure = failure;
                     controller.abort(failure);
                 }
-                if (strict)
+                if (strict) {
+                    dispatchFailure ??= failure;
                     throw failure;
+                }
             }
         };
         const poll = this.store.isCancellationRequested || this.store.events ? setInterval(pollCancellation, 250) : undefined;
@@ -256,9 +284,36 @@ export class WorkflowEngine {
         const run = { id, input: structuredClone(input), status: 'running', createdAt: existing?.createdAt ?? now, updatedAt: now, steps: [], workspaces: [] };
         const handles = new Map();
         let calls = 0;
-        const save = () => { run.updatedAt = new Date().toISOString(); this.store.saveRun(run); };
-        const event = (type, data) => { this.store.appendEvent(id, type, data); };
-        const check = () => { pollCancellation(true); if (signal.aborted)
+        const evidenceFailure = (error, operation = 'persist workflow evidence') => {
+            if (!persistenceFailure) {
+                persistenceFailure = new Error(clip(`Could not ${operation}: ${errorMessage(error)}`, MAX_ERROR_CHARS));
+                try {
+                    this.options.onStateFailure?.(persistenceFailure);
+                }
+                catch { /* Notification must not replace the storage fault or skip owned-work draining. */ }
+            }
+            controller.abort(persistenceFailure);
+            throw persistenceFailure;
+        };
+        const save = () => {
+            run.updatedAt = new Date().toISOString();
+            try {
+                this.store.saveRun(run);
+            }
+            catch (error) {
+                evidenceFailure(error);
+            }
+        };
+        const event = (type, data) => {
+            try {
+                this.store.appendEvent(id, type, data);
+            }
+            catch (error) {
+                evidenceFailure(error);
+            }
+        };
+        const check = () => { if (dispatchFailure)
+            throw dispatchFailure; pollCancellation(true); if (signal.aborted)
             throw new Cancelled(); };
         const getWorkspace = async (agent) => {
             if (input.permission === 'read')
@@ -311,38 +366,65 @@ export class WorkflowEngine {
                 throw error;
             }
             let slotToken;
+            let waiterId;
+            const clearWaiter = () => {
+                if (!waiterId)
+                    return;
+                const queued = waiterId;
+                waiterId = undefined;
+                try {
+                    this.store.cancelSlotWaiter?.(this.options.instanceId, queued);
+                }
+                catch (error) {
+                    evidenceFailure(error, 'remove a shared workflow call waiter');
+                }
+            };
+            const releaseDurable = () => {
+                if (!slotToken)
+                    return;
+                const token = slotToken;
+                slotToken = undefined;
+                try {
+                    this.store.releaseSlot(token, this.options.instanceId);
+                }
+                catch (error) {
+                    evidenceFailure(error, 'release a shared workflow call slot');
+                }
+            };
+            const releaseAll = () => {
+                try {
+                    releaseDurable();
+                }
+                finally {
+                    try {
+                        clearWaiter();
+                    }
+                    finally {
+                        release();
+                    }
+                }
+            };
             try {
                 check();
                 if (this.options.instanceId && this.store.acquireSlot && this.store.releaseSlot) {
+                    waiterId = randomUUID();
                     let retryMs = 50;
-                    while (!(slotToken = this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency))) {
+                    while (!(slotToken = this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency, waiterId))) {
                         check();
                         await delay(retryMs, undefined, { signal });
                         retryMs = Math.min(250, retryMs * 2);
                     }
+                    waiterId = undefined; // Successful durable acquisition removes its queued row atomically.
                     check();
                 }
             }
             catch (error) {
-                try {
-                    if (slotToken)
-                        this.store.releaseSlot(slotToken, this.options.instanceId);
-                }
-                finally {
-                    release();
-                }
+                releaseAll();
                 check();
-                throw error;
+                if (error && typeof error === 'object' && 'code' in error && error.code === 'COUNCIL_SLOT_QUEUE_FULL')
+                    throw error;
+                evidenceFailure(error, 'coordinate shared workflow dispatch');
             }
-            const releaseAll = () => {
-                try {
-                    if (slotToken)
-                        this.store.releaseSlot(slotToken, this.options.instanceId);
-                }
-                finally {
-                    release();
-                }
-            };
             if (signal.aborted) {
                 releaseAll();
                 return undefined;
@@ -353,6 +435,7 @@ export class WorkflowEngine {
                 throw new Error('Internal workflow call budget exceeded');
             }
             let result;
+            let releaseError;
             const start = Date.now();
             try {
                 event('step.started', { id: stepId, agent, role, permission, cwd });
@@ -364,20 +447,32 @@ export class WorkflowEngine {
                     agent, prompt: prompt(role, `${permission === 'read' ? 'Read-only task: do not modify files. ' : 'Make changes only in the provided isolated worktree. '}${brief}`, context),
                     cwd, permission, timeoutMs: this.config.timeoutMs, signal, model: this.config.agents[agent]?.model,
                 });
-                result = { ...result, agent, output: clipBytes(String(result.output ?? ''), this.config.maxOutputBytes) };
+                result = {
+                    agent, status: result.status, output: clipBytes(String(result.output ?? ''), this.config.maxOutputBytes),
+                    durationMs: Number.isFinite(result.durationMs) && result.durationMs >= 0 ? result.durationMs : Math.max(0, Date.now() - start),
+                    ...(typeof result.error === 'string' ? { error: clip(result.error, MAX_ERROR_CHARS) } : {}),
+                    ...(typeof result.stopReason === 'string' ? { stopReason: clip(result.stopReason, 512) } : {}),
+                };
                 if (!['completed', 'failed', 'cancelled', 'timeout'].includes(result.status))
                     result = { ...result, status: 'failed', error: 'Agent returned an invalid status' };
             }
             catch (error) {
-                result = { agent, status: signal?.aborted ? 'cancelled' : 'failed', output: '', durationMs: Date.now() - start, error: errorMessage(error) };
+                result = { agent, status: signal?.aborted ? 'cancelled' : 'failed', output: '', durationMs: Math.max(0, Date.now() - start), error: clip(errorMessage(error), MAX_ERROR_CHARS) };
             }
             finally {
-                releaseAll();
+                try {
+                    releaseAll();
+                }
+                catch (error) {
+                    releaseError = error;
+                }
             }
             const step = { id: stepId, agent, role, result };
             run.steps.push(step);
             save();
             event('step.finished', step);
+            if (releaseError)
+                throw releaseError;
             return step;
         };
         const requireSuccess = (steps) => {
@@ -440,9 +535,9 @@ export class WorkflowEngine {
                     let previous = [];
                     for (const [index, agent] of input.agents.entries()) {
                         const step = await one(agent, `pipeline-${index + 1}`, `You own sequential stage ${index + 1} of ${input.agents.length}. Continue the previous stage's work toward the task and provide a clear handoff.`, previous, input.permission);
-                        previous = [step];
+                        previous.push(step);
                     }
-                    final = previous;
+                    final = previous.slice(-1);
                     break;
                 }
                 case 'council': {
@@ -453,12 +548,12 @@ export class WorkflowEngine {
                 }
             }
             check();
-            run.output = clipBytes(final.map(step => final.length === 1 ? step.result.output : `[${step.agent}]\n${step.result.output}`).join('\n\n'), this.config.maxOutputBytes);
+            run.output = selectedOutput(final, this.config.maxOutputBytes);
             run.status = 'completed';
         }
         catch (error) {
-            run.status = monitorFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
-            run.error = errorMessage(error);
+            run.status = monitorFailure || dispatchFailure || persistenceFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
+            run.error = persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
             for (const artifact of run.workspaces ?? []) {
                 if (![...handles.values()].some(handle => handle.path === artifact.path))
                     artifact.exportError = `Worktree preparation did not finish: ${run.error}`;
@@ -498,9 +593,9 @@ export class WorkflowEngine {
                     }
                 }
                 pollCancellation();
-                if (monitorFailure) {
+                if (monitorFailure || dispatchFailure || persistenceFailure) {
                     run.status = 'failed';
-                    run.error = [monitorFailure.message, run.error].filter(Boolean).join('; ');
+                    run.error = clip([monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
                 }
                 else if (signal.aborted) {
                     run.status = 'cancelled';
@@ -527,6 +622,8 @@ export class WorkflowEngine {
                 this.workspaces.forgetRun(id);
             }
         }
+        if (persistenceFailure)
+            throw new WorkflowPersistenceError(run, persistenceFailure);
         return run;
     }
 }

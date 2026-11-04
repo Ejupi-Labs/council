@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { isUtf8 } from 'node:buffer';
-import { AcpProtocol, acpErrorSummary, isObject } from './acp.js';
-import { ManagedProcess, resolveLaunch } from './process.js';
+import { AcpProtocol, acpErrorSummary, isObject, validAcpEnvelope } from './acp.js';
+import { ManagedProcess, ProcessCleanupError, PROCESS_CLEANUP_ERROR, resolveLaunch } from './process.js';
+import { sanitizedGitEnvironment } from './git-env.js';
+import { checkAgentJsonStructure } from './agent-json.js';
 export const MAX_AGENT_FRAME_BYTES = 4 * 1024 * 1024;
 async function withBudget(request, task) {
     const started = performance.now();
@@ -33,6 +35,8 @@ async function withBudget(request, task) {
         request.signal?.removeEventListener('abort', cancel);
     }
     const durationMs = Math.round(performance.now() - started);
+    if (result.error === PROCESS_CLEANUP_ERROR)
+        return { ...result, status: 'failed', durationMs };
     if (timedOut)
         return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
     if (controller.signal.aborted)
@@ -41,7 +45,7 @@ async function withBudget(request, task) {
 }
 function childEnvironment(environment) {
     const depth = Number(environment.COUNCIL_DEPTH ?? 0);
-    return { ...environment, COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
+    return { ...sanitizedGitEnvironment(environment), COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
 }
 function providerAnswerFailure(output) {
     const normalized = output.trim().replace(/^Warning: Model metadata for `[^`\r\n]{1,200}` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.\s*/, '');
@@ -68,6 +72,8 @@ function failed(request, error) {
 function validateRequest(config, request) {
     if (request.signal?.aborted)
         return { agent: request.agent, status: 'cancelled', output: '', durationMs: 0, error: 'Agent request cancelled.' };
+    if (request.permission !== 'read' && request.permission !== 'write')
+        return failed(request, 'Agent permission must be read or write.');
     if (!config.agents[request.agent]?.enabled)
         return failed(request, 'Agent is not enabled in Council configuration.');
     if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0)
@@ -120,7 +126,10 @@ async function runProtocol(launch, protocol, request, config, environment) {
             }
             catch { /* Killing the tree is authoritative. */ }
             child.kill();
-            forceTimer = setTimeout(() => { void child.forceKill().then(() => protocol.settle?.()).finally(() => finish(status, error)); }, 3000);
+            forceTimer = setTimeout(() => {
+                void child.forceKill().catch(() => { forcedStatus = 'failed'; failure = PROCESS_CLEANUP_ERROR; })
+                    .then(() => protocol.settle?.()).then(() => finish(forcedStatus ?? status, failure ?? error), () => finish('failed', PROCESS_CLEANUP_ERROR));
+            }, 3000);
         };
         const control = {
             send(message) {
@@ -203,6 +212,13 @@ async function runProtocol(launch, protocol, request, config, environment) {
                 terminate('failed', 'Agent protocol frame contains invalid UTF-8.');
                 return;
             }
+            try {
+                checkAgentJsonStructure(bytes);
+            }
+            catch (error) {
+                terminate('failed', error instanceof Error ? error.message : 'Agent protocol frame exceeds its structural limit.');
+                return;
+            }
             line(bytes.toString('utf8'));
         };
         child.stdout.on('data', (chunk) => {
@@ -231,7 +247,14 @@ async function runProtocol(launch, protocol, request, config, environment) {
         });
         child.stderr.on('data', (chunk) => { stderrBytes += chunk.length; if (stderrBytes > 64 * 1024)
             terminate('failed', 'Agent diagnostics exceeded their bounded transport allowance.'); });
-        child.on('error', () => terminate('failed', 'Unable to start the configured agent executable. Run council doctor.'));
+        child.on('error', error => {
+            if (error instanceof ProcessCleanupError) {
+                forcedStatus = 'failed';
+                failure = PROCESS_CLEANUP_ERROR;
+                return;
+            }
+            terminate('failed', 'Unable to start the configured agent executable. Run council doctor.');
+        });
         child.once('close', async (code, signal) => {
             await protocol.settle?.();
             if (settled)
@@ -344,16 +367,23 @@ class ClaudeProtocol {
             }
         }
         if (event.type === 'result') {
+            if (typeof event.is_error !== 'boolean' || (event.subtype === 'success' && typeof event.result !== 'string')) {
+                control.fail('Claude returned an invalid terminal result.');
+                return;
+            }
             if (event.is_error === true || event.subtype !== 'success') {
                 control.fail(acpErrorSummary({ message: typeof event.result === 'string' ? event.result : event.subtype }));
+                return;
+            }
+            if (event.permission_denials !== undefined && !Array.isArray(event.permission_denials)) {
+                control.fail('Claude returned invalid terminal permission denials.');
                 return;
             }
             if (Array.isArray(event.permission_denials) && event.permission_denials.length > 0) {
                 control.fail('Claude tool permission was denied; the task is incomplete.');
                 return;
             }
-            if (typeof event.result === 'string')
-                control.replace(event.result);
+            control.replace(event.result);
             control.complete('end_turn');
         }
     }
@@ -367,8 +397,8 @@ class ExternalAcpxProtocol {
     }
     start(control) { control.endInput(this.prompt); }
     event(event, control) {
-        if (event.jsonrpc !== '2.0') {
-            control.fail('External ACPX returned invalid JSON-RPC.');
+        if (!validAcpEnvelope(event)) {
+            control.fail('External ACPX returned an invalid JSON-RPC response envelope.');
             return;
         }
         if (isObject(event.error)) {
@@ -376,7 +406,8 @@ class ExternalAcpxProtocol {
             return;
         }
         if (event.method === 'session/prompt' && isObject(event.params)) {
-            if (this.promptId !== undefined || (typeof event.id !== 'string' && typeof event.id !== 'number')) {
+            if (this.promptId !== undefined || (typeof event.id !== 'string' && !(typeof event.id === 'number' && Number.isSafeInteger(event.id)))
+                || typeof event.params.sessionId !== 'string' || !event.params.sessionId) {
                 control.fail('External ACPX returned an invalid prompt sequence.');
                 return;
             }

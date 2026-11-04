@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { finished } from 'node:stream/promises';
 import { test } from 'node:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { BoundedMcpInput, MAX_MCP_FRAME_BYTES, MAX_MCP_NODES, MAX_MCP_DEPTH } from '../dist/transport.js';
 
 async function capture(chunks) {
@@ -96,4 +97,52 @@ test('a malformed frame is never forwarded and terminates the guard with one con
   assert.deepEqual(frames.map(frame => frame.toString()), ['{"valid":true}\n']);
   assert.equal(errors, 1);
   assert.equal(stream.destroyed, true);
+});
+
+test('a paused consumer bounds buffered tiny frames instead of copying an entire incoming batch', async () => {
+  const stream = new BoundedMcpInput();
+  const complete = finished(stream);
+  try {
+    stream.write(Buffer.from('{}\n'.repeat(100_000)));
+    await nextTurn();
+    assert.ok(stream.readableLength <= stream.readableHighWaterMark + 3,
+      `Paused input buffered ${stream.readableLength} bytes beyond its readable watermark.`);
+    let forwarded = 0;
+    stream.on('data', () => { forwarded++; });
+    stream.end();
+    await complete;
+    assert.equal(forwarded, 100_000);
+  } finally { stream.destroy(); }
+});
+
+test('a sustained batch yields between bounded frame groups and later drains in order', async () => {
+  const stream = new BoundedMcpInput();
+  const total = 20_000;
+  let forwarded = 0;
+  stream.on('data', frame => {
+    assert.equal(JSON.parse(frame).sequence, forwarded++);
+  });
+  const complete = finished(stream);
+  const input = Buffer.from(Array.from({ length: total }, (_, sequence) => JSON.stringify({ sequence }) + '\n').join(''));
+  stream.end(input);
+  assert.ok(forwarded < total, 'One batch must not monopolize the event loop.');
+  await nextTurn();
+  assert.ok(forwarded > 0 && forwarded < total, 'Timers and cancellation must run before the batch finishes.');
+  await complete;
+  assert.equal(forwarded, total);
+});
+
+test('destroying a paused batch releases its write callback and stops deferred parsing', async () => {
+  const stream = new BoundedMcpInput();
+  let writes = 0;
+  stream.write(Buffer.from('{}\n'.repeat(100_000)), () => { writes++; });
+  await nextTurn();
+  stream.destroy();
+  await nextTurn();
+  assert.equal(writes, 1);
+  assert.equal(stream.destroyed, true);
+  let forwarded = 0;
+  stream.on('data', () => { forwarded++; });
+  await nextTurn();
+  assert.equal(forwarded, 0);
 });

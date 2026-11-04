@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fsPromises from 'node:fs/promises';
+import cp from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { GitWorkspaces } from '../dist/workspaces.js';
-import { killProcessTree } from '../dist/process.js';
+import { killProcessTree, ManagedProcess, ProcessCleanupError } from '../dist/process.js';
 
 function fixture(t, commit = true) {
   const dir = mkdtempSync(join(tmpdir(), 'council-workspaces-'));
@@ -176,8 +181,8 @@ test('cleanup reconciles interruption after Git removal and before manifest fina
 
 test('cancellation stops an owned Git checkout filter and leaves its creation manifest', { timeout: 25_000 }, async t => {
   const { manager, root, dir, git, state } = fixture(t);
-  const script = join(dir, 'stall-filter.cjs'), pidFile = join(dir, 'filter.pid');
-  writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));process.stdin.resume();setInterval(()=>{},1000);`);
+  const script = join(dir, 'stall-filter.cjs'), pidFile = join(dir, 'filter.pid'), heartbeat = join(dir, 'filter-heartbeat.txt');
+  writeFileSync(script, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));fs.writeFileSync(${JSON.stringify(heartbeat)},String(Date.now())+'\\n');process.stdin.resume();setInterval(()=>fs.appendFileSync(${JSON.stringify(heartbeat)},String(Date.now())+'\\n'),50);`);
   const command = `"${process.execPath.replaceAll('\\', '/')}" "${script.replaceAll('\\', '/')}"`;
   git('config', 'filter.council-audit.smudge', command);
   writeFileSync(join(root, '.gitattributes'), 'base.txt filter=council-audit\n');
@@ -187,14 +192,16 @@ test('cancellation stops an owned Git checkout filter and leaves its creation ma
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
     const readyUntil = Date.now() + 10_000;
-    while (!existsSync(pidFile) && !error && Date.now() < readyUntil) await new Promise(resolve => setTimeout(resolve, 20));
+    while ((!existsSync(pidFile) || !existsSync(heartbeat)) && !error && Date.now() < readyUntil) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(error, undefined, error?.message);
     assert.ok(existsSync(pidFile), 'local Git filter must be active before cancellation');
     ownedPid = Number(readFileSync(pidFile, 'utf8')); controller.abort(); await creating;
+    const settledAt = Date.now();
     assert.ok(error); assert.match(error.message, /cancelled/);
     const stoppedUntil = Date.now() + 3000;
     while (alive(ownedPid) && Date.now() < stoppedUntil) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.equal(alive(ownedPid), false);
+    const lastHeartbeat = Number(readFileSync(heartbeat, 'utf8').trim().split('\n').at(-1));
+    assert.equal(alive(ownedPid), false, `Owned filter ${ownedPid} remained live; last heartbeat ${lastHeartbeat}, cancellation settled ${settledAt}.`);
     assert.ok(existsSync(join(state, 'workspace-manifests')));
   } finally { controller.abort(); await creating; if (ownedPid && alive(ownedPid)) await killProcessTree(ownedPid); }
 });
@@ -211,4 +218,255 @@ test('preparation callback runs before any managed file or directory is created'
   assert.ok(prepared?.baseCommit); assert.equal(prepared.exportStatus, 'pending');
   assert.equal(existsSync(prepared.path), false);
   assert.equal(existsSync(join(state, 'workspace-manifests')), false);
+});
+
+test('inherited Git index and config overrides cannot mutate the original checkout during export', async t => {
+  const { manager, root, git } = fixture(t);
+  const workspace = await manager.create('inherited-index', 'codex');
+  writeFileSync(join(workspace.path, 'new.txt'), 'only the worker owns this file\n');
+  const original = readFileSync(join(root, '.git', 'index'));
+  const overrides = {
+    GIT_INDEX_FILE: join(root, '.git', 'index'), GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'diff.noprefix', GIT_CONFIG_VALUE_0: 'true',
+  };
+  const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
+  let artifact;
+  try { Object.assign(process.env, overrides); artifact = await manager.export(workspace); }
+  finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+  assert.deepEqual(readFileSync(join(root, '.git', 'index')), original);
+  assert.equal(git('ls-files', '--', 'new.txt'), '');
+  assert.match(readFileSync(artifact.patchPath, 'utf8'), /new file mode/);
+  git('apply', '--check', artifact.patchPath);
+});
+
+test('patches remain applicable and cleanup stays consistent despite Git presentation settings', async t => {
+  const { manager, git } = fixture(t);
+  git('config', 'diff.noprefix', 'true'); git('config', 'color.ui', 'always'); git('config', 'diff.mnemonicPrefix', 'true');
+  const workspace = await manager.create('configured-diff', 'codex');
+  writeFileSync(join(workspace.path, 'base.txt'), 'a committed worker update\n');
+  execFileSync('git', ['-C', workspace.path, 'add', 'base.txt'], { windowsHide: true });
+  execFileSync('git', ['-C', workspace.path, 'commit', '--quiet', '-m', 'worker update'], { windowsHide: true });
+  const artifact = await manager.export(workspace);
+  const patch = readFileSync(artifact.patchPath, 'utf8');
+  assert.match(patch, /--- a\/base.txt/); assert.match(patch, /\+\+\+ b\/base.txt/); assert.ok(!patch.includes('\u001b['));
+  git('apply', '--check', artifact.patchPath);
+  git('config', 'diff.noprefix', 'false'); git('config', 'color.ui', 'never'); git('config', 'diff.mnemonicPrefix', 'false');
+  await manager.cleanup(artifact, { reviewed: true });
+  assert.equal(existsSync(artifact.path), false);
+});
+
+test('Git submodule ignore and log settings cannot hide a changed gitlink from its patch', async t => {
+  const { manager, root, git } = fixture(t);
+  const initial = git('rev-parse', 'HEAD').trim();
+  mkdirSync(join(root, 'vendor'));
+  git('update-index', '--add', '--cacheinfo', `160000,${initial},vendor`);
+  git('commit', '--quiet', '-m', 'record local gitlink fixture');
+  const updated = git('rev-parse', 'HEAD').trim();
+  git('config', 'diff.ignoreSubmodules', 'all'); git('config', 'diff.submodule', 'log');
+  const workspace = await manager.create('configured-submodule', 'codex');
+  execFileSync('git', ['-C', workspace.path, 'update-index', '--cacheinfo', `160000,${updated},vendor`], { windowsHide: true });
+  const artifact = await manager.export(workspace);
+  const patch = readFileSync(artifact.patchPath, 'utf8');
+  assert.equal(artifact.changed, true); assert.match(patch, /diff --git a\/vendor b\/vendor/);
+  assert.ok(patch.includes(`-Subproject commit ${initial}`)); assert.ok(patch.includes(`+Subproject commit ${updated}`));
+  git('apply', '--cached', '--check', artifact.patchPath);
+});
+
+test('dirty submodule contents never publish a parent patch or pass legacy cleanup checks', { timeout: 60_000 }, async t => {
+  const { manager, root, dir, git } = fixture(t);
+  const nested = join(dir, 'nested-source'); mkdirSync(nested);
+  const childGit = (...args) => execFileSync('git', ['-C', nested, ...args], { encoding: 'utf8', windowsHide: true });
+  childGit('init', '--quiet'); childGit('config', 'user.name', 'Offline Nested Test'); childGit('config', 'user.email', 'offline@example.invalid');
+  writeFileSync(join(nested, 'file.txt'), 'nested original\n'); childGit('add', '.'); childGit('commit', '--quiet', '-m', 'nested base');
+  git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', nested, 'vendor'); git('commit', '--quiet', '-m', 'add local submodule');
+  git('config', 'submodule.vendor.ignore', 'all'); git('config', 'diff.ignoreSubmodules', 'all');
+  const workspace = await manager.create('dirty-submodule', 'codex');
+  execFileSync('git', ['-C', workspace.path, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--quiet'], { windowsHide: true });
+  const artifact = await manager.export(workspace);
+  assert.equal(readFileSync(artifact.patchPath, 'utf8'), '');
+  writeFileSync(join(workspace.path, 'vendor', 'file.txt'), 'uncommitted nested content\n');
+  await assert.rejects(manager.export(artifact), /Uncommitted submodule files cannot be preserved/);
+  assert.equal(readFileSync(artifact.patchPath, 'utf8'), '', 'failed export leaves the previous atomic patch intact');
+  const legacy = execFileSync('git', ['-C', workspace.path, 'diff', '--ignore-submodules=none', '--submodule=short', workspace.baseHead, '--'], { encoding: 'utf8', windowsHide: true });
+  assert.match(legacy, /-dirty/); writeFileSync(artifact.patchPath, legacy);
+  await assert.rejects(manager.cleanup(artifact, { reviewed: true }), /Uncommitted submodule files cannot be preserved/);
+  assert.equal(readFileSync(join(workspace.path, 'vendor', 'file.txt'), 'utf8'), 'uncommitted nested content\n');
+  writeFileSync(join(workspace.path, 'vendor', 'file.txt'), 'nested original\n');
+  writeFileSync(join(workspace.path, 'vendor', 'untracked.txt'), 'untracked nested content\n');
+  await assert.rejects(manager.export(artifact), /Uncommitted submodule files cannot be preserved/);
+  await assert.rejects(manager.cleanup(artifact, { reviewed: true }), /Uncommitted submodule files cannot be preserved/);
+  assert.ok(existsSync(join(workspace.path, 'vendor', 'untracked.txt'))); assert.ok(existsSync(join(root, 'vendor', 'file.txt')));
+});
+
+test('a committed nested project retains its own cwd and an uncommitted directory fails before preparation effects', async t => {
+  const { root, git, dir } = fixture(t);
+  const nested = join(root, 'packages', 'selected'); mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, 'project.txt'), 'committed nested project\n'); git('add', '.'); git('commit', '--quiet', '-m', 'nested project');
+  const state = join(dir, 'nested-state');
+  const workspace = await new GitWorkspaces(nested, state).create('nested-project', 'codex');
+  assert.equal(workspace.cwd, join(workspace.path, 'packages', 'selected'));
+  assert.equal(readFileSync(join(workspace.cwd, 'project.txt'), 'utf8'), 'committed nested project\n');
+  const fresh = join(root, 'uncommitted-project'); mkdirSync(fresh); writeFileSync(join(fresh, 'task.txt'), 'not in captured tree\n');
+  const freshState = join(dir, 'fresh-state'); let prepared = false;
+  await assert.rejects(new GitWorkspaces(fresh, freshState).create('uncommitted-directory', 'codex', 'codex', undefined, () => { prepared = true; }), /project directory is not present in the captured HEAD/);
+  assert.equal(prepared, false); assert.equal(existsSync(freshState), false);
+});
+
+test('cancellation after patch fsync preserves the previous publication and removes staging files', { timeout: 60_000 }, async t => {
+  const { manager } = fixture(t);
+  const workspace = await manager.create('cancel-publication', 'codex');
+  const artifact = await manager.export(workspace);
+  writeFileSync(join(workspace.path, 'base.txt'), 'new patch must remain unpublished\n');
+  const originalWrite = manager.atomicWrite.bind(manager), originalCheck = manager.checked.bind(manager);
+  const controller = new AbortController(); let inside = false, checks = 0, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  manager.atomicWrite = async function (...args) { inside = args[2] === 'patches'; try { return await originalWrite(...args); } finally { inside = false; } };
+  manager.checked = async function (...args) {
+    const result = await originalCheck(...args);
+    if (inside && args[0] === artifact.patchPath && ++checks === 3) { entered(); await gate; }
+    return result;
+  };
+  const exporting = manager.export(artifact, controller.signal);
+  const cancelled = assert.rejects(exporting, error => error.name === 'AbortError');
+  try {
+    await started; assert.ok(readdirSync(dirname(artifact.patchPath)).some(name => name.endsWith('.tmp')));
+    controller.abort(); release(); await cancelled;
+    assert.equal(readFileSync(artifact.patchPath, 'utf8'), '');
+    assert.ok(readdirSync(dirname(artifact.patchPath)).every(name => !name.endsWith('.tmp')));
+  } finally { controller.abort(); release(); await Promise.allSettled([exporting]); }
+});
+
+test('a cancellation observed after an issued patch publication never returns a ready result', { timeout: 60_000 }, async t => {
+  const { manager } = fixture(t);
+  const workspace = await manager.create('cancel-issued-publication', 'codex');
+  const artifact = await manager.export(workspace);
+  writeFileSync(join(workspace.path, 'base.txt'), 'published patch remains valid evidence\n');
+  const original = manager.atomicWrite.bind(manager), controller = new AbortController();
+  manager.atomicWrite = async function (...args) { await original(...args); if (args[2] === 'patches') controller.abort(); };
+  await assert.rejects(manager.export(artifact, controller.signal), error => error.name === 'AbortError');
+  assert.match(readFileSync(artifact.patchPath, 'utf8'), /published patch remains valid evidence/);
+});
+
+test('relative Git worktree pointers recover an incomplete manifest and still refuse redirected reverse metadata', { timeout: 60_000 }, async t => {
+  const { manager, root, state, git } = fixture(t);
+  git('config', 'worktree.useRelativePaths', 'true');
+  const workspace = await manager.create('relative-pointer-recovery', 'codex');
+  const pointer = /^gitdir: (.+)\s*$/.exec(readFileSync(join(workspace.path, '.git'), 'utf8').trim());
+  assert.ok(pointer);
+  if (isAbsolute(pointer[1])) { t.skip('Installed Git does not create relative worktree pointers.'); return; }
+  const manifestPath = manager.manifestPath(workspace.path);
+  const incomplete = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const gitDir = incomplete.gitDir;
+  delete incomplete.gitDir; writeFileSync(manifestPath, JSON.stringify(incomplete));
+  writeFileSync(join(workspace.path, 'base.txt'), 'relative-pointer recovery evidence\n');
+  const artifact = await new GitWorkspaces(root, state).export(workspace);
+  assert.equal(artifact.exportStatus, 'ready');
+  assert.match(readFileSync(artifact.patchPath, 'utf8'), /relative-pointer recovery evidence/);
+  assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).gitDir, gitDir);
+  writeFileSync(manifestPath, JSON.stringify(incomplete));
+  writeFileSync(join(gitDir, 'gitdir'), relative(gitDir, join(root, '.git')) + '\n');
+  await assert.rejects(new GitWorkspaces(root, state).export(workspace), /Incomplete worktree metadata does not belong/);
+  assert.equal(git('diff', '--cached', '--name-only'), '');
+});
+
+test('Windows transient sharing refusals retain old manifests and patches until atomic replacement succeeds', { skip: process.platform !== 'win32', timeout: 60_000 }, async t => {
+  const { manager } = fixture(t);
+  const original = fsPromises.rename;
+  const attempts = new Map(); let patchPath, previousPatch;
+  fsPromises.rename = async (source, destination) => {
+    const manifest = destination.endsWith('.json') && destination.includes('workspace-manifests');
+    if (manifest || destination === patchPath) {
+      const count = (attempts.get(destination) ?? 0) + 1; attempts.set(destination, count);
+      if (count <= 2) {
+        if (manifest) assert.equal(JSON.parse(readFileSync(destination, 'utf8')).gitDir, undefined);
+        else assert.deepEqual(readFileSync(destination), previousPatch);
+        throw Object.assign(new Error('Injected temporary Windows sharing refusal.'), { code: 'EPERM' });
+      }
+    }
+    return await original(source, destination);
+  };
+  syncBuiltinESMExports();
+  try {
+    const workspace = await manager.create('sharing-retry', 'codex');
+    assert.equal(attempts.get(manager.manifestPath(workspace.path)), 3);
+    const artifact = await manager.export(workspace);
+    patchPath = artifact.patchPath; previousPatch = readFileSync(patchPath);
+    writeFileSync(join(workspace.path, 'base.txt'), 'publish only after transient sharing clears\n');
+    const refreshed = await manager.export(artifact);
+    assert.equal(refreshed.exportStatus, 'ready'); assert.equal(attempts.get(patchPath), 3);
+    assert.match(readFileSync(patchPath, 'utf8'), /publish only after transient sharing clears/);
+  } finally { fsPromises.rename = original; syncBuiltinESMExports(); }
+});
+
+test('aborting a Windows publication retry retains the original patch and removes its owned staging file', { skip: process.platform !== 'win32', timeout: 60_000 }, async t => {
+  const { manager } = fixture(t);
+  const workspace = await manager.create('abort-sharing-retry', 'codex'), artifact = await manager.export(workspace);
+  const previous = readFileSync(artifact.patchPath), original = fsPromises.rename;
+  const controller = new AbortController(); let attempts = 0, abortTimer;
+  writeFileSync(join(workspace.path, 'base.txt'), 'this retry must not publish\n');
+  fsPromises.rename = async (source, destination) => {
+    if (destination === artifact.patchPath) {
+      attempts++; abortTimer ??= setTimeout(() => controller.abort(), 5);
+      throw Object.assign(new Error('Injected busy publication target.'), { code: 'EBUSY' });
+    }
+    return await original(source, destination);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(manager.export(artifact, controller.signal), error => error.name === 'AbortError');
+    assert.equal(attempts, 1); assert.deepEqual(readFileSync(artifact.patchPath), previous);
+    assert.ok(readdirSync(dirname(artifact.patchPath)).every(name => !name.endsWith('.tmp')));
+  } finally { clearTimeout(abortTimer); fsPromises.rename = original; syncBuiltinESMExports(); }
+});
+
+async function injectedCleanupFailure(t, { cancel = true, forceOnly = false } = {}) {
+  const { manager, root } = fixture(t);
+  const originalFork = cp.fork, originalForce = ManagedProcess.prototype.forceKill, originalTimeout = globalThis.setTimeout;
+  const controller = new AbortController(), streams = [];
+  cp.fork = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    streams.push(child.stdin, child.stdout, child.stderr); child.connected = true;
+    let closed = false;
+    const close = () => {
+      if (closed) return; closed = true;
+      child.emit('message', { type: 'closed', code: 0, signal: null, cleanupFailed: !forceOnly });
+      child.emit('close', 0, null);
+    };
+    child.send = (message, callback) => {
+      callback?.();
+      if (message.type === 'start') queueMicrotask(() => {
+        child.emit('message', { type: 'started', pid: process.pid });
+        if (cancel) controller.abort(); else queueMicrotask(close);
+      });
+      if (message.type === 'stop') originalTimeout(close, forceOnly ? 20 : 0);
+    };
+    return child;
+  };
+  if (forceOnly) {
+    // Accelerate only the wrapper's escalation timer; no native helper or process is launched.
+    globalThis.setTimeout = (callback, milliseconds, ...args) => originalTimeout(callback, milliseconds === 1500 ? 0 : milliseconds, ...args);
+    ManagedProcess.prototype.forceKill = () => Promise.reject(new ProcessCleanupError());
+  }
+  syncBuiltinESMExports();
+  try {
+    const work = cancel ? manager.git(root, ['rev-parse', 'HEAD'], undefined, controller.signal) : manager.create('preflight-cleanup-failure', 'codex');
+    await assert.rejects(work, error => error instanceof ProcessCleanupError && /descendant may still be running/.test(error.message));
+  } finally {
+    cp.fork = originalFork; ManagedProcess.prototype.forceKill = originalForce; globalThis.setTimeout = originalTimeout;
+    syncBuiltinESMExports(); for (const stream of streams) stream.destroy();
+  }
+}
+
+test('Git retains an unverified cleanup event after ordinary cancellation', async t => {
+  await injectedCleanupFailure(t);
+});
+
+test('Git retains a rejected force cleanup instead of swallowing it behind cancellation', async t => {
+  await injectedCleanupFailure(t, { forceOnly: true });
+});
+
+test('Git preflight preserves unverified cleanup diagnostics instead of claiming HEAD is absent', async t => {
+  await injectedCleanupFailure(t, { cancel: false });
 });

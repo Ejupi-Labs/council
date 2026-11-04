@@ -4,6 +4,11 @@ import { killProcessTree } from './process.js';
 let vendor: ChildProcessWithoutNullStreams | undefined;
 let finished = false;
 let stopping = false;
+let cleanup: Promise<void> | undefined;
+
+function cleanupVendor(): Promise<void> {
+  return cleanup ??= vendor?.pid ? killProcessTree(vendor.pid) : Promise.resolve();
+}
 
 function send(message: unknown): void {
   if (process.connected) process.send?.(message, () => { /* The Council parent may have exited. */ });
@@ -12,8 +17,9 @@ function send(message: unknown): void {
 async function finish(code: number | null, signal: NodeJS.Signals | null): Promise<void> {
   if (finished) return;
   finished = true;
-  if (vendor?.pid) await killProcessTree(vendor.pid);
-  send({ type: 'closed', code, signal });
+  let cleanupFailed = false;
+  try { await cleanupVendor(); } catch { cleanupFailed = true; }
+  send({ type: 'closed', code, signal, cleanupFailed });
   process.stdin.destroy();
   process.stdout.end();
   process.stderr.end();
@@ -23,9 +29,7 @@ async function finish(code: number | null, signal: NodeJS.Signals | null): Promi
 function stop(): void {
   if (stopping || finished) return;
   stopping = true;
-  vendor?.stdin.destroy();
-  if (vendor?.pid) void killProcessTree(vendor.pid).then(() => finish(null, 'SIGKILL'));
-  else void finish(null, 'SIGKILL');
+  void finish(null, 'SIGKILL');
 }
 
 process.on('disconnect', stop);

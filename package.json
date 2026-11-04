@@ -1,6 +1,6 @@
 {
   "name": "council-ai-plugin",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Dependency-free local collaboration for Codex, Claude Code, DeepSeek Harness, Junie and Antigravity.",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,10 @@
     "audit:runtime": "npm audit --omit=dev",
     "verify": "npm run check && npm test && npm run audit:runtime",
     "release:local": "npm run build && node scripts/release.mjs",
-    "benchmark": "npm run build && node scripts/benchmark.mjs"
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "soak": "npm run build && node --expose-gc scripts/soak.mjs",
+    "soak:storage": "npm run build && node scripts/storage-soak.mjs",
+    "soak:artifacts": "npm run build && node scripts/artifact-soak.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

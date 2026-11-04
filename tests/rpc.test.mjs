@@ -146,3 +146,56 @@ test('a stalled output client is closed at the 32-MiB queue byte bound', async t
   const until = Date.now() + 2000; while (!wire.shutdowns() && Date.now() < until) await pause(2);
   assert.equal(wire.shutdowns(), 1); assert.ok(wire.server.queuedBytes <= 32 * 1024 * 1024);
 });
+
+test('closing repeated sessions releases owned stream error listeners', async () => {
+  const input = new PassThrough(), output = new PassThrough();
+  output.resume();
+  const originalInput = input.listenerCount('error'), originalOutput = output.listenerCount('error');
+  try {
+    for (let index = 0; index < 5; index++) {
+      const server = new CouncilMcpServer(async () => {});
+      await server.connect(input, output);
+      await server.close();
+      assert.equal(input.listenerCount('error'), originalInput);
+      assert.equal(output.listenerCount('error'), originalOutput);
+    }
+  } finally { input.destroy(); output.destroy(); }
+});
+
+test('a closed server cannot reconnect and allocate fresh transport resources', async () => {
+  const server = new CouncilMcpServer(async () => {});
+  const input = new PassThrough(), output = new PassThrough();
+  try {
+    await server.close();
+    await assert.rejects(server.connect(input, output), /closed/);
+    assert.equal(input.listenerCount('error'), 0);
+    assert.equal(output.listenerCount('error'), 0);
+    assert.equal(input.listenerCount('data'), 0);
+  } finally { input.destroy(); output.destroy(); }
+});
+
+test('close stops queued parsing immediately while service shutdown is still draining', async () => {
+  const input = new PassThrough(), output = new PassThrough(); output.resume();
+  let release;
+  const drain = new Promise(resolve => { release = resolve; });
+  const server = new CouncilMcpServer(() => drain);
+  const parse = JSON.parse;
+  let parses = 0;
+  JSON.parse = (text, ...args) => {
+    if (typeof text === 'string' && text.includes('close-drain-fixture')) parses++;
+    return parse(text, ...args);
+  };
+  try {
+    await server.connect(input, output);
+    input.write(Buffer.from((JSON.stringify({ jsonrpc: '2.0', method: 'notifications/fixture', params: { tag: 'close-drain-fixture' } }) + '\n').repeat(10_000)));
+    const before = parses;
+    assert.ok(before > 0 && before < 20_000);
+    let closed = false;
+    const closing = server.close().then(() => { closed = true; });
+    await nextTurn(); await nextTurn();
+    assert.equal(parses, before, 'Closing the server must cancel deferred parsing without waiting for shutdown.');
+    assert.equal(closed, false, 'The service must still be allowed to drain its owned work.');
+    release(); await closing;
+    assert.equal(server.metrics().connected, false);
+  } finally { release(); await server.close(); JSON.parse = parse; input.destroy(); output.destroy(); }
+});

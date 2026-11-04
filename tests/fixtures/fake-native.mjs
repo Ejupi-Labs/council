@@ -4,7 +4,14 @@ let prompt = '';
 for await (const part of process.stdin) prompt += part.toString();
 const claude = process.argv.includes('--output-format');
 const send = event => process.stdout.write(JSON.stringify(event) + '\n');
-const text = prompt === 'args' ? JSON.stringify(process.argv.slice(2)) : prompt === 'depth' ? process.env.COUNCIL_DEPTH : `Native 🌍 ${prompt}`;
+const text = prompt === 'args' ? JSON.stringify(process.argv.slice(2)) : prompt === 'depth' ? process.env.COUNCIL_DEPTH
+  : prompt === 'git-env' ? JSON.stringify(Object.fromEntries(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'COUNCIL_TEST_KEEP'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])))
+  : `Native 🌍 ${prompt}`;
+const structure = () => {
+  if (prompt === 'structure-deep') process.stdout.write('{"type":"progress","payload":' + '['.repeat(300_000) + '0' + ']'.repeat(300_000) + '}\n');
+  else if (prompt === 'structure-wide') send({ type: 'progress', payload: Array(70_000).fill(0) });
+  else if (prompt === 'structure-quoted') send({ type: 'progress', payload: '[{"nested":"\\\"🌍"}]'.repeat(10_000) });
+};
 if (prompt === 'hang' || prompt === 'tree-hang') {
   if (prompt === 'tree-hang') {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
@@ -26,7 +33,12 @@ else if (claude) {
   else if (prompt === 'forbidden-tool') send({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } });
   else {
     send({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text }] } });
-    if (prompt !== 'partial') send({ type: 'result', subtype: 'success', is_error: false, result: text, ...(prompt === 'denied' ? { permission_denials: [{ tool_name: 'Edit' }] } : {}) });
+    structure();
+    if (prompt === 'success-without-result') send({ type: 'result', subtype: 'success', is_error: false });
+    else if (prompt === 'success-with-invalid-result') send({ type: 'result', subtype: 'success', is_error: false, result: { text } });
+    else if (prompt === 'success-with-invalid-error-flag') send({ type: 'result', subtype: 'success', is_error: 'true', result: text });
+    else if (prompt === 'success-with-invalid-denials') send({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: { tool_name: 'Edit' } });
+    else if (prompt !== 'partial') send({ type: 'result', subtype: 'success', is_error: false, result: text, ...(prompt === 'denied' ? { permission_denials: [{ tool_name: 'Edit' }] } : {}) });
     if (prompt === 'nonzero') process.exitCode = 2;
   }
 } else {
@@ -35,6 +47,7 @@ else if (claude) {
   else {
     send({ type: 'item.completed', item: { type: 'reasoning', text: 'hidden' } });
     send({ type: 'item.completed', item: { type: 'agent_message', text } });
+    structure();
     if (prompt !== 'partial') send({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
     if (prompt === 'nonzero') process.exitCode = 2;
   }

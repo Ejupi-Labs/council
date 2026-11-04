@@ -103,6 +103,48 @@ async function mcpFor(t, service) {
   return { request, call, input };
 }
 
+test('MCP release can target one run without releasing another concurrent task using the same owner label', async t => {
+  const { service } = serviceFor(t, countingRunner());
+  const first = completed(service.store, 1), second = completed(service.store, 2);
+  const { call } = await mcpFor(t, service);
+  await call('council_reserve', { owner: 'codex', paths: ['src/first.ts'], runId: first.id });
+  await call('council_reserve', { owner: 'codex', paths: ['src/second.ts'], runId: second.id });
+  assert.equal((await call('council_release', { owner: 'codex', runId: first.id })).released, 1);
+  const remaining = await call('council_leases');
+  assert.equal(remaining.length, 1); assert.equal(remaining[0].runId, second.id);
+  assert.equal((await call('council_release', { owner: 'codex' })).released, 1);
+});
+
+test('large inbox history remains readable as complete bounded pages with recipient-bound cursors', async t => {
+  const { service } = serviceFor(t, countingRunner());
+  const body = '\u0001'.repeat(32000);
+  const expected = [];
+  for (let index = 0; index < 50; index++) expected.push(service.store.sendMessage({ from: 'codex', to: 'claude', subject: `Evidence ${index}`, body }));
+  service.store.sendMessage({ from: 'codex', to: 'junie', subject: 'Other recipient', body: 'Keep separate.' });
+  const { request, call } = await mcpFor(t, service);
+  const oversized = await request('tools/call', { name: 'council_inbox', arguments: { agent: 'claude' } });
+  assert.equal(oversized.isError, true); assert.match(oversized.content[0].text, /council_inbox_page/);
+  const received = [];
+  let cursor;
+  do {
+    const page = await call('council_inbox_page', { agent: 'claude', limit: 100, ...(cursor ? { cursor } : {}) });
+    assert.ok(Buffer.byteLength(JSON.stringify(page.messages)) <= 1024 * 1024);
+    assert.ok(page.messages.length > 0); assert.ok(page.messages.every(message => message.body === body && message.to === 'claude'));
+    received.push(...page.messages.map(message => message.id));
+    if (!cursor && page.nextCursor) {
+      const wrongRecipient = await request('tools/call', { name: 'council_inbox_page', arguments: { agent: 'junie', cursor: page.nextCursor } });
+      assert.equal(wrongRecipient.isError, true);
+      const wrongFilter = await request('tools/call', { name: 'council_inbox_page', arguments: { agent: 'claude', unreadOnly: false, cursor: page.nextCursor } });
+      assert.equal(wrongFilter.isError, true);
+    }
+    for (const message of page.messages) assert.equal((await call('council_ack', { id: message.id, agent: 'claude' })).acknowledged, true);
+    cursor = page.nextCursor;
+  } while (cursor);
+  assert.deepEqual(received.toSorted(), expected.map(message => message.id).toSorted()); assert.equal(new Set(received).size, 50);
+  assert.deepEqual(await call('council_inbox', { agent: 'claude' }), []);
+  assert.equal((await call('council_health')).status, 'ok');
+});
+
 function cliCall(root, args) {
   return execute(process.execPath, [cli, ...args, '--workspace', root, '--backend', 'mock'], {
     windowsHide: true, timeout: 8000, maxBuffer: 2 * 1024 * 1024,

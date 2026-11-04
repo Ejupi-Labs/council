@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { NativeRunner, createRunner } from '../dist/runner.js';
+import { ManagedProcess, ProcessCleanupError, PROCESS_CLEANUP_ERROR } from '../dist/process.js';
 
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/fake-native.mjs', import.meta.url));
@@ -41,6 +42,29 @@ test('Claude rejects denied permissions and tools outside its read-mode allowlis
   assert.equal((await local.run(request('claude', 'forbidden-tool'))).status, 'failed');
 });
 
+for (const backend of ['native', 'acpx', 'mock']) {
+  test(`${backend} rejects missing or invalid permission before any dispatch`, async () => {
+    const settings = { ...config({ claude: native('claude') }), backend };
+    const local = createRunner(settings);
+    for (const permission of [undefined, null, 'read-only', 'WRITE', true]) {
+      const result = await local.run(request('claude', 'args', { permission }));
+      assert.equal(result.status, 'failed');
+      assert.match(result.error, /permission.*read.*write/i);
+      assert.equal(result.durationMs, 0);
+      assert.equal(result.output, '');
+    }
+  });
+}
+
+for (const scenario of ['success-without-result', 'success-with-invalid-result', 'success-with-invalid-error-flag', 'success-with-invalid-denials']) {
+  test(`Claude rejects malformed terminal ${scenario} despite earlier assistant text`, async () => {
+    const result = await new NativeRunner(config({ claude: native('claude') })).run(request('claude', scenario));
+    assert.equal(result.status, 'failed');
+    assert.match(result.output, /Native/); // Partial text remains available without implying completion.
+    assert.match(result.error, /invalid.*result|invalid.*permission/i);
+  });
+}
+
 for (const profile of ['codex', 'claude', 'deepseek-harness', 'junie', 'antigravity']) test(`direct ACP is available for configured ${profile} adapters`, async () => {
   const local = createRunner(config({ peer: { enabled: true, profile, transport: 'acp', command: process.execPath, args: [adapter] } }));
   const result = await local.run(request('peer', 'hello'));
@@ -60,9 +84,28 @@ test('direct ACP rejects an unadvertised model without changing the requested mo
   assert.equal(result.status, 'failed'); assert.match(result.error, /not advertised/);
 });
 
+test('direct ACP cannot report success from a contradictory result and error envelope', async () => {
+  const local = new NativeRunner(config({ peer: { enabled: true, profile: 'junie', transport: 'acp', command: process.execPath, args: [adapter] } }),
+    { environment: { ...process.env, COUNCIL_TEST_ACP_CASE: 'mixed-result-error' } });
+  const result = await local.run(request('peer', 'Read offline evidence.'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /invalid.*envelope/i);
+  assert.match(result.output, /Local ACP fixture completed/);
+});
+
 test('native doctor only inspects executable availability', async () => {
   const health = await new NativeRunner(config({ codex: native('codex'), missing: { enabled: true, profile: 'junie', command: join(cwd, 'not-an-executable.exe') } })).doctor();
   assert.equal(health[0].available, true); assert.match(health[0].detail, /Authentication.*were not tested/); assert.equal(health[1].available, false);
+});
+
+test('vendor children cannot inherit Git repository or index redirection outside their assigned cwd', async () => {
+  const environment = { ...process.env, GIT_DIR: 'outside-fixture.git', GIT_WORK_TREE: 'outside-fixture',
+    GIT_INDEX_FILE: 'outside-fixture.index', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.worktree',
+    GIT_CONFIG_VALUE_0: 'outside-fixture', COUNCIL_TEST_KEEP: 'ordinary-environment-is-preserved' };
+  const result = await new NativeRunner(config({ codex: native('codex') }), { environment }).run(request('codex', 'git-env'));
+  assert.equal(result.status, 'completed', result.error);
+  assert.deepEqual(JSON.parse(result.output), { COUNCIL_TEST_KEEP: 'ordinary-environment-is-preserved' });
+  assert.equal(environment.GIT_INDEX_FILE, 'outside-fixture.index');
 });
 
 test('the total agent deadline includes executable resolution and reports honest elapsed time', async () => {
@@ -91,10 +134,76 @@ test('cancellation interrupts executable resolution before a vendor is launched'
   } finally { fs.stat = original; syncBuiltinESMExports(); }
 });
 
+test('an unverified cleanup failure remains explicit instead of being hidden by cancellation', { timeout: 20000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'council-cleanup-diagnostic-'));
+  const pidFile = join(temporary, 'pids.json');
+  const original = ManagedProcess.prototype.kill;
+  const controller = new AbortController();
+  let managed, running;
+  try {
+    ManagedProcess.prototype.kill = function (...args) {
+      managed = this;
+      this.emit('error', new ProcessCleanupError());
+      return original.apply(this, args);
+    };
+    const local = new NativeRunner(config({ codex: native('codex') }), { environment: { ...process.env, COUNCIL_TEST_PID_FILE: pidFile } });
+    running = local.run(request('codex', 'tree-hang', { signal: controller.signal }));
+    let ready = false;
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try { await readFile(pidFile, 'utf8'); ready = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 20)); }
+    }
+    assert.equal(ready, true, 'The offline tree must start before cancellation.');
+    controller.abort();
+    const result = await running;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.error, PROCESS_CLEANUP_ERROR);
+  } finally {
+    ManagedProcess.prototype.kill = original;
+    controller.abort();
+    if (running) await running;
+    if (managed) await managed.forceKill().catch(() => {});
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of ['invalid-utf8', 'frame-overflow']) test(`agent framing rejects ${scenario} before accepting terminal success`, async () => {
   const settings = config({ codex: native('codex') }); settings.maxOutputBytes = 1024 * 1024;
   const result = await new NativeRunner(settings).run(request('codex', scenario));
   assert.equal(result.status, 'failed'); assert.match(result.error, scenario === 'invalid-utf8' ? /invalid UTF-8/ : /frame exceeded 4 MiB/);
+});
+
+for (const agent of ['codex', 'claude']) {
+  test(`${agent} rejects oversized JSON graphs before parsing while retaining partial text`, async () => {
+    const parse = JSON.parse;
+    let deepParses = 0;
+    JSON.parse = (text, ...rest) => {
+      if (typeof text === 'string' && text.length > 500_000 && text.includes('"payload":')) deepParses++;
+      return parse(text, ...rest);
+    };
+    try {
+      const local = new NativeRunner(config({ [agent]: native(agent) }));
+      for (const scenario of ['structure-deep', 'structure-wide']) {
+        const result = await local.run(request(agent, scenario));
+        assert.equal(result.status, 'failed');
+        assert.match(result.error, /JSON depth 64|65536 structural tokens/);
+        assert.match(result.output, /Native/);
+      }
+      assert.equal(deepParses, 0, 'Deep frames must be refused before JSON.parse allocates their graph.');
+      assert.equal((await local.run(request(agent, 'structure-quoted'))).status, 'completed');
+    } finally { JSON.parse = parse; }
+  });
+}
+
+test('direct ACP structural limits preserve partial text and permit escaped tool-output strings', async () => {
+  for (const scenario of ['structure-deep', 'structure-wide', 'structure-quoted']) {
+    const local = new NativeRunner(config({ peer: { enabled: true, profile: 'junie', transport: 'acp', command: process.execPath, args: [adapter] } }),
+      { environment: { ...process.env, COUNCIL_TEST_ACP_CASE: scenario } });
+    const result = await local.run(request('peer', 'Read project evidence.'));
+    assert.equal(result.status, scenario === 'structure-quoted' ? 'completed' : 'failed', result.error);
+    assert.match(result.output, /Partial offline evidence/);
+    if (result.status === 'failed') assert.match(result.error, /JSON depth 64|65536 structural tokens/);
+  }
 });
 
 test('ACP read permissions never trust presentation metadata as authorization', async () => {

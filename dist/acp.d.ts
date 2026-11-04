@@ -1,6 +1,8 @@
 import type { AgentRequest } from './types.js';
 export type JsonObject = Record<string, unknown>;
 export declare const isObject: (value: unknown) => value is JsonObject;
+/** A response cannot carry both success and failure, including malformed error values. */
+export declare function validAcpEnvelope(event: JsonObject): boolean;
 export interface ProtocolControl {
     send(message: JsonObject): void;
     append(text: string): void;

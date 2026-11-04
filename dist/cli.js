@@ -121,7 +121,7 @@ async function main() {
     const config = command === 'demo'
         ? loadConfig(mkdtempSync(join(tmpdir(), 'council-demo-')), { backend: 'mock' })
         : loadConfig(workspace, { ...(backend ? { backend } : {}), ...(process.env.COUNCIL_BACKEND && !backend ? { backend: parseBackend(process.env.COUNCIL_BACKEND) } : {}) });
-    const service = new CouncilService(config);
+    const service = await CouncilService.open(config);
     if (command === 'mcp') {
         const server = await serveMcp(service);
         for (const signal of ['SIGINT', 'SIGTERM'])

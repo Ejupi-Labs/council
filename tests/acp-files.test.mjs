@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 import { AcpFiles, MAX_ACP_FILE_BYTES } from '../dist/acp-files.js';
 
 function fixture(t) {
@@ -36,6 +40,49 @@ test('writes atomically, creates contained parent directories and returns null',
   assert.deepEqual(readdirSync(dirname(path)), ['file.txt']);
 });
 
+test('Windows case-insensitive directory spelling remains valid for atomic writes', { skip: process.platform !== 'win32' }, async t => {
+  const { root, files } = fixture(t);
+  mkdirSync(join(root, 'src'));
+  const path = join(root, 'src', 'file.txt'); writeFileSync(path, 'original');
+  const alternate = join(root, 'SRC', 'file.txt');
+  assert.equal(await files.contains(alternate), true);
+  assert.equal(await files.write({ path: alternate, content: 'updated' }), null);
+  assert.equal(readFileSync(path, 'utf8'), 'updated');
+  assert.deepEqual(readdirSync(dirname(path)), ['file.txt']);
+  const rootAlias = join(root.toUpperCase(), 'src', 'file.txt');
+  assert.equal(await files.write({ path: rootAlias, content: 'root spelling preserved' }), null);
+  assert.equal(readFileSync(path, 'utf8'), 'root spelling preserved');
+});
+
+test('an explicitly configured root junction still maps to its selected canonical project', async t => {
+  const { root, outside } = fixture(t);
+  const alias = join(outside, 'configured-root'); symlinkSync(root, alias, 'junction');
+  const path = join(root, 'file.txt'); writeFileSync(path, 'original');
+  const files = new AcpFiles(alias, 'write');
+  assert.deepEqual(await files.read({ path: join(alias, 'file.txt') }), { content: 'original' });
+  assert.equal(await files.write({ path: join(alias, 'file.txt'), content: 'updated through configured root' }), null);
+  assert.equal(readFileSync(path, 'utf8'), 'updated through configured root');
+});
+
+test('case-sensitive NTFS siblings cannot escape the selected root through a case-folded prefix', { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
+  const parent = mkdtempSync(join(tmpdir(), 'council-acp-case-sensitive-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  try {
+    execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'fsutil.exe'), ['file', 'setCaseSensitiveInfo', parent, 'enable'], { windowsHide: true, stdio: 'pipe' });
+  } catch { t.skip('Per-directory NTFS case sensitivity is unavailable for this volume or user.'); return; }
+  const root = join(parent, 'project'), outside = join(parent, 'PROJECT');
+  mkdirSync(root); mkdirSync(outside);
+  const path = join(outside, 'private.txt'); writeFileSync(path, 'outside fixture');
+  const files = new AcpFiles(root, 'write');
+  assert.equal(await files.contains(path), false);
+  await assert.rejects(files.read({ path }), /outside.*root/);
+  await assert.rejects(files.write({ path, content: 'overwrite' }), /outside.*root/);
+  await assert.rejects(files.write({ path: join(outside, 'new', 'file.txt'), content: 'create outside' }), /outside.*root/);
+  assert.equal(readFileSync(path, 'utf8'), 'outside fixture');
+  assert.deepEqual(readdirSync(outside), ['private.txt']);
+  assert.deepEqual(readdirSync(root), []);
+});
+
 test('read policy refuses writes without creating files or directories', async t => {
   const { root, reader } = fixture(t);
   const path = join(root, 'missing', 'file.txt');
@@ -64,6 +111,21 @@ test('Git controls and Council metadata are unavailable for both read and write'
   }
   assert.equal(await files.contains(join(root, '.gitignore')), true);
 });
+
+for (const [name, alias] of [['.git', 'GIT~1'], ['.council', 'COUNCI~1']]) {
+  test(`Windows short names cannot expose ${name} metadata or create descendants`, { skip: process.platform !== 'win32' }, async t => {
+    const { root, files, reader } = fixture(t);
+    const metadata = join(root, name); mkdirSync(metadata);
+    const original = join(metadata, 'private.txt'); writeFileSync(original, 'private fixture');
+    const alternate = join(root, alias);
+    if (!existsSync(alternate)) { t.skip('This volume does not create the expected Windows 8.3 alias.'); return; }
+    assert.equal(await reader.contains(join(alternate, 'private.txt')), false);
+    await assert.rejects(reader.read({ path: join(alternate, 'private.txt') }), /Git control|Council state/);
+    await assert.rejects(files.write({ path: join(alternate, 'new', 'file.txt'), content: 'blocked' }), /Git control|Council state/);
+    assert.equal(readFileSync(original, 'utf8'), 'private fixture');
+    assert.deepEqual(readdirSync(metadata), ['private.txt']);
+  });
+}
 
 test('parent symlinks or junctions cannot redirect reads, writes or new directories', async t => {
   const { root, outside, files } = fixture(t);
@@ -119,4 +181,87 @@ test('aborted file operations do not modify the project', async t => {
   await assert.rejects(files.read({ path }, controller.signal));
   await assert.rejects(files.write({ path, content: 'blocked' }, controller.signal));
   assert.equal(readFileSync(path, 'utf8'), 'original');
+});
+
+for (const operation of ['read', 'write']) test(`cancellation interrupts delayed ${operation} metadata without issuing later file operations`, { timeout: 5000 }, async t => {
+  const { root, files } = fixture(t);
+  const path = join(root, 'existing.txt'); writeFileSync(path, 'original');
+  await files.contains(path); // Resolve the shared canonical-root lookup before injection.
+  const controller = new AbortController();
+  const originals = Object.fromEntries(['lstat', 'realpath', 'open', 'mkdir', 'rename', 'unlink'].map(name => [name, fs[name]]));
+  const calls = [];
+  let notify, release;
+  const started = new Promise(resolve => { notify = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let stalled = false, observed;
+  try {
+    for (const [name, original] of Object.entries(originals)) fs[name] = async (...args) => {
+      calls.push(name);
+      if (name === 'lstat' && args[0] === path && !stalled) { stalled = true; notify(); await gate; }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    const work = operation === 'read' ? files.read({ path }, controller.signal) : files.write({ path, content: 'must not be written' }, controller.signal);
+    observed = work.then(() => ({ completed: true }), error => ({ error }));
+    await started;
+    controller.abort();
+    const settled = await Promise.race([observed, delay(200).then(() => ({ stalled: true }))]);
+    assert.equal(settled.error?.name, 'AbortError', 'Metadata cancellation must settle without waiting for its filesystem reply.');
+    const countAtAbort = calls.length;
+    release();
+    await nextTurn(); await nextTurn();
+    assert.equal(calls.length, countAtAbort, 'A late metadata reply must not resume file operations.');
+    assert.equal(calls.includes('open'), false);
+    assert.equal(calls.includes('rename'), false);
+    assert.equal(readFileSync(path, 'utf8'), 'original');
+    assert.deepEqual(readdirSync(root), ['existing.txt']);
+  } finally {
+    release();
+    if (observed) await observed;
+    for (const [name, original] of Object.entries(originals)) fs[name] = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('Windows atomic file publication retries transient sharing failures without changing its target', { skip: process.platform !== 'win32' }, async t => {
+  const { root, files } = fixture(t);
+  const path = join(root, 'file.txt'); writeFileSync(path, 'original');
+  const original = fs.rename;
+  const targets = [];
+  try {
+    fs.rename = async (...args) => {
+      targets.push(args[1]);
+      if (targets.length < 3) throw Object.assign(new Error('Injected transient sharing violation.'), { code: 'EPERM' });
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    assert.equal(await files.write({ path, content: 'published after retry' }), null);
+    assert.deepEqual(targets, [path, path, path]);
+    assert.equal(readFileSync(path, 'utf8'), 'published after retry');
+    assert.deepEqual(readdirSync(root), ['file.txt']);
+  } finally { fs.rename = original; syncBuiltinESMExports(); }
+});
+
+test('cancelling Windows sharing retries leaves the original file and removes staging data', { skip: process.platform !== 'win32' }, async t => {
+  const { root, files } = fixture(t);
+  const path = join(root, 'file.txt'); writeFileSync(path, 'original');
+  const original = fs.rename;
+  const controller = new AbortController();
+  let notify, calls = 0;
+  const attempted = new Promise(resolve => { notify = resolve; });
+  let observed;
+  try {
+    fs.rename = async () => {
+      calls++; notify();
+      throw Object.assign(new Error('Injected transient sharing violation.'), { code: 'EBUSY' });
+    };
+    syncBuiltinESMExports();
+    observed = files.write({ path, content: 'must not be published' }, controller.signal).then(() => undefined, error => error);
+    await attempted;
+    controller.abort();
+    assert.equal((await observed)?.name, 'AbortError');
+    assert.equal(calls, 1, 'Cancellation must prevent another publication attempt.');
+    assert.equal(readFileSync(path, 'utf8'), 'original');
+    assert.deepEqual(readdirSync(root), ['file.txt']);
+  } finally { controller.abort(); if (observed) await observed; fs.rename = original; syncBuiltinESMExports(); }
 });

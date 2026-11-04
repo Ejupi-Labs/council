@@ -36,8 +36,8 @@ export interface PruneResult {
 }
 
 export function summarizeRun(run: RunRecord, revision = 1): RunSummary {
-  let truncated = run.steps.length > 64 || (run.error?.length ?? 0) > 2048 || run.steps.some(step => (step.result.error?.length ?? 0) > 1024);
-  const workspaces = run.workspaces?.map(artifact => {
+  let truncated = run.steps.length > 64 || (run.workspaces?.length ?? 0) > 64 || (run.error?.length ?? 0) > 2048 || run.steps.some(step => (step.result.error?.length ?? 0) > 1024);
+  const workspaces = run.workspaces?.slice(0, 64).map(artifact => {
     const copy = { ...artifact };
     if (typeof copy.exportError === 'string' && copy.exportError.length > 1024) { copy.exportError = copy.exportError.slice(0, 1024); truncated = true; }
     return copy;
@@ -49,6 +49,7 @@ export function summarizeRun(run: RunRecord, revision = 1): RunSummary {
     output: run.output?.slice(0, 16_000), outputTruncated: (run.output?.length ?? 0) > 16_000,
     error: run.error?.slice(0, 2048), workspaces, fullResultResource: `council://runs/${run.id}`,
   };
+  if ((run.workspaces?.length ?? 0) > 64) summary.workspacesTruncated = true;
   if (truncated) summary.summaryTruncated = true;
   const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
   if (bytes(summary) <= MAX_RUN_SUMMARY_BYTES) return summary;

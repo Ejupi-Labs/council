@@ -64,3 +64,19 @@ test('eight-KiB event data keeps a maximum thousand-event MCP response below the
   assert.equal(oversized.data.dataTruncated, true);
   assert.equal(source.data.text0.length, 1000);
 });
+
+test('artifact inspection stays bounded for large direct-API histories and leaves omitted full results intact', () => {
+  const artifacts = Array.from({ length: 2000 }, (_, index) => ({ agent: 'codex', path: `/managed/worktrees/${index}/codex`, patchPath: `/managed/patches/${index}/codex.patch`, baseCommit: 'a'.repeat(40), changed: false }));
+  const source = { ...run(), workspaces: artifacts };
+  let inspected = 0;
+  for (let index = 64; index < artifacts.length; index++) Object.defineProperty(artifacts[index], 'exportError', { configurable: true, enumerable: true, get() { inspected++; throw new Error('Summary must not inspect entries beyond its artifact budget.'); } });
+  const summary = summarizeRun(source);
+  assert.equal(inspected, 0);
+  assert.equal(summary.workspaces.length, 64);
+  assert.equal(summary.workspacesTruncated, true);
+  assert.equal(summary.summaryTruncated, true);
+  for (let index = 0; index < 64; index++) assert.deepEqual(summary.workspaces[index], artifacts[index]);
+  assert.equal(source.workspaces, artifacts);
+  assert.equal(source.workspaces.length, 2000);
+  assert.ok(Buffer.byteLength(JSON.stringify(summary)) <= MAX_RUN_SUMMARY_BYTES);
+});
