@@ -81,10 +81,29 @@ function limit(value) {
 function overBudget(kind, maximum) {
     throw new Error(`Git status ${kind} exceeds ${maximum === GIT_STATUS_COMPONENT_BYTES ? '64 MiB' : `${maximum} bytes`}.`);
 }
-/** Validate/count first, then allocate and copy exactly once. Limits can be reduced for bounded callers/tests. */
-export function gitStatusUntrackedPaths(output, limits = {}) {
+/** A working gitlink without a matching index type needs direct repository inspection. */
+function gitlinkCandidatePathStart(output, start, end) {
+    const kind = output[start];
+    if (kind !== 49 && kind !== 50)
+        return 0;
+    let indexIsGitlink = true;
+    // Validated v2 ordinary/rename metadata has fixed-width XY, submodule and mode fields.
+    for (let index = 0; index < 6; index++) {
+        const byte = index === 0 ? 49 : index === 1 ? 54 : 48;
+        if (output[start + 24 + index] !== byte)
+            return 0;
+        if (output[start + 17 + index] !== byte)
+            indexIsGitlink = false;
+    }
+    if (indexIsGitlink)
+        return 0;
+    const headHashEnd = tokenEnd(output, start + 31, end), indexHashEnd = tokenEnd(output, headHashEnd + 1, end);
+    return kind === 50 ? tokenEnd(output, indexHashEnd + 1, end) + 1 : indexHashEnd + 1;
+}
+/** Two scans, one exact allocation. Candidate paths are already bounded by tracked metadata. */
+export function gitStatusDiscovery(output, limits = {}) {
     const maxTracked = limit(limits.trackedBytes), maxUntracked = limit(limits.untrackedBytes);
-    let tracked = 0, untracked = 0, position = 0;
+    let tracked = 0, untracked = 0, candidateBytes = 0, position = 0;
     while (position < output.length) {
         const start = position, end = output.indexOf(0, start);
         if (end < 0 || end - start < 3 || output[start + 1] !== 32)
@@ -92,13 +111,16 @@ export function gitStatusUntrackedPaths(output, limits = {}) {
         const kind = output[start];
         position = end + 1;
         if (kind === 63) {
-            untracked += end - start - 1; // Exclude '? ', include the pathname's NUL.
+            untracked += end - start - 1;
             if (untracked > maxUntracked)
                 overBudget('untracked paths', maxUntracked);
             continue;
         }
         if (kind === 49 || kind === 50 || kind === 117) {
             trackedEntry(output, start, end, kind);
+            const candidate = gitlinkCandidatePathStart(output, start, end);
+            if (candidate)
+                candidateBytes += end - candidate + 1;
             if (kind === 50) {
                 const originalEnd = output.indexOf(0, position);
                 if (originalEnd <= position)
@@ -107,24 +129,34 @@ export function gitStatusUntrackedPaths(output, limits = {}) {
             }
         }
         else if (kind !== 35 && kind !== 33)
-            malformed(); // Extensible headers and ignored paths are not staged.
+            malformed();
         tracked += position - start;
         if (tracked > maxTracked)
             overBudget('tracked metadata', maxTracked);
     }
-    const result = Buffer.allocUnsafe(untracked);
-    let written = 0;
+    if (candidateBytes > tracked)
+        malformed();
+    const result = Buffer.allocUnsafe(untracked + candidateBytes);
+    let written = 0, candidateWritten = untracked;
     position = 0;
     while (position < output.length) {
         const start = position, end = output.indexOf(0, start), kind = output[start];
         position = end + 1;
         if (kind === 63)
             written += output.copy(result, written, start + 2, end + 1);
-        else if (kind === 50)
-            position = output.indexOf(0, position) + 1;
+        else {
+            const candidate = gitlinkCandidatePathStart(output, start, end);
+            if (candidate)
+                candidateWritten += output.copy(result, candidateWritten, candidate, end + 1);
+            if (kind === 50)
+                position = output.indexOf(0, position) + 1;
+        }
     }
-    if (written !== untracked)
+    if (written !== untracked || candidateWritten !== result.length)
         malformed();
-    return result;
+    return { untracked: result.subarray(0, untracked), gitlinks: result.subarray(untracked) };
+}
+export function gitStatusUntrackedPaths(output, limits = {}) {
+    return gitStatusDiscovery(output, limits).untracked;
 }
 //# sourceMappingURL=git-status.js.map

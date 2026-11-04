@@ -118,6 +118,10 @@ Internal cleanup/patch-repair leases are bound to their Council instance. Gracef
 
 Patch formatting ignores repository display settings and inherited Git repository/index/config redirection, while preserving normal network and authentication environment. Dirty tracked or untracked submodule contents require separate review and export; parent patch publication and ordinary cleanup refuse to hide them. Clean gitlink updates still require the referenced nested commits to be available when applied. Worktrees for nested projects require that folder to exist in the captured commit.
 
+New embedded repositories also need separate review. Before publishing a parent patch, Council checks collapsed untracked repositories and changes from regular/symlink index entries into gitlinks, including intent-to-add and renamed targets. Dirty tracked or untracked child files fail the export; the retained worktree and any previously published patch remain available. Commit or separately export the child work deliberately before retrying. A clean gitlink patch contains a commit reference, so preserve the matching nested repository and commits separately.
+
+This conditional child inspection requires a representable UTF-8 directory path and a real embedded `.git` directory within the retained worktree. Gitfile, symlink, common-directory and alternates redirections are refused before additional child Git inspection. Standard indexed submodules keep their existing parent-status checks. Ordinary filenames retain raw NUL-delimited bytes, including supported non-UTF-8 POSIX names. Staging treats discovered names literally, including colon-prefixed Git pathspec syntax, and omits inherited pathspec-selector environment variables without changing vendor login files or the caller's environment. These checks do not provide a universal operating-system sandbox.
+
 To regenerate a missing, pending or stale patch for an existing terminal run:
 
 ```sh

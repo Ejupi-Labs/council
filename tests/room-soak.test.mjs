@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { roomSoakDiagnostic, roomSoakEntryFailure } from '../scripts/room-soak.mjs';
+import { roomSoakDiagnostic, roomSoakEntryFailure, roomSoakTraceStorage } from '../scripts/room-soak.mjs';
 
 const repository = realpathSync.native(fileURLToPath(new URL('../', import.meta.url))), script = realpathSync.native(fileURLToPath(new URL('../scripts/room-soak.mjs', import.meta.url)));
 const events = output => output.trim().split(/\r?\n/).filter(line => line.startsWith('{')).map(line => JSON.parse(line));
@@ -95,9 +95,40 @@ test('invalid room-soak options fail before starting a workload or creating a pr
   assert.equal(captured.status, 1); assert.equal(captured.stdout, ''); assert.match(captured.stderr, /Duration must be/);
 });
 
+test('SQLite lock provenance is deferred until transaction unwind and excludes SQL and error bodies', async () => {
+  for (const phase of ['begin', 'commit', 'operation']) {
+    const secret = 'PRIVATE_SQL_AND_ERROR_BODY', captured = [];
+    const failure = Object.assign(new Error(secret), { errcode: 5 });
+    failure.stack = 'Error: ' + secret + '\n    at CouncilStore.createRun (file:///fixture/store.js:1:1)\n    at RoomManager.launch (file:///fixture/rooms.js:1:1)';
+    class ProbeStore {
+      constructor() { this.db = { isTransaction: false, exec: sql => {
+        if (sql === 'BEGIN IMMEDIATE') { if (phase === 'begin') throw failure; this.db.isTransaction = true; }
+        if (sql === 'COMMIT' && phase === 'commit') throw failure;
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') this.db.isTransaction = false;
+      } }; }
+      transaction() {
+        this.db.exec('BEGIN IMMEDIATE');
+        try { if (phase === 'operation') throw failure; this.db.exec('COMMIT'); }
+        catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      }
+    }
+    const store = new ProbeStore();
+    roomSoakTraceStorage(store, 'state', value => { assert.equal(store.db.isTransaction, false); captured.push(value); });
+    assert.throws(() => store.transaction(), error => error === failure);
+    assert.equal(captured.length, 0, 'Diagnostics must not send while a writer is held.');
+    await Promise.resolve();
+    assert.equal(captured.length, 1, 'One native error propagating through exec and transaction is recorded once.');
+    assert.equal(captured[0].area, 'state'); assert.equal(captured[0].phase, phase); assert.equal(captured[0].code, 5);
+    assert.deepEqual(captured[0].frames, ['CouncilStore.createRun', 'RoomManager.launch']);
+    assert.equal(JSON.stringify(captured).includes(secret), false);
+    assert.equal(Object.hasOwn(captured[0], 'sql'), false); assert.equal(Object.hasOwn(captured[0], 'message'), false);
+  }
+});
+
 test('entry failure detection preserves public terminal errors without misclassifying expected live states', () => {
   assert.match(roomSoakEntryFailure({ status: 'failed', error: 'database is locked' }).message, /^Room failed before task entry: database is locked$/);
   assert.match(roomSoakEntryFailure({ status: 'cancelled', error: 'Cancellation was accepted.' }).message, /Cancellation was accepted/);
+  assert.match(roomSoakEntryFailure({ status: 'failed', error: 'database is locked' }, 'discussion').message, /^Room failed before discussion entry: database is locked$/);
   for (const status of ['idle', 'ready', 'running', 'paused', 'completed', 'needs_attention']) assert.equal(roomSoakEntryFailure({ status }), undefined);
 });
 
@@ -113,24 +144,31 @@ test('failure diagnostics bound complete metadata and exclude prompts, output, p
     workers: [{ pid: 12345, connected: true, exited: false, stderr: secret + '\nstate.degraded\ndatabase is locked\n', output: secret }],
     counts: { runs: 150, activeRuns: 0, slots: 100, slotWaiters: 100, instances: 100, privateBody: secret },
     readFailures: [{ area: 'runs', code: 5, body: secret }, { area: secret, code: 6 }],
+    storageErrorCount: 100, storageErrors: Array.from({ length: 100 }, () => ({ area: 'state', phase: 'begin', code: 5, at: 123,
+      sql: secret, message: secret, frames: ['CouncilStore.createRun', secret] })),
+
   });
   const json = JSON.stringify(diagnostic);
   assert.ok(Buffer.byteLength(json) < 64 * 1024); assert.equal(json.includes(secret), false);
   assert.equal(diagnostic.error, 'database is locked'); assert.equal(diagnostic.truncated, true);
   assert.ok(diagnostic.omitted.tasks > 0); assert.equal(diagnostic.omitted.runs, 150 - diagnostic.runs.length);
   assert.deepEqual(diagnostic.readFailures, [{ area: 'runs', code: 5 }]);
+  assert.equal(diagnostic.storageErrors.length, 8); assert.equal(diagnostic.omitted.storageErrors, 92);
+  assert.deepEqual(diagnostic.storageErrors[0].frames, ['CouncilStore.createRun']);
   assert.equal(diagnostic.workers[0].stderr.hasContent, true);
   assert.ok(diagnostic.workers[0].stderr.signals.includes('state.degraded'));
 });
 
 test('a real child pre-dispatch failure reports its cause and pre-cleanup state while draining every worker', { timeout: 60000 }, () => {
+  for (const phase of ['task', 'discussion']) {
   const parent = realpathSync.native(tmpdir()), source = realpathSync.native(mkdtempSync(join(parent, 'council-room-soak-failure-')));
   mkdirSync(join(source, 'scripts')); cpSync(join(repository, 'dist'), join(source, 'dist'), { recursive: true });
   writeFileSync(join(source, 'package.json'), readFileSync(join(repository, 'package.json')));
   writeFileSync(join(source, 'scripts', 'coordination-soak.mjs'), readFileSync(join(repository, 'scripts', 'coordination-soak.mjs')));
   const original = readFileSync(script, 'utf8'), site = "  process.on('disconnect', () => { void service.close()";
   assert.equal(original.split(site).length, 2);
-  const injection = "  const start = service.start.bind(service); service.start = input => { if (input.task.startsWith('Room task ')) throw new Error('Deliberate offline pre-dispatch failure.'); return start(input); };\n";
+  const condition = phase === 'task' ? "input.task.startsWith('Room task ')" : "input.mode === 'parallel'";
+  const injection = "  const start = service.start.bind(service); service.start = input => { if (" + condition + ") throw Object.assign(new Error('Deliberate offline pre-dispatch failure.'), { errcode: 5 }); return start(input); };\n";
   writeFileSync(join(source, 'scripts', 'room-soak.mjs'), original.replace(site, injection + site));
   let captured, retained, verified = false;
   try {
@@ -139,14 +177,15 @@ test('a real child pre-dispatch failure reports its cause and pre-cleanup state 
     }); assert.fail('Injected pre-dispatch failure must fail the soak.'); } catch (error) { captured = error; }
     assert.equal(captured.status, 1, captured.stderr);
     const rows = events(captured.stdout), summary = rows.at(-1), diagnostic = rows.find(row => row.event === 'failure_diagnostic')?.diagnostic;
-    assert.equal(summary.status, 'failed'); assert.match(summary.error, /Room failed before task entry: Deliberate offline pre-dispatch failure/);
-    assert.equal(summary.error.includes('Timed out: task entry'), false); assert.equal(summary.fakeAgentCalls, 2);
+    assert.equal(summary.status, 'failed'); assert.ok(summary.error.includes('Room failed before ' + phase + ' entry: Deliberate offline pre-dispatch failure'));
+    assert.equal(summary.error.includes('Timed out: ' + phase + ' entry'), false); assert.equal(summary.fakeAgentCalls, phase === 'task' ? 2 : 0);
     assert.equal(summary.workersStarted, 2); assert.equal(summary.workersExited, 2); assert.equal(summary.fixtureRemoved, false);
     assert.equal(diagnostic.room.status, 'failed'); assert.equal(diagnostic.room.error, 'Deliberate offline pre-dispatch failure.');
-    assert.match(diagnostic.phase, /^task entry/); assert.equal(diagnostic.workers.length, 2);
+    assert.ok(diagnostic.phase.startsWith(phase + ' entry')); assert.equal(diagnostic.workers.length, 2);
     assert.ok(diagnostic.workers.every(worker => worker.exited === false), 'Failure state must be captured before worker shutdown.');
-    assert.ok(diagnostic.workers.some(worker => worker.lastReply?.status === 'running'));
-    assert.equal(diagnostic.runs.length, 1); assert.equal(diagnostic.runs[0].status, 'completed');
+    assert.ok(diagnostic.workers.some(worker => worker.lastReply?.status === (phase === 'task' ? 'running' : 'discussing')));
+    assert.ok(diagnostic.workers.some(worker => worker.storageErrors.some(error => error.area === 'rooms' && error.phase === 'operation' && error.code === 5)));
+    assert.equal(diagnostic.runs.length, phase === 'task' ? 1 : 0); if (phase === 'task') assert.equal(diagnostic.runs[0].status, 'completed');
     assert.ok(diagnostic.room.tasks.every(task => task.runId === undefined));
     retained = realpathSync.native(summary.fixture); assert.equal(dirname(retained), parent); assert.ok(basename(retained).startsWith('council-room-soak-'));
     for (const name of readdirSync(retained).filter(name => name.startsWith('fixture-'))) {
@@ -163,6 +202,7 @@ test('a real child pre-dispatch failure reports its cause and pre-cleanup state 
       rmSync(retained, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       rmSync(source, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
+  }
   }
 });
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gitStatusUntrackedPaths, GIT_STATUS_COMPONENT_BYTES, GIT_STATUS_OUTPUT_BYTES } from '../dist/git-status.js';
+import { gitStatusDiscovery, gitStatusUntrackedPaths, GIT_STATUS_COMPONENT_BYTES, GIT_STATUS_OUTPUT_BYTES } from '../dist/git-status.js';
 
 const hash = 'a'.repeat(40), zero = '0'.repeat(40), nul = Buffer.from([0]);
 const ordinary = (path, sub = 'N...') => Buffer.concat([Buffer.from(`1 .M ${sub} 100644 100644 100644 ${hash} ${hash} `), Buffer.from(path), nul]);
@@ -71,4 +71,38 @@ test('component limits can be reduced but cannot disable the production bounds',
     assert.throws(() => gitStatusUntrackedPaths(Buffer.alloc(0), { trackedBytes: value }), /component limits/);
     assert.throws(() => gitStatusUntrackedPaths(Buffer.alloc(0), { untrackedBytes: value }), /component limits/);
   }
+});
+
+test('intent gitlink candidates retain raw paths without misclassifying normal intent files or full gitlinks', () => {
+  const raw = Buffer.concat([Buffer.from('nested-'), Buffer.from([0xff, 0x80])]);
+  const intent = Buffer.concat([Buffer.from(`1 .A S... 000000 000000 160000 ${zero} ${zero} `), raw, nul]);
+  const normalIntent = Buffer.from(`1 .A N... 000000 000000 100644 ${zero} ${zero} ordinary\0`);
+  const fullGitlink = Buffer.from(`1 A. S... 000000 160000 160000 ${zero} ${hash} staged\0`);
+  const cleanReference = Buffer.from(`1 .M SC.. 160000 160000 160000 ${hash} ${hash} registered\0`);
+  const status = Buffer.concat([untracked('plain'), intent, normalIntent, fullGitlink, cleanReference, rename('file', '? false-candidate/')]);
+  const found = gitStatusDiscovery(status);
+  assert.deepEqual(found.untracked, Buffer.from('plain\0'));
+  assert.deepEqual(found.gitlinks, Buffer.concat([raw, nul]));
+  status.fill(0); assert.deepEqual(found.gitlinks, Buffer.concat([raw, nul]));
+});
+
+test('intent candidate bytes remain within the original tracked component budget', () => {
+  const intent = Buffer.from(`1 .A S... 000000 000000 160000 ${zero} ${zero} child\0`);
+  const found = gitStatusDiscovery(intent, { trackedBytes: intent.length, untrackedBytes: 0 });
+  assert.equal(found.untracked.length, 0); assert.deepEqual(found.gitlinks, Buffer.from('child\0'));
+  assert.throws(() => gitStatusDiscovery(intent, { trackedBytes: intent.length - 1, untrackedBytes: 0 }), /tracked metadata/);
+  const ordinary = Buffer.from(`1 .M N... 100644 100644 100644 ${zero} ${zero} filename\0`);
+  assert.equal(gitStatusDiscovery(ordinary).gitlinks.length, 0, 'Zero hashes alone never select or reject a candidate.');
+  const sha256 = Buffer.from(`1 .A S... 000000 000000 160000 ${'0'.repeat(64)} ${'0'.repeat(64)} sha256-child\0`);
+  assert.deepEqual(gitStatusDiscovery(sha256).gitlinks, Buffer.from('sha256-child\0'));
+});
+
+test('working gitlink candidates include regular and symlink replacements and rename/copy targets with nonzero hashes', () => {
+  const regular = Buffer.from(`1 .T SC.. 100644 100644 160000 ${hash} ${hash} regular\0`);
+  const symlink = Buffer.from(`1 .T SC.. 120000 120000 160000 ${hash} ${hash} symlink\0`);
+  const renamed = Buffer.from(`2 RT SC.. 100644 100644 160000 ${hash} ${hash} R100 renamed target\0? old\0`);
+  const copied = Buffer.from(`2 CT SC.. 100644 100644 160000 ${hash} ${hash} C75 copied target\0? another old\0`);
+  const found = gitStatusDiscovery(Buffer.concat([regular, symlink, renamed, copied, untracked('plain')]));
+  assert.deepEqual(found.gitlinks, Buffer.from('regular\0symlink\0renamed target\0copied target\0'));
+  assert.deepEqual(found.untracked, Buffer.from('plain\0'));
 });

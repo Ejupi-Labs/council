@@ -119,7 +119,11 @@ council room-show ROOM_ID --workspace /absolute/path/to/project
 
 Recovery settles only a proven-dead owner. A live PID, including conservative PID-reuse handling, prevents takeover. Recovery retains partial evidence and never replays a workflow. Server-side waiting also checks the awaited room's owner. Neither operation assumes that a stale heartbeat proves process death.
 
-Failed and cancelled rooms retain history and cannot accept replacement tasks or resume. Inspect their task workflow IDs, full reports, pending exports and retained worktrees first. For a new read-only investigation, use an explicit continuation task:
+Failed and cancelled rooms retain history and cannot accept replacement tasks or resume. Inspect their task workflow IDs, full reports, pending exports and retained worktrees first.
+
+If room publication fails after a workflow was admitted, the owning manager drains that work and retains its workflow identity, task result and call accounting while keeping the room failed. A task can show completed evidence inside a failed room; that does not authorize replacement work or imply the whole room succeeded. If the completion cannot be read, the task is explicitly unverified and its estimated call reservation remains. A continuing room-store outage exposes a failed in-memory outcome and a shutdown repair failure rather than claiming a durable result. This recovery handles errors observed by the running manager; room and workflow databases do not share an atomic transaction, so abrupt process death during admission still requires inspection of retained workflow records.
+
+For a new read-only investigation, use an explicit continuation task:
 
 ```sh
 council continue RUN_ID --workspace /absolute/path/to/project --task "Inspect this failed result and its retained artifacts read-only. Identify what completed, what remains unverified, and a safe next task. Do not repeat edits."

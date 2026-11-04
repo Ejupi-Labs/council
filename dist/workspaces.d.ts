@@ -30,6 +30,8 @@ export declare class GitWorkspaces {
     forgetRun(runId: string): void;
     private patch;
     private assertExportableSubmodules;
+    private assertExportableRepositories;
+    private assertNestedRepositoryClean;
     cleanup(artifact: WorkspaceArtifact, options: CleanupOptions): Promise<void>;
     private cleanupWorktree;
 }

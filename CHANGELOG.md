@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Retain admitted workflow identities, exact call accounting, terminal task results and real patch/worktree evidence through handled room-publication rollback and lost acknowledgements. Preserve failed-room inspection without replay and reconcile shutdown evidence without replacing newer guidance.
+- Reject dirty embedded Git repositories before parent patch publication, including intent entries, regular/symlink replacements and rename targets. Refuse redirected child metadata and treat discovered filenames literally despite inherited pathspec selectors.
+- Show accurate completed, failed, cancelled and approval guidance, and distinguish initial full-history retries from newer-message checks while preserving drafts and loaded pages.
+- Record bounded, body-free SQLite lock provenance in offline room failure diagnostics and detect failed discussion admission before a generic entry timeout. Keep runtime SQLite timeouts and durability settings unchanged.
+
 - Remove one supervised Git discovery call per patch export while preserving raw path bytes, rename framing, repository-root scope and dirty-submodule refusal. Keep separate 64 MiB tracked/untracked limits inside a bounded combined status read.
 - Apply CLI event limits inside SQLite before decoding payloads, and document room, snapshot, retention and recovery options in command help.
 - Preserve terminal room failures and bounded pre-cleanup process/state diagnostics in offline endurance logs. Rotate verified, drained storage fixtures within the existing disk budget, and report artifact cycle limits separately from elapsed-duration qualification.

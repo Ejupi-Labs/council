@@ -24,7 +24,13 @@ const roomSchema = objectSchema({ title: text(200), brief: text(), members: { ty
 const ballotSchema = objectSchema({ vote: { type: 'string', enum: ['approve', 'revise', 'abstain'] }, rationale: text(),
   assignments: { type: 'object', additionalProperties: text(64) } }, ['vote', 'rationale', 'assignments']);
 type Ballot = { vote: 'approve' | 'revise' | 'abstain'; rationale: string; assignments: Record<string, string> };
-type Job = { controller: AbortController; runs: Set<string>; done: Promise<void>; settled: AbortController; cancelRequested: boolean; lastStateSuccess: number; snapshot: RoomRecord; instructionRevision: number; failure?: unknown };
+type PendingPublication = { runId: string; taskId?: string; estimated: number; dispatch: RoomMessage; retained: RoomMessage; result?: RunRecord; resultMessages?: RoomMessage[]; reconciled?: boolean; unverified?: boolean; conflict?: boolean };
+type Job = { controller: AbortController; runs: Set<string>; publications: Map<string, PendingPublication>; callsUsed: number; done: Promise<void>; settled: AbortController; cancelRequested: boolean; acceptedCancellationReason?: Error; lastStateSuccess: number; snapshot: RoomRecord; instructionRevision: number; failure?: unknown };
+const PUBLICATION_CONFLICT = 'A retained workflow conflicts with this task association. Inspect both linked workflows before replacing the task.';
+const UNVERIFIED_COMPLETION = 'Retained workflow completion could not be verified; its estimated call reservation is retained. Inspect the linked workflow before replacing this task.';
+function acceptedCancellation(job: Job, reason: unknown): boolean {
+  return job.acceptedCancellationReason !== undefined && reason === job.acceptedCancellationReason;
+}
 class InstructionsChanged extends Error {
   constructor() { super('Project manager instructions changed. In-flight results are retained; start a new discussion before dispatching further tasks.'); }
 }
@@ -296,23 +302,44 @@ export class RoomManager {
           }
           for (;;) {
             try {
-              const repaired = this.store.mutate(id, room => {
-                // Preserve current human guidance and all append-only history; only
-                // settle work this manager already drained, never replay a workflow.
+              const merge = (room: RoomRecord): void => {
+                // Preserve current human guidance and append-only history. A failed
+                // room cannot admit replacement calls; restore the exact drained ledger.
+                this.assertBackend(room);
                 room.status = 'failed'; room.error = saved.error ?? 'Room persistence failed; owned work was drained.';
-                room.callsUsed = Math.max(room.callsUsed, saved.callsUsed);
+                room.callsUsed = saved.callsUsed;
                 for (const task of room.tasks) {
                   const evidence = saved.tasks.find(candidate => candidate.id === task.id);
-                  if (evidence?.runId && !task.runId) task.runId = evidence.runId;
-                  if (evidence?.workspaces && !task.workspaces) task.workspaces = structuredClone(evidence.workspaces);
-                  if (evidence?.resultPreview && !task.resultPreview) task.resultPreview = evidence.resultPreview;
+                  if (evidence?.runId && (!task.runId || task.runId === evidence.runId)) {
+                    task.runId = evidence.runId;
+                    if (evidence.workspaces !== undefined) task.workspaces = structuredClone(evidence.workspaces);
+                    if (evidence.resultPreview !== undefined) task.resultPreview = evidence.resultPreview;
+                    if (['completed', 'failed', 'cancelled'].includes(evidence.status)) {
+                      task.status = evidence.status;
+                      if (evidence.error) task.error = evidence.error; else delete task.error;
+                    }
+                  } else if (evidence?.runId && task.runId !== evidence.runId) {
+                    task.status = 'failed'; task.error = PUBLICATION_CONFLICT;
+                    if (!room.error.includes(PUBLICATION_CONFLICT)) room.error += '\n' + PUBLICATION_CONFLICT;
+                  }
                   if (['pending', 'assigned', 'running'].includes(task.status)) {
                     task.status = task.status === 'running' ? 'failed' : 'cancelled'; task.error = room.error;
                   }
                 }
                 room.messages.push(...saved.messages.filter(entry => entry.id !== 'history-preview'));
                 room.messages.push(message('system', 'system', 'The failed room outcome was recovered after owned work drained. No tasks were replayed.'));
-              }, { owner: this.owner, release: true, preserveFailure: true });
+              };
+              let repaired: RoomRecord;
+              try { repaired = this.store.mutate(id, merge, { owner: this.owner, release: true, preserveFailure: true }); }
+              catch (error) {
+                if (!(error instanceof Error) || error.message !== 'Room ownership was lost.') throw error;
+                // A failed release may have committed before its acknowledgement
+                // was lost. Never reclaim an active, paused or foreign-owned room.
+                repaired = this.store.mutate(id, room => {
+                  if (room.status !== 'failed') throw new Error('Failed room recovery cannot replace another room outcome.');
+                  merge(room);
+                }, { requireIdle: true, release: true, preserveFailure: true });
+              }
               this.emergency.delete(id); this.publish(repaired); break;
             } catch (error) {
               const code = error && typeof error === 'object' && 'errcode' in error ? error.errcode : undefined;
@@ -361,12 +388,15 @@ export class RoomManager {
     beforePublish?.(room);
     this.publish(room); return room;
   }
-  private own(id: string, action: (room: RoomRecord) => void, release = false): RoomRecord {
-    return this.change(id, action, { owner: this.owner, ...(release ? { release: true } : {}) });
+  private own(id: string, action: (room: RoomRecord) => void, release = false, preserveFailure = false): RoomRecord {
+    return this.change(id, action, { owner: this.owner, ...(release ? { release: true } : {}), ...(preserveFailure ? { preserveFailure: true } : {}) });
   }
   private abort(job: Job): void {
     job.cancelRequested = true;
-    job.controller.abort(new Error('Room cancelled.'));
+    if (!job.controller.signal.aborted) {
+      job.acceptedCancellationReason = new Error('Room cancelled.');
+      job.controller.abort(job.acceptedCancellationReason);
+    }
     for (const run of job.runs) { try { this.service.cancel(run); } catch { /* Completion will retain the authoritative workflow failure. */ } }
   }
   private check(id: string, job: Job): void {
@@ -375,35 +405,45 @@ export class RoomManager {
     job.controller.signal.throwIfAborted();
   }
   private queue(id: string, operation: (job: Job) => Promise<void>, snapshot: RoomRecord): void {
-    const job: Job = { controller: new AbortController(), settled: new AbortController(), runs: new Set(), done: Promise.resolve(), cancelRequested: false,
+    const job: Job = { controller: new AbortController(), settled: new AbortController(), runs: new Set(), publications: new Map(), callsUsed: snapshot.callsUsed, done: Promise.resolve(), cancelRequested: false,
       lastStateSuccess: performance.now(), snapshot: structuredClone(snapshot), instructionRevision: snapshot.instructionRevision ?? 0 };
     this.jobs.set(id, job);
     const poll = setInterval(() => {
       try { this.check(id, job); }
       catch (error) {
-        if (job.cancelRequested && job.controller.signal.aborted && error === job.controller.signal.reason) return;
+        if (acceptedCancellation(job, error)) return;
         const code = error && typeof error === 'object' && 'errcode' in error ? error.errcode : undefined;
         if (typeof code === 'number' && ((code & 0xff) === 5 || (code & 0xff) === 6) && performance.now() - job.lastStateSuccess < 5000) return;
-        job.failure = error;
-        if (!job.controller.signal.aborted) job.controller.abort(error);
+        if (job.failure === undefined) job.failure = error;
+        if (!job.controller.signal.aborted) job.controller.abort(job.failure);
         this.abortRuns(job);
       }
     }, 100);
     poll.unref();
     job.done = Promise.resolve().then(() => operation(job)).catch(async error => {
-      const cancelled = job.cancelRequested && error === job.controller.signal.reason && !job.failure;
-      const instructionsChanged = error instanceof InstructionsChanged && !job.failure && !cancelled;
-      const paused = error instanceof PauseRequested && !job.failure && !cancelled;
+      const shutdownRefusal = this.closing && job.acceptedCancellationReason !== undefined && error instanceof Error && error.message === 'Council is shutting down.';
+      const wasCancellation = acceptedCancellation(job, error) || shutdownRefusal;
+      // An accepted cancellation can be followed by a real cross-room/poll fault.
+      // Preserve a received real error, but never report only cancellation text for that fault.
+      if (wasCancellation && job.failure !== undefined) error = job.failure;
+      const cancelled = wasCancellation && job.failure === undefined;
+      const instructionsChanged = error instanceof InstructionsChanged && job.failure === undefined && !cancelled;
+      const paused = error instanceof PauseRequested && job.failure === undefined && !cancelled;
       if (!instructionsChanged && !paused) this.abortRuns(job);
       await Promise.allSettled([...job.runs].map(run => this.service.completion(run)));
+      await this.collectPublications(job);
+      const unverified = [...job.publications.values()].some(publication => publication.unverified);
       try {
         this.own(id, room => {
-          if (instructionsChanged || paused && (room.instructionRevision ?? 0) !== job.instructionRevision) {
-            this.invalidateDecision(room); room.status = 'needs_attention'; room.error = error.message;
+          room.callsUsed = job.callsUsed;
+          for (const publication of job.publications.values()) this.mergePublication(room, publication, true);
+          const conflict = [...job.publications.values()].some(publication => publication.conflict);
+          if (!unverified && !conflict && (instructionsChanged || paused && (room.instructionRevision ?? 0) !== job.instructionRevision)) {
+            this.invalidateDecision(room); room.status = 'needs_attention'; room.error = error instanceof Error ? error.message : new InstructionsChanged().message;
             if (!instructionsChanged) room.error = new InstructionsChanged().message;
             room.messages.push(message('system', 'decision', room.error)); return;
           }
-          if (paused) {
+          if (paused && !unverified && !conflict) {
             this.assertInstructions(room, job);
             if (!room.pauseRequested || !room.checkpoint) throw new Error('Room pause continuation could not be verified.');
             room.status = 'paused'; delete room.error;
@@ -411,14 +451,20 @@ export class RoomManager {
           }
           room.status = cancelled ? 'cancelled' : 'failed';
           room.error = cancelled ? 'Room cancelled; partial results and isolated worktrees are retained.' : excerpt(error instanceof Error ? error.message : 'Room execution failed.');
+          if (unverified) { room.status = 'failed'; room.error += '\n' + UNVERIFIED_COMPLETION; }
+          if (conflict) { room.status = 'failed'; room.error += '\n' + PUBLICATION_CONFLICT; }
           for (const task of room.tasks) if (task.status === 'running' || task.status === 'assigned' || task.status === 'pending') {
             task.status = cancelled || task.status !== 'running' ? 'cancelled' : 'failed'; task.error = room.error;
           }
           room.messages.push(message('system', 'system', room.error));
-        }, true);
+        }, true, true);
       } catch {
         this.fault = 'Room persistence failed. Inspect local state before starting new room work.';
         const room = structuredClone(job.snapshot); room.status = 'failed'; room.error = this.fault;
+        room.callsUsed = job.callsUsed;
+        for (const publication of job.publications.values()) this.mergePublication(room, publication, true);
+        if (unverified) room.error += '\n' + UNVERIFIED_COMPLETION;
+        if ([...job.publications.values()].some(publication => publication.conflict)) room.error += '\n' + PUBLICATION_CONFLICT;
         delete room.pauseRequested; delete room.checkpoint;
         room.revision++; room.updatedAt = new Date().toISOString();
         for (const task of room.tasks) if (['pending', 'assigned', 'running'].includes(task.status)) {
@@ -429,7 +475,10 @@ export class RoomManager {
           room.messages.push(message('system', 'system', 'Retained workflow evidence from an owned call whose room publication failed.', runId));
         }
         this.emergency.set(id, room); this.publish(room);
-        for (const other of this.jobs.values()) { other.controller.abort(new Error(this.fault)); this.abortRuns(other); }
+        for (const other of this.jobs.values()) {
+          if (other.failure === undefined) other.failure = new Error(this.fault);
+          other.controller.abort(other.failure); this.abortRuns(other);
+        }
       }
     }).finally(() => { clearInterval(poll); if (this.jobs.get(id) === job) this.jobs.delete(id); job.settled.abort(); });
   }
@@ -554,24 +603,84 @@ export class RoomManager {
     if (room.callsUsed + required > room.maxCalls) throw new Error(`Room requires up to ${required} further calls, exceeding its remaining call budget ${room.maxCalls - room.callsUsed}.`);
   }
 
+  private retainResult(job: Job, publication: PendingPublication, result: RunRecord): void {
+    publication.result = result;
+    if (!['completed', 'failed', 'cancelled'].includes(result.status)) throw new Error(UNVERIFIED_COMPLETION);
+    if (!publication.reconciled) {
+      // Subtract the reservation first: both operands remain exact near MAX_SAFE_INTEGER.
+      const calls = BigInt(job.callsUsed) - BigInt(publication.estimated) + BigInt(result.steps.length);
+      if (calls < 0n || calls > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Room call accounting could not be represented safely. Inspect the retained workflow evidence.');
+      job.callsUsed = Number(calls); publication.reconciled = true; delete publication.unverified;
+    }
+  }
+
+  private mergePublication(room: RoomRecord, publication: PendingPublication, recovery = false): void {
+    if (recovery) for (const entry of [publication.dispatch, publication.retained]) {
+      if (!room.messages.some(value => value.id === entry.id)) room.messages.push(entry);
+    }
+    if (!publication.taskId) return;
+    const task = room.tasks.find(value => value.id === publication.taskId);
+    if (!task) return;
+    if (task.runId && task.runId !== publication.runId) {
+      publication.conflict = true;
+      task.status = 'failed'; task.error = PUBLICATION_CONFLICT;
+      return;
+    }
+    task.runId = publication.runId;
+    const result = publication.result;
+    if (!result || !['completed', 'failed', 'cancelled'].includes(result.status) || publication.unverified) {
+      task.status = 'failed'; task.error = UNVERIFIED_COMPLETION; return;
+    }
+    task.status = result.status === 'completed' ? 'completed' : result.status === 'cancelled' ? 'cancelled' : 'failed';
+    task.workspaces = structuredClone(result.workspaces ?? []);
+    task.resultPreview = excerpt(result.output ?? '');
+    if (result.error) task.error = result.error; else delete task.error;
+    publication.resultMessages ??= [
+      message(task.assignee ?? 'system', 'task', `${task.id}: ${task.status}\n${result.output ?? ''}`, result.id),
+      ...result.steps.filter(step => step.role.startsWith('advisor-for-')).map(step => message(step.agent, 'advisor', step.result.output, result.id)),
+    ];
+    for (const entry of publication.resultMessages) if (!room.messages.some(value => value.id === entry.id)) room.messages.push(entry);
+  }
+
+  private async collectPublications(job: Job): Promise<void> {
+    // Workflow reads and drainage must never await while a room writer is held.
+    await Promise.all([...job.publications.values()].map(async publication => {
+      if (publication.result && publication.reconciled) return;
+      let result: RunRecord | undefined;
+      try { result = await this.service.completion(publication.runId); }
+      catch { try { result = this.service.getRun(publication.runId); } catch { /* Retain the reservation and link. */ } }
+      if (result && ['completed', 'failed', 'cancelled'].includes(result.status)) {
+        try { this.retainResult(job, publication, result); return; } catch { /* Unsafe accounting cannot imply verified completion. */ }
+      }
+      publication.unverified = true;
+    }));
+  }
+
   private async launch(id: string, job: Job, input: WorkflowInput, taskId?: string): Promise<RunRecord> {
     this.check(id, job);
     const estimated = this.cost(input);
     let run!: RunRecord;
+    const publication: PendingPublication = { runId: '', ...(taskId ? { taskId } : {}), estimated,
+      dispatch: message('system', taskId ? 'task' : 'system', taskId ? `Dispatched ${taskId}.` : 'Discussion round dispatched.'),
+      retained: message('system', 'system', 'Retained workflow evidence from an owned call whose room publication failed.') };
     this.own(id, room => {
       this.assertInstructions(room, job);
       if (room.pauseRequested) throw new PauseRequested();
-      if (room.callsUsed + estimated > room.maxCalls) throw new Error('Room call budget exhausted before dispatch.');
+      if (estimated > room.maxCalls - job.callsUsed) throw new Error('Room call budget exhausted before dispatch.');
       this.check(id, job);
-      room.callsUsed += estimated;
       run = this.service.start(input, { roomId: id });
-      job.runs.add(run.id);
+      publication.runId = run.id; publication.dispatch.runId = run.id; publication.retained.runId = run.id;
+      // Admission is already real even if this separate room transaction rolls back.
+      job.runs.add(run.id); job.publications.set(run.id, publication); job.callsUsed += estimated;
+      room.callsUsed = job.callsUsed;
       if (taskId) { const task = room.tasks.find(value => value.id === taskId)!; task.status = 'running'; task.runId = run.id; }
-      room.messages.push(message('system', taskId ? 'task' : 'system', taskId ? `Dispatched ${taskId}.` : 'Discussion round dispatched.', run.id));
+      room.messages.push(publication.dispatch);
     });
     try {
       const result = await this.service.completion(run.id);
-      this.own(id, room => { room.callsUsed = Math.max(0, room.callsUsed - estimated + result.steps.length); });
+      this.retainResult(job, publication, result);
+      this.own(id, room => { room.callsUsed = job.callsUsed; });
+      if (!taskId) job.publications.delete(run.id);
       return result;
     } finally { job.runs.delete(run.id); }
   }
@@ -669,27 +778,31 @@ export class RoomManager {
     this.assertInstructions(this.get(id), job);
     this.reservePlan(this.get(id), false);
     const running = new Map<string, Promise<string>>();
-    let stopped: { reason: unknown } | undefined;
+    let stopped: { reason: unknown; wasAcceptedCancellation: boolean } | undefined;
     const retainFailure = (reason: unknown): void => {
-      // A real task failure outranks changed guidance or a pause, regardless of
-      // completion order. Every admitted task still publishes its own evidence.
-      if (!stopped || stopped.reason instanceof PauseRequested
-        || stopped.reason instanceof InstructionsChanged && !(reason instanceof PauseRequested)) stopped = { reason };
+      // Capture cancellation classification now: a later cancel must not relabel
+      // an earlier real fault that already became the controller's abort reason.
+      const wasAcceptedCancellation = acceptedCancellation(job, reason);
+      const upgradesCancellation = stopped?.wasAcceptedCancellation && !wasAcceptedCancellation && reason !== stopped.reason
+        && !(reason instanceof PauseRequested) && !(reason instanceof InstructionsChanged);
+      if (!stopped || stopped.reason instanceof PauseRequested || upgradesCancellation
+        || stopped.reason instanceof InstructionsChanged && !(reason instanceof PauseRequested)) stopped = { reason, wasAcceptedCancellation };
     };
     const executeTask = async (room: RoomRecord, task: RoomTask): Promise<void> => {
       const member = room.members.find(value => value.agent === task.assignee && value.role !== 'advisor');
       if (!member) throw new Error('Approved task assignee is unavailable.');
       const run = await this.launch(id, job, this.taskInput(room, task, member), task.id);
-      this.own(id, current => {
-        const target = current.tasks.find(value => value.id === task.id)!;
-        target.status = run.status === 'completed' ? 'completed' : run.status === 'cancelled' ? 'cancelled' : 'failed';
-        target.workspaces = structuredClone(run.workspaces ?? []);
-        target.resultPreview = excerpt(run.output ?? '');
-        if (run.error) target.error = run.error;
-        current.messages.push(message(member.agent, 'task', `${task.id}: ${target.status}\n${run.output ?? ''}`, run.id));
-        for (const step of run.steps) if (step.role.startsWith('advisor-for-')) current.messages.push(message(step.agent, 'advisor', step.result.output, run.id));
-      });
-      if (run.status !== 'completed') throw new Error(`Task ${task.id} ${run.status}: ${run.error ?? 'Incomplete workflow.'}`);
+      const publication = job.publications.get(run.id)!;
+      this.own(id, current => { this.mergePublication(current, publication); });
+      if (publication.conflict) throw new Error(PUBLICATION_CONFLICT);
+      job.publications.delete(run.id);
+      if (run.status !== 'completed') {
+        if (run.status === 'cancelled') {
+          if (job.acceptedCancellationReason !== undefined) throw job.acceptedCancellationReason;
+          if (job.failure !== undefined) throw job.failure;
+        }
+        throw new Error(`Task ${task.id} ${run.status}: ${run.error ?? 'Incomplete workflow.'}`);
+      }
     };
     for (;;) {
       if (!stopped) {
@@ -715,6 +828,8 @@ export class RoomManager {
       // waiting for an unrelated slow member of a fixed dispatch wave.
       running.delete(await Promise.race(running.values()));
     }
+    // A real task/publication failure must survive a cancellation accepted while draining.
+    if (stopped && !stopped.wasAcceptedCancellation && !(stopped.reason instanceof PauseRequested) && !(stopped.reason instanceof InstructionsChanged)) throw stopped.reason;
     this.check(id, job);
     if (stopped) throw stopped.reason;
     this.own(id, room => {

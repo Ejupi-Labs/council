@@ -43,7 +43,7 @@ function browserHarness(handler) {
     renderList() {}, renderRoom() {}, updateHistoryControls() {}, clearError() {},
     error: message => errors.push(message), refreshList: async () => {},
   });
-  runInContext("var token='fixture',serverBackend='mock',selected='A',busy=false,loading=0,selectionEpoch=0,roomLoading=false,historyOpen=false,historyMessages=[],historyCursor=null,historyBusy=false,historyEpoch=0,historyController,roomList=[],drafts=new Map(),draftOwner='A';", context);
+  runInContext("var token='fixture',serverBackend='mock',selected='A',busy=false,loading=0,selectionEpoch=0,roomLoading=false,historyOpen=false,historyLoaded=false,historyMessages=[],historyCursor=null,historyBusy=false,historyEpoch=0,historyController,roomList=[],drafts=new Map(),draftOwner='A';", context);
   context.room = browserRoom('A');
   runInContext(browserFunctions(['function backendMismatch()', 'function active()', 'function controls()',
     'function draftFor(', 'function saveVisibleDrafts()', 'function restoreDraft(', 'function clearRoomDraft(',
@@ -89,7 +89,7 @@ function historyHarness(handler) {
     api: (path, _body, signal) => { signals.push(signal); return handler(path); },
     updateHistoryControls() {}, messageNode: message => message, number: String, error: message => errors.push(message),
   });
-  runInContext("var room={id:'A'},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=true,historyCursor=100,historyEpoch=0,historyController;", context);
+  runInContext("var room={id:'A'},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=true,historyLoaded=true,historyCursor=100,historyEpoch=0,historyController;", context);
   context.historyMessages = [initial];
   runInContext(browserFunctions(['function invalidateHistory()', 'function dismissHistory()', 'function renderHistoryMessages(', 'async function loadHistory(']), context);
   return { context, dialog, view, errors, signals, run: code => runInContext(code, context) };

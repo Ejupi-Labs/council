@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { ManagedProcess, ProcessCleanupError } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { retryWindowsSharing } from './fs-retry.js';
-import { gitStatusUntrackedPaths, GIT_STATUS_OUTPUT_BYTES } from './git-status.js';
+import { gitStatusDiscovery, GIT_STATUS_OUTPUT_BYTES, DIRTY_SUBMODULE_ERROR } from './git-status.js';
 function segment(value) {
     const label = value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'workspace';
     return `${label}-${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
@@ -288,9 +288,11 @@ export class GitWorkspaces {
     }
     async exportWorktree(artifact, signal) {
         const manifest = await this.verify(artifact, signal);
-        const untracked = gitStatusUntrackedPaths(await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], undefined, signal, true));
+        const discovery = gitStatusDiscovery(await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], undefined, signal, true));
+        await this.assertExportableRepositories(manifest, discovery, signal);
+        const untracked = discovery.untracked;
         if (untracked.length > 0)
-            await this.git(manifest.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked, signal);
+            await this.git(manifest.path, ['--literal-pathspecs', 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked, signal);
         const patch = await this.patch(manifest, signal);
         signal.throwIfAborted();
         await this.atomicWrite(manifest.patchPath, patch, 'patches', false, signal);
@@ -308,11 +310,69 @@ export class GitWorkspaces {
             const entry = status[index];
             const submodule = /^[12] [^ ]+ (S[.C][.M][.U]) /.exec(entry)?.[1];
             if (submodule && (submodule[2] === 'M' || submodule[3] === 'U')) {
-                throw new Error('Uncommitted submodule files cannot be preserved in a parent Git patch. Inspect the retained worktree, then commit or separately export and review nested changes before retrying patch repair or cleanup.');
+                throw new Error(DIRTY_SUBMODULE_ERROR);
             }
             if (entry.startsWith('2 '))
                 index++; // A rename record has a second NUL-delimited original path.
         }
+    }
+    async assertExportableRepositories(manifest, discovery, signal) {
+        for (const [paths, directoriesOnly] of [[discovery.untracked, true], [discovery.gitlinks, false]]) {
+            let start = 0;
+            while (start < paths.length) {
+                const end = paths.indexOf(0, start);
+                if (!directoriesOnly || paths[end - 1] === 47)
+                    await this.assertNestedRepositoryClean(manifest, paths.subarray(start, end), signal);
+                start = end + 1;
+            }
+        }
+    }
+    async assertNestedRepositoryClean(manifest, rawPath, signal) {
+        signal.throwIfAborted();
+        const label = rawPath.toString('utf8');
+        if (!Buffer.from(label, 'utf8').equals(rawPath))
+            throw new Error('A nested Git repository path cannot be represented without changing its bytes. Inspect and export that repository separately.');
+        let child, gitDirectory;
+        try {
+            const relativePath = label.endsWith('/') ? label.slice(0, -1) : label;
+            const parts = relativePath.split('/');
+            if (!relativePath || isAbsolute(relativePath) || parts.some(part => !part || part === '.' || part === '..'))
+                throw new Error('Invalid nested repository path.');
+            const requested = resolve(manifest.path, ...parts);
+            if (!inside(manifest.path, requested))
+                throw new Error('Nested repository path is outside this worktree.');
+            await this.checked(requested, 'worktrees');
+            const [root, canonical] = await Promise.all([realpath(manifest.path), realpath(requested)]);
+            if (!inside(root, canonical) || !(await lstat(canonical)).isDirectory())
+                throw new Error('Nested repository path is outside this worktree.');
+            child = canonical;
+            gitDirectory = join(child, '.git');
+            await this.checked(gitDirectory, 'worktrees');
+            if (!(await lstat(gitDirectory)).isDirectory())
+                throw new Error('Nested .git files require explicit inspection.');
+            gitDirectory = await realpath(gitDirectory);
+            if (!inside(child, gitDirectory))
+                throw new Error('Nested Git metadata redirects outside its directory.');
+            for (const name of ['HEAD', 'config', 'config.worktree', 'index', 'objects', 'refs', 'packed-refs', 'shallow'])
+                await this.checked(join(gitDirectory, name), 'worktrees');
+            for (const redirect of [join(gitDirectory, 'commondir'), join(gitDirectory, 'objects', 'info', 'alternates')]) {
+                await this.checked(redirect, 'worktrees');
+                const entry = await lstat(redirect).catch(error => { if (error.code === 'ENOENT')
+                    return undefined; throw error; });
+                if (entry)
+                    throw new Error('Nested Git metadata redirects require explicit inspection.');
+            }
+            signal.throwIfAborted();
+        }
+        catch (error) {
+            if (signal.aborted)
+                throw error;
+            throw new Error('Nested Git repository metadata cannot be verified within this retained worktree. Inspect and export that repository separately; Git files, symlinks and shared metadata redirects are not followed.');
+        }
+        const status = await this.git(child, ['--git-dir=' + gitDirectory, '--work-tree=' + child, 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], undefined, signal);
+        signal.throwIfAborted();
+        if (status.length > 0)
+            throw new Error(DIRTY_SUBMODULE_ERROR);
     }
     cleanup(artifact, options) {
         return this.operation(signal => this.cleanupWorktree(artifact, options, signal), options?.signal);

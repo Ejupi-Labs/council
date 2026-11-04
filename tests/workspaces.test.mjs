@@ -594,7 +594,7 @@ test('combined export discovery removes one supervised call while retaining comp
   const commands = [], original = manager.git.bind(manager);
   manager.git = async (...args) => { commands.push({ cwd: args[0], args: args[1], combinedLimit: args[4] === true }); return original(...args); };
   const first = await manager.export(workspace), patch = readFileSync(first.patchPath);
-  assert.deepEqual(commands.map(call => call.args[0]), ['worktree', 'status', 'add', 'diff']);
+  assert.deepEqual(commands.map(call => call.args[0]), ['worktree', 'status', '--literal-pathspecs', 'diff']);
   assert.equal(commands[1].cwd, workspace.path); assert.ok(commands[1].args.includes('--untracked-files=all'));
   assert.equal(commands[1].combinedLimit, true); assert.ok(commands.filter(call => call.args[0] !== 'status').every(call => !call.combinedLimit));
   commands.length = 0; await manager.export(first);
@@ -640,4 +640,118 @@ test('POSIX combined discovery preserves a literal colon filename independently 
   const bytes = execFileSync('git', ['-C', workspace.path, 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], { windowsHide: true });
   const discovered = gitStatusUntrackedPaths(bytes);
   assert.deepEqual(discovered, Buffer.from(colon + '\0'), 'Discovery preserves literal bytes; pathspec interpretation is a separate add concern.');
+});
+
+async function embeddedRepository(t, stage) {
+  const value = fixture(t);
+  if (stage === 'regular' || stage === 'renamed' || stage === 'symlink') {
+    const name = stage === 'renamed' ? 'original' : 'nested';
+    writeFileSync(join(value.root, name), 'Original tracked candidate contents.\n');
+    if (stage === 'symlink') {
+      value.git('config', 'core.symlinks', 'false');
+      const hash = value.git('hash-object', '-w', '--', name).trim();
+      value.git('update-index', '--add', '--cacheinfo', '120000,' + hash + ',' + name);
+    } else value.git('add', '--', name);
+    value.git('commit', '--quiet', '-m', 'tracked candidate');
+  }
+  const workspace = await value.manager.create('embedded-' + stage, 'codex');
+  writeFileSync(join(workspace.path, 'base.txt'), 'Prior complete patch.\n');
+  const previous = await value.manager.export(workspace), patch = readFileSync(previous.patchPath);
+  const nested = join(workspace.path, 'nested');
+  if (stage === 'renamed') execFileSync('git', ['-C', workspace.path, 'mv', '--', 'original', 'nested'], { windowsHide: true });
+  if (stage === 'regular' || stage === 'renamed' || stage === 'symlink') await fsPromises.unlink(nested);
+  mkdirSync(nested);
+  const childGit = (...args) => execFileSync('git', ['-C', nested, ...args], { windowsHide: true, encoding: 'utf8' });
+  childGit('init', '--quiet'); childGit('config', 'user.name', 'Offline Child'); childGit('config', 'user.email', 'child@example.invalid');
+  childGit('config', 'core.autocrlf', 'false'); childGit('config', 'core.fsmonitor', 'false'); childGit('config', 'core.untrackedCache', 'false');
+  writeFileSync(join(nested, 'tracked.txt'), 'Committed child base.\n'); childGit('add', '.'); childGit('commit', '--quiet', '-m', 'child base');
+  if (stage === 'intent') execFileSync('git', ['-C', workspace.path, '-c', 'advice.addEmbeddedRepo=false', 'add', '--intent-to-add', '--', 'nested'], { windowsHide: true });
+  return { ...value, workspace, previous, patch, nested, childGit };
+}
+
+for (const stage of ['untracked', 'intent', 'regular', 'renamed', 'symlink']) for (const dirty of ['tracked', 'untracked', 'both']) {
+  test(`a ${stage} nested repository with ${dirty} dirty evidence never replaces its reviewed patch`, async t => {
+    const { manager, workspace, previous, patch, nested } = await embeddedRepository(t, stage);
+    if (dirty !== 'untracked') writeFileSync(join(nested, 'tracked.txt'), 'Retain uncommitted child evidence.\n');
+    if (dirty !== 'tracked') writeFileSync(join(nested, 'new.txt'), 'Retain untracked child evidence.\n');
+    const original = manager.git.bind(manager), calls = [];
+    manager.git = (...args) => { calls.push(args[1]); return original(...args); };
+    await assert.rejects(manager.export(previous), /Uncommitted submodule files cannot be preserved/);
+    assert.deepEqual(readFileSync(previous.patchPath), patch, 'A previously published patch remains byte-for-byte intact.');
+    assert.equal(calls.some(args => args.includes('add')), false, 'Dirty detection occurs before intent-to-add modifies the parent index.');
+    assert.equal(calls.some(args => args[0] === 'diff'), false, 'No incomplete gitlink patch is generated.');
+    assert.ok(calls.some(args => args.some(arg => arg.startsWith('--git-dir=')) && args.includes('--untracked-files=all') && args.includes('--ignore-submodules=none')));
+    assert.ok(existsSync(workspace.path));
+    if (dirty !== 'untracked') assert.equal(readFileSync(join(nested, 'tracked.txt'), 'utf8'), 'Retain uncommitted child evidence.\n');
+    if (dirty !== 'tracked') assert.equal(readFileSync(join(nested, 'new.txt'), 'utf8'), 'Retain untracked child evidence.\n');
+  });
+}
+
+for (const stage of ['untracked', 'intent', 'regular', 'renamed', 'symlink']) {
+  test(`a clean ${stage} nested Git reference remains exportable after its HEAD advances`, async t => {
+    const { manager, git, previous, nested, childGit } = await embeddedRepository(t, stage);
+    writeFileSync(join(nested, 'tracked.txt'), 'New committed child evidence.\n'); childGit('add', '.'); childGit('commit', '--quiet', '-m', 'advanced clean child');
+    const head = childGit('rev-parse', 'HEAD').trim(), exported = await manager.export(previous), patch = readFileSync(exported.patchPath, 'utf8');
+    assert.equal(exported.exportStatus, 'ready'); assert.ok(patch.includes('+Subproject commit ' + head));
+    assert.equal(patch.includes(head + '-dirty'), false); git('apply', '--check', exported.patchPath);
+  });
+}
+
+test('embedded .git files, symlinks and commondir redirects are refused before child Git inspection', async t => {
+  for (const redirect of ['file', 'symlink', 'commondir']) {
+    await t.test(redirect, async t => {
+      const { manager, dir, previous, patch, nested } = await embeddedRepository(t, 'untracked');
+      const metadata = join(nested, '.git'), originalMetadata = join(dir, 'child-metadata-' + redirect);
+      await fsPromises.rename(metadata, originalMetadata);
+      if (redirect === 'file') writeFileSync(metadata, 'gitdir: ' + originalMetadata + '\n');
+      else if (redirect === 'symlink') symlinkSync(originalMetadata, metadata, process.platform === 'win32' ? 'junction' : 'dir');
+      else {
+        mkdirSync(metadata);
+        writeFileSync(join(metadata, 'HEAD'), readFileSync(join(originalMetadata, 'HEAD')));
+        writeFileSync(join(metadata, 'index'), readFileSync(join(originalMetadata, 'index')));
+        writeFileSync(join(metadata, 'commondir'), originalMetadata + '\n');
+      }
+      const original = manager.git.bind(manager), calls = [];
+      manager.git = (...args) => { calls.push(args[1]); return original(...args); };
+      await assert.rejects(manager.export(previous), /Nested Git repository metadata cannot be verified/);
+      assert.equal(calls.some(args => args.some(arg => arg.startsWith('--git-dir='))), false);
+      assert.deepEqual(readFileSync(previous.patchPath), patch);
+    });
+  }
+});
+
+test('POSIX nested repository names with invalid UTF-8 fail explicitly while preserving the prior patch', { skip: process.platform === 'win32' }, async t => {
+  const { manager, workspace, previous, patch, nested } = await embeddedRepository(t, 'untracked');
+  const raw = Buffer.concat([Buffer.from(workspace.path + '/raw-nested-'), Buffer.from([0xff, 0x80])]);
+  try { await fsPromises.rename(nested, raw); }
+  catch (error) {
+    if (['EILSEQ', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) { t.skip('Filesystem rejects invalid UTF-8 filenames: ' + error.code); return; }
+    throw error;
+  }
+  await assert.rejects(manager.export(previous), /nested Git repository path cannot be represented/);
+  assert.deepEqual(readFileSync(previous.patchPath), patch);
+});
+
+test('literal staging ignores conflicting inherited Git pathspec selectors without changing caller settings', async t => {
+  const { manager, root, git } = fixture(t), workspace = await manager.create('literal-environment', 'codex');
+  writeFileSync(join(workspace.path, '[a].txt'), 'Bracket literal.\n'); writeFileSync(join(workspace.path, 'a.txt'), 'Plain literal.\n');
+  const keys = ['GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS', 'GIT_LITERAL_PATHSPECS'];
+  const saved = keys.map(key => process.env[key]); let exported;
+  try {
+    for (const key of keys) process.env[key] = '1';
+    exported = await manager.export(workspace);
+    for (const key of keys) assert.equal(process.env[key], '1', 'Sanitizing helper environments never edits the caller.');
+  } finally {
+    for (let index = 0; index < keys.length; index++) { if (saved[index] === undefined) delete process.env[keys[index]]; else process.env[keys[index]] = saved[index]; }
+  }
+  git('apply', '--check', exported.patchPath); git('apply', exported.patchPath);
+  assert.equal(readFileSync(join(root, '[a].txt'), 'utf8'), 'Bracket literal.\n'); assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'Plain literal.\n');
+});
+
+test('POSIX literal pathspec magic filenames survive complete export and patch application', { skip: process.platform === 'win32' }, async t => {
+  const { manager, root, git } = fixture(t), workspace = await manager.create('literal-magic-posix', 'codex');
+  const names = [':(exclude)victim', ':(top)victim', 'victim', 'marker'];
+  for (const name of names) writeFileSync(join(workspace.path, name), 'Complete literal contents for ' + name + '\n');
+  const exported = await manager.export(workspace); git('apply', '--check', exported.patchPath); git('apply', exported.patchPath);
+  for (const name of names) assert.equal(readFileSync(join(root, name), 'utf8'), 'Complete literal contents for ' + name + '\n');
 });

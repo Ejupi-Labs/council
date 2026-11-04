@@ -45,8 +45,12 @@ for (const boundary of ['task-result', 'budget-refund']) {
     assert.equal(failed, true); assert.equal(retained.status, 'failed'); assert.match(retained.error, /persistence failed/);
     assert.equal(manager.store.changeToken(), tokenAtFault.store, 'The failed writer cannot commit another durable room change.');
     assert.notEqual(manager.changeToken(), tokenAtFault.manager, 'The emergency publication must still invalidate cached room lists.');
-    if (boundary === 'task-result') assert.notEqual(durable.completedTasks, retained.tasks.filter(task => task.status === 'completed').length);
-    else assert.notEqual(durable.callsUsed, retained.callsUsed);
+    assert.equal(retained.tasks.filter(task => task.status === 'completed').length, 1,
+      'Known terminal task evidence survives the lost acknowledgment.');
+    if (boundary === 'task-result') assert.equal(durable.completedTasks, 1);
+    else assert.equal(durable.completedTasks, 0, 'The budget refund committed before the separate task-result publication.');
+    assert.equal(durable.callsUsed, retained.callsUsed, 'The exact absolute ledger survives the lost acknowledgment.');
+    assert.equal(durable.status, 'running'); assert.equal(retained.status, 'failed');
     assert.deepEqual(summary, { id: retained.id, backend: retained.backend, title: retained.title, status: retained.status,
       taskCount: retained.tasks.length, completedTasks: retained.tasks.filter(task => task.status === 'completed').length,
       callsUsed: retained.callsUsed, maxCalls: retained.maxCalls, revision: retained.revision, updatedAt: retained.updatedAt });

@@ -36,9 +36,9 @@ function diagnosticText(value, maximum = 256) {
 }
 
 /** A durable terminal outcome is more useful than a later generic entry timeout. */
-export function roomSoakEntryFailure(room) {
+export function roomSoakEntryFailure(room, phase = 'task') {
   if (!room || !['failed', 'cancelled'].includes(room.status)) return undefined;
-  return new Error(`Room ${room.status} before task entry: ${diagnosticText(room.error, 2048) || 'No public room error was recorded.'}`);
+  return new Error(`Room ${room.status} before ${phase === 'discussion' ? 'discussion' : 'task'} entry: ${diagnosticText(room.error, 2048) || 'No public room error was recorded.'}`);
 }
 
 /** Allowlisted fake-workload metadata only; never prompts, output or private bodies. */
@@ -46,8 +46,14 @@ export function roomSoakDiagnostic(input) {
   const number = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const text = value => diagnosticText(value, 128);
   const rows = (value, limit) => Array.isArray(value) ? value.slice(0, limit) : [];
+  const storageErrors = value => rows(value, 8).filter(entry => ['state', 'rooms'].includes(entry?.area)).map(entry => ({
+    area: entry.area, phase: ['begin', 'commit', 'rollback', 'statement', 'operation'].includes(entry.phase) ? entry.phase : 'operation',
+    code: number(entry.code), at: number(entry.at),
+    frames: rows(entry.frames, 8).filter(frame => typeof frame === 'string' && /^(?:CouncilStore|RoomStore|RoomManager|CouncilService)\.[A-Za-z_$][A-Za-z0-9_$]{0,95}$/.test(frame)),
+  }));
   const room = input.room;
   const result = { scenario: text(input.scenario), phase: text(input.phase), error: diagnosticText(input.error, 2048),
+    storageErrors: storageErrors(input.storageErrors), storageErrorCount: number(input.storageErrorCount),
     room: room ? { id: text(room.id), status: text(room.status), revision: number(room.revision), callsUsed: number(room.callsUsed),
       error: diagnosticText(room.error, 2048), taskCount: room.tasks?.length,
       tasks: rows(room.tasks, 16).map(task => ({ id: text(task.id), status: text(task.status), runId: text(task.runId), error: diagnosticText(task.error) })) } : undefined,
@@ -61,10 +67,12 @@ export function roomSoakDiagnostic(input) {
       return { pid: number(worker.pid), exited: Boolean(worker.exited), connected: Boolean(worker.connected),
         lastRequest: worker.lastRequest ? { operation: text(worker.lastRequest.operation), roomId: text(worker.lastRequest.roomId), request: number(worker.lastRequest.request) } : undefined,
         lastReply: worker.lastReply ? { ok: Boolean(worker.lastReply.ok), status: text(worker.lastReply.status), error: diagnosticText(worker.lastReply.error) } : undefined,
+        storageErrors: storageErrors(worker.storageErrors), storageErrorCount: number(worker.storageErrorCount),
+        storageErrorsOmitted: Math.max(0, (number(worker.storageErrorCount) ?? 0) - storageErrors(worker.storageErrors).length),
         stderr: { bytes: Buffer.byteLength(stderr), hasContent: Boolean(stderr),
           signals: ['state.degraded', 'process.degraded', 'database is locked', 'SQLITE_BUSY', 'SQLITE_LOCKED', 'cleanup could not be verified'].filter(value => stderr.includes(value)) } };
     }), readFailures: rows(input.readFailures, 6).filter(value => ['room', 'counts', 'runs', 'slots', 'waiters', 'instances'].includes(value.area)).map(value => ({ area: value.area, code: number(value.code) })), omitted: {}, truncated: false };
-  const collections = { tasks: result.room?.tasks ?? [], runs: result.runs, slots: result.slots, waiters: result.waiters, instances: result.instances, workers: result.workers };
+  const collections = { tasks: result.room?.tasks ?? [], runs: result.runs, slots: result.slots, waiters: result.waiters, instances: result.instances, workers: result.workers, storageErrors: result.storageErrors };
   while (Buffer.byteLength(JSON.stringify(result)) > DIAGNOSTIC_BYTES - 2048) {
     const collection = Object.values(collections).filter(value => value.length).sort((left, right) => Buffer.byteLength(JSON.stringify(right)) - Buffer.byteLength(JSON.stringify(left)))[0];
     if (!collection) throw new Error('The fixed room diagnostic metadata exceeds its byte bound.');
@@ -72,16 +80,41 @@ export function roomSoakDiagnostic(input) {
   }
   for (const [name, collection] of Object.entries(collections)) {
     const original = name === 'tasks' ? room?.tasks : input[name];
-    const total = name === 'waiters' ? input.counts?.slotWaiters : input.counts?.[name];
+    const total = name === 'waiters' ? input.counts?.slotWaiters : name === 'storageErrors' ? input.storageErrorCount : input.counts?.[name];
     result.omitted[name] = Math.max(0, (Array.isArray(original) ? original.length : 0) - collection.length, (number(total) ?? 0) - collection.length);
     if (result.omitted[name]) result.truncated = true;
   }
+  if (result.workers.some(worker => worker.storageErrorsOmitted > 0)) result.truncated = true;
   return result;
+}
+
+/** Capture only SQLite lock provenance; defer IPC until synchronous transactions unwind. */
+export function roomSoakTraceStorage(store, area, onError) {
+  const seen = new WeakSet(), database = store.db, originalExec = database.exec, originalTransaction = store.transaction;
+  const capture = (error, phase) => {
+    if (!error || typeof error !== 'object' || !Number.isInteger(error.errcode) || ![5, 6].includes(error.errcode & 0xff) || seen.has(error)) return;
+    seen.add(error);
+    const frames = [...String(error.stack ?? '').matchAll(/\bat (?:async )?((?:CouncilStore|RoomStore|RoomManager|CouncilService)\.[A-Za-z_$][A-Za-z0-9_$]*)\b/g)].slice(0, 8).map(match => match[1]);
+    const value = { area, phase, code: error.errcode, at: Date.now(), frames };
+    queueMicrotask(() => onError(value));
+  };
+  database.exec = function (sql, ...args) {
+    try { return originalExec.call(this, sql, ...args); }
+    catch (error) {
+      const verb = typeof sql === 'string' ? /^\s*(BEGIN(?: IMMEDIATE)?|COMMIT|ROLLBACK)\s*$/i.exec(sql)?.[1]?.split(' ')[0]?.toLowerCase() : undefined;
+      capture(error, verb ?? 'statement'); throw error;
+    }
+  };
+  store.transaction = function (...args) {
+    try { return originalTransaction.apply(this, args); }
+    catch (error) { capture(error, 'operation'); throw error; }
+  };
 }
 
 function failureDiagnostic(service, manager, workers, progress, error) {
   const data = { ...progress, error: error.message, workers: workers.map(worker => ({ pid: worker.child.pid, exited: worker.exited(),
-    connected: worker.child.connected, lastRequest: worker.lastRequest, lastReply: worker.lastReply, stderr: worker.stderr() })), readFailures: [] };
+    connected: worker.child.connected, lastRequest: worker.lastRequest, lastReply: worker.lastReply, stderr: worker.stderr(),
+    storageErrors: worker.storageErrors, storageErrorCount: worker.storageErrorCount })), readFailures: [] };
   const read = (area, operation) => { try { return operation(); } catch (failure) { data.readFailures.push({ area, code: failure?.errcode }); return undefined; } };
   data.room = progress.roomId && read('room', () => manager.metadata(progress.roomId));
   data.counts = read('counts', () => service.store.health().counts);
@@ -118,6 +151,9 @@ async function workerMain(project, runtime) {
       ...(status === 'failed' ? { error: 'Deliberate offline task failure.' } : {}) };
   } };
   const service = await CouncilService.open(loadConfig(project, { backend: 'mock', maxCalls: 128, maxConcurrency: 2 }), runner);
+  const storageError = value => send({ event: 'storage_error', value });
+  roomSoakTraceStorage(service.store, 'state', storageError);
+  roomSoakTraceStorage(service.rooms.store, 'rooms', storageError);
   process.on('disconnect', () => { void service.close().catch(error => { process.stderr.write(`${error.stack}\n`); process.exitCode = 1; }); });
   process.on('message', message => {
     if (message?.operation === 'release') { gates.get(message.gateId)?.({ status: message.status }); return; }
@@ -145,7 +181,7 @@ function spawnWorker(project, runtime, ledger, launcher) {
   const requests = new Map();
   let request = 0, exited = false, stderr = '', readyResolve, readyReject;
   const ready = new Promise((resolve_, reject) => { readyResolve = resolve_; readyReject = reject; });
-  const worker = { child, exited: () => exited, expectedExit: false, stderr: () => stderr,
+  const worker = { child, exited: () => exited, expectedExit: false, stderr: () => stderr, storageErrors: [], storageErrorCount: 0,
     call(operation, roomId) {
       return new Promise((resolve_, reject) => {
         if (exited || !child.connected) { reject(new Error('Offline worker is not connected.')); return; }
@@ -162,6 +198,7 @@ function spawnWorker(project, runtime, ledger, launcher) {
   child.on('message', message => {
     if (message?.event === 'ready') readyResolve();
     else if (message?.event === 'entered') ledger.push({ ...message, worker });
+    else if (message?.event === 'storage_error') { worker.storageErrorCount++; worker.storageErrors.push(message.value); if (worker.storageErrors.length > 8) worker.storageErrors.shift(); }
     else if (message?.reply) { worker.lastReply = { ok: message.ok, status: message.status, error: message.error }; const pending = requests.get(message.reply); requests.delete(message.reply); message.ok ? pending?.resolve(message) : pending?.reject(new Error(message.error)); }
   });
   child.on('error', error => { readyReject(error); for (const value of requests.values()) value.reject(error); requests.clear(); });
@@ -217,9 +254,9 @@ async function exercise(service, workers, ledger, scenario, signal, progress = {
     progress.phase = phase + ' entry (' + count + ')'; let nextStatusCheck = 0;
     return until(() => {
       const found = entries(phase, after); if (found.length >= count) return found;
-      if (phase === 'task' && performance.now() >= nextStatusCheck) {
+      if (performance.now() >= nextStatusCheck) {
         nextStatusCheck = performance.now() + 100;
-        const failure = roomSoakEntryFailure(manager.observation(room.id)); if (failure) throw failure;
+        const failure = roomSoakEntryFailure(manager.observation(room.id), phase); if (failure) throw failure;
       }
       return false;
     }, workers, signal, phase + ' entry');
@@ -326,10 +363,13 @@ export async function roomSoak(options, signal) {
       const fixture = realpathSync.native(mkdtempSync(join(temporary, 'fixture-'))), project = join(fixture, 'project');
       mkdirSync(project); fixtures++;
       let service, manager, workers = [], fixtureFailure;
-      const ledger = [], progress = {};
+      const ledger = [], progress = { storageErrors: [], storageErrorCount: 0 };
       try {
         service = await api.CouncilService.open(api.loadConfig(project, { backend: 'mock', maxCalls: 128, maxConcurrency: 2 }), { doctor: async () => [], run: async () => { throw new Error('The observer must never dispatch an agent.'); } });
         manager = service.rooms;
+        const storageError = value => { progress.storageErrorCount++; progress.storageErrors.push(value); if (progress.storageErrors.length > 8) progress.storageErrors.shift(); };
+        roomSoakTraceStorage(service.store, 'state', storageError);
+        roomSoakTraceStorage(manager.store, 'rooms', storageError);
         workers = [spawnWorker(project, runtime, ledger, launcher), spawnWorker(project, runtime, ledger, launcher)]; workersStarted += workers.length;
         await Promise.all(workers.map(async worker => {
           let timer;

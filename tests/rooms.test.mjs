@@ -404,7 +404,7 @@ test('PM guidance during execution drains an active task and stops further task 
   assert.ok(result.tasks[0].runId); assert.equal(result.tasks[1].runId, undefined);
 });
 
-test('dispatch admission and provider queueing are atomic and a synchronous start failure rolls back the room reservation', async t => {
+test('instruction-guarded dispatch rolls back the room reservation when synchronous start fails before admission', async t => {
   const { manager, service, requests } = fixture(t);
   const nativeStart = service.start.bind(service);
   service.start = value => {

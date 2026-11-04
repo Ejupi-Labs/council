@@ -191,8 +191,8 @@ function historyHarness(handler) {
     api: (path, _body, signal) => { calls.push({ path, signal }); return handler(path); },
     updateHistoryControls() {}, messageNode: value => value, number: String, error: message => errors.push(message),
   });
-  runInContext("var room={id:'A'},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=false,historyMessages=[],historyCursor=null,historyEpoch=0,historyController;"
-    + functions(['function invalidateHistory()', 'function dismissHistory()', 'function renderHistoryMessages(', 'async function loadHistory('])
+  runInContext("var room={id:'A',messages:[]},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=false,historyLoaded=false,historyMessages=[],historyCursor=null,historyEpoch=0,historyController;"
+    + functions(['function invalidateHistory()', 'function dismissHistory()', 'function renderHistoryMessages(', 'function updateHistoryControls()', 'async function loadHistory('])
     + listeners('historyDialog', 'close') + listeners('historyDialog', 'cancel'), context);
   return { ...view, context, calls, errors, run: code => runInContext(code, context), load: () => runInContext('loadHistory(false)', context) };
 }
@@ -203,6 +203,8 @@ test('history opens immediately with loading feedback and keeps first-page failu
   pending.reject(new Error('The local history could not be read.')); await loading;
   assert.equal(wire.$('historyDialog').open, true); assert.equal(wire.$('historyError').hidden, false);
   assert.match(wire.$('historyError').textContent, /could not be read/); assert.match(wire.$('historyPageNote').textContent, /could not be loaded/);
+  assert.equal(wire.$('historyNewer').hidden, false); assert.equal(wire.$('historyNewer').textContent, 'Retry loading history');
+  assert.equal(wire.$('historyPageNote').textContent.includes('Previously loaded'), false);
   assert.deepEqual(wire.errors, []);
 });
 

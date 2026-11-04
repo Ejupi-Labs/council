@@ -65,6 +65,9 @@ export declare class RoomManager {
     private validatePrerequisiteEvidence;
     private cost;
     private reservePlan;
+    private retainResult;
+    private mergePublication;
+    private collectPublications;
     private launch;
     private ballot;
     private decide;

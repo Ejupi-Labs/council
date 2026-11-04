@@ -57,6 +57,54 @@ function harness(handler = async () => record()) {
   };
 }
 
+test('completed rooms guide follow-up work while new pending work still requires renewed approval', () => {
+  for (const autoExecute of [false, true]) {
+    const wire = harness(), completed = { id: 'task-1', status: 'completed', runId: 'retained-original' };
+    wire.node('messageBody').value = 'Unsent guidance'; wire.node('taskBrief').value = 'Unsent follow-up brief';
+    wire.render(record('A', 'completed', 1, { autoExecute, tasks: [completed] }));
+    assert.equal(wire.node('waitNote').textContent, 'All current tasks are complete. Add a task to plan follow-up work.');
+    assert.equal(wire.node('execute').disabled, true); assert.equal(wire.node('discuss').disabled, true); assert.equal(wire.node('addTask').disabled, false);
+    wire.render(record('A', 'idle', 2, { autoExecute, decision: undefined, tasks: [completed, { id: 'task-2', status: 'pending' }] }));
+    assert.equal(wire.node('waitNote').textContent.includes('All current tasks are complete'), false);
+    assert.equal(wire.node('execute').disabled, true); assert.equal(wire.node('discuss').disabled, false);
+    wire.render(record('A', 'ready', 3, { autoExecute, tasks: [completed, { id: 'task-2', status: 'assigned' }] }));
+    assert.equal(wire.node('execute').disabled, false); assert.equal(wire.node('waitNote').textContent.includes('All current tasks are complete'), false);
+    assert.equal(wire.node('messageBody').value, 'Unsent guidance'); assert.equal(wire.node('taskBrief').value, 'Unsent follow-up brief');
+    assert.equal(wire.calls.length, 0);
+  }
+});
+
+test('terminal rooms direct inspection and replacement while unapproved rooms explain their available next step', () => {
+  for (const autoExecute of [false, true]) {
+    const wire = harness(), completed = { id: 'retained-task', status: 'completed', runId: 'retained-run' };
+    wire.node('messageBody').value = 'Unsent inspection guidance'; wire.node('taskBrief').value = 'Unsent replacement brief';
+    for (const status of ['failed', 'cancelled']) {
+      wire.render(record('A', status, 2, { autoExecute, tasks: [completed, { id: 'stopped-task', status }] }));
+      assert.match(wire.node('waitNote').textContent, /Review its history and any retained workflow artifacts/);
+      assert.match(wire.node('waitNote').textContent, /Create a new room for replacement work/);
+      assert.equal(wire.node('waitNote').textContent.includes('Start the approved plan'), false);
+      assert.equal(wire.node('waitNote').textContent.includes('start automatically'), false);
+      assert.equal(wire.node('execute').disabled, true); assert.equal(wire.node('discuss').disabled, true); assert.equal(wire.node('addTask').disabled, true);
+      assert.equal(wire.node('historyButton').disabled, false); assert.equal(wire.node('sendMessage').disabled, false);
+    }
+    for (const status of ['idle', 'needs_attention']) {
+      wire.render(record('A', status, 3, { autoExecute, decision: undefined, tasks: [completed, { id: 'follow-up', status: 'pending' }] }));
+      assert.match(wire.node('waitNote').textContent, /Start a discussion to approve a plan/);
+      assert.match(wire.node('waitNote').textContent, autoExecute ? /Approved tasks start automatically after discussion/ : /After approval, choose Execute tasks/);
+      assert.equal(wire.node('execute').disabled, true); assert.equal(wire.node('discuss').disabled, false); assert.equal(wire.node('addTask').disabled, false);
+      wire.render(record('A', status, 4, { autoExecute, decision: undefined, tasks: [completed] }));
+      assert.equal(wire.node('waitNote').textContent, 'Add a task before starting a new discussion.');
+      assert.equal(wire.node('discuss').disabled, true); assert.equal(wire.node('addTask').disabled, false);
+    }
+    wire.render(record('A', 'ready', 5, { autoExecute, tasks: [completed, { id: 'approved-task', status: 'assigned' }] }));
+    assert.equal(wire.node('waitNote').textContent, 'Start the approved plan when you are ready.'); assert.equal(wire.node('execute').disabled, false);
+    wire.render(record('A', 'running', 6, { autoExecute }));
+    assert.equal(wire.node('waitNote').textContent, 'Waiting is managed by the server. This page does not start additional calls.');
+    assert.equal(wire.node('messageBody').value, 'Unsent inspection guidance'); assert.equal(wire.node('taskBrief').value, 'Unsent replacement brief');
+    assert.equal(wire.calls.length, 0, 'Guidance changes never start a discussion or workflow.');
+  }
+});
+
 test('pause controls are present and the complete browser script remains valid', () => {
   assert.match(html, /id="pause"[^>]*>Pause<\/button>/);
   assert.match(html, /id="resume"[^>]*>Resume<\/button>/);

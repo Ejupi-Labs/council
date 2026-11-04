@@ -24,7 +24,7 @@ function harness(handler) {
     api: (path, _body, signal) => { calls.push({ path, signal }); return Promise.resolve(handler(path, signal)); },
     messageNode: message => ({ id: message.id, body: message.body }), number: String, error: message => errors.push(message),
   });
-  runInContext("var room={id:'A',messages:[]},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=false,historyMessages=[],historyCursor=null,historyAfter=0,historyEpoch=0,historyController;", context);
+  runInContext("var room={id:'A',messages:[]},selected='A',selectionEpoch=0,roomLoading=false,historyBusy=false,historyOpen=false,historyLoaded=false,historyMessages=[],historyCursor=null,historyAfter=0,historyEpoch=0,historyController;", context);
   const prefixes = ['function invalidateHistory()', 'function dismissHistory()', 'function renderHistoryMessages(', 'function updateHistoryControls()', 'async function loadHistory('];
   for (const prefix of prefixes) {
     const line = source.split(/\r?\n/).find(line => line.startsWith(prefix)); assert.ok(line, 'Missing shipped history function ' + prefix); runInContext(line, context);
@@ -90,7 +90,53 @@ test('late newer-history responses cannot reopen a closed dialog or overwrite a 
   await wire.open(); const previous = wire.click('historyNewer'); wire.run('dismissHistory()');
   assert.equal(wire.calls[1].signal.aborted, true); const current = wire.open();
   stale.resolve({ messages: [{ id: 'obsolete', body: 'Never displayed' }], nextCursor: null, nextAfter: 99 }); await previous;
-  assert.equal(wire.run('historyAfter'), 0); assert.equal(wire.element('historyMessages').children.length, 0); assert.equal(wire.run('historyBusy'), true);
+  assert.equal(wire.run('historyAfter'), 0); assert.equal(wire.element('historyMessages').children.length, 0); assert.equal(wire.run('historyBusy'), true); assert.equal(wire.run('historyLoaded'), false);
   fresh.resolve({ messages: [{ id: 'fresh', body: 'Current complete report' }], nextCursor: null, nextAfter: 10 }); await current;
-  assert.equal(wire.run('historyAfter'), 10); assert.equal(wire.element('historyMessages').children[0].id, 'fresh'); assert.equal(wire.element('historyDialog').open, true); assert.equal(wire.element('historyError').hidden, true);
+  assert.equal(wire.run('historyAfter'), 10); assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.element('historyMessages').children[0].id, 'fresh'); assert.equal(wire.element('historyDialog').open, true); assert.equal(wire.element('historyError').hidden, true);
+});
+
+test('an initial history failure offers an explicit retry of the original URL before newer-message checks', async () => {
+  const initial = deferred(), retry = deferred(); let reads = 0;
+  const wire = harness(() => ++reads === 1 ? initial.promise : reads === 2 ? retry.promise
+    : { messages: [{ id: 'new', body: 'A message added after the initial read.' }], nextCursor: null, nextAfter: 18 });
+  const loading = wire.open();
+  assert.equal(wire.run('historyLoaded'), false); assert.equal(wire.element('historyNewer').hidden, true);
+  initial.reject(new Error('The first local read failed.')); await loading;
+  assert.equal(wire.element('historyNewer').hidden, false); assert.equal(wire.element('historyNewer').textContent, 'Retry loading history');
+  assert.match(wire.element('historyPageNote').textContent, /Retry loading history/); assert.equal(wire.element('historyPageNote').textContent.includes('Previously loaded'), false);
+  const reloading = wire.click('historyNewer');
+  assert.equal(wire.calls[1].path, wire.calls[0].path); assert.equal(wire.calls[1].path.includes('cursor='), false);
+  assert.equal(wire.element('historyNewer').hidden, true); assert.equal(wire.run('historyLoaded'), false);
+  retry.resolve({ messages: [{ id: 'old', body: 'Complete previously stored history.' }], nextCursor: null, nextAfter: 17 }); await reloading;
+  assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.element('historyNewer').textContent, 'Check newer messages');
+  assert.match(wire.element('historyPageNote').textContent, /Showing 1 complete messages/); assert.equal(wire.element('historyPageNote').textContent.includes('newer'), false);
+  await wire.click('historyNewer'); assert.match(wire.calls[2].path, /cursor=17$/); assert.match(wire.element('historyPageNote').textContent, /Loaded 1 newer messages/);
+  assert.equal(wire.element('messageBody').value, 'Unsent room guidance'); assert.equal(wire.element('taskBrief').value, 'Unsent task acceptance criteria');
+  assert.equal(wire.calls.length, 3, 'Every read must come from an explicit open, retry or newer-message check.');
+});
+
+test('an accepted empty history page remains a successful read when later checks fail and retry', async () => {
+  const failed = deferred(); let reads = 0;
+  const wire = harness(() => ++reads === 1 ? { messages: [], nextCursor: null, nextAfter: 0 } : reads === 2 ? failed.promise
+    : { messages: [{ id: 'first', body: 'First message after an empty read.' }], nextCursor: null, nextAfter: 1 });
+  await wire.open(); assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.element('historyNewer').textContent, 'Check newer messages');
+  const checking = wire.click('historyNewer'); failed.reject(new Error('Later check temporarily unavailable.')); await checking;
+  assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.element('historyMessages').children.length, 0);
+  assert.equal(wire.element('historyNewer').textContent, 'Check newer messages'); assert.match(wire.element('historyPageNote').textContent, /current place are preserved/);
+  await wire.click('historyNewer'); assert.equal(wire.calls[1].path, wire.calls[2].path); assert.match(wire.calls[2].path, /cursor=0$/);
+  assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.element('historyMessages').children[0].id, 'first');
+});
+
+test('a failed continuation page retains its exact cursor, complete loaded nodes and scroll', async () => {
+  const failed = deferred(); let reads = 0;
+  const wire = harness(() => ++reads === 1 ? { messages: [{ id: 'one', body: 'Retained first page.' }], nextCursor: 7, nextAfter: 7 }
+    : reads === 2 ? failed.promise : { messages: [{ id: 'two', body: 'Complete second page.' }], nextCursor: null, nextAfter: 9 });
+  await wire.open(); const original = wire.element('historyMessages').children[0]; wire.element('historyMessages').scrollTop = 37;
+  const reading = wire.click('historyNext'); failed.reject(new Error('Continuation read temporarily unavailable.')); await reading;
+  assert.equal(wire.run('historyLoaded'), true); assert.equal(wire.run('historyCursor'), 7); assert.equal(wire.element('historyMessages').children[0], original);
+  assert.equal(wire.element('historyNext').disabled, false); assert.equal(wire.element('historyNewer').hidden, true);
+  await wire.click('historyNext'); assert.equal(wire.calls[1].path, wire.calls[2].path); assert.match(wire.calls[2].path, /cursor=7$/);
+  assert.equal(wire.element('historyMessages').children[0], original); assert.equal(wire.element('historyMessages').children.length, 2);
+  assert.equal(wire.element('historyMessages').scrollTop, 37); assert.equal(wire.element('historyNewer').textContent, 'Check newer messages');
+  assert.equal(wire.element('messageBody').value, 'Unsent room guidance'); assert.equal(wire.element('taskBrief').value, 'Unsent task acceptance criteria');
 });
