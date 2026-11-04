@@ -1,6 +1,7 @@
-import type { CouncilConfig, Permission, ReasoningEffort } from './types.js';
+import type { CouncilConfig, Permission, ReasoningEffort, WorkspaceArtifact } from './types.js';
 
-export type RoomStatus = 'idle' | 'discussing' | 'ready' | 'running' | 'completed' | 'failed' | 'cancelled' | 'needs_attention';
+export type RoomStatus = 'idle' | 'discussing' | 'ready' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'needs_attention';
+export type RoomCheckpoint = { phase: 'discussion'; nextRound: number } | { phase: 'execution' } | { phase: 'ready' };
 export interface RoomMember {
   agent: string;
   role: 'lead' | 'worker' | 'advisor';
@@ -23,6 +24,8 @@ export interface RoomTask extends RoomTaskInput {
   status: 'pending' | 'assigned' | 'running' | 'completed' | 'failed' | 'cancelled';
   assignee?: string;
   runId?: string;
+  /** Exact retained workflow artifact metadata; an empty array records a run without worktrees. */
+  workspaces?: WorkspaceArtifact[];
   resultPreview?: string;
   error?: string;
 }
@@ -52,9 +55,16 @@ export interface RoomInput {
   maxCalls?: number;
   autoExecute?: boolean;
   contextLimit?: number | null;
+  /** Optional per-task private consultation quota; omitted means disabled. */
+  privateChatMaxRequests?: number;
 }
 export interface RoomRecord {
+  privateChatMaxRequests?: number;
   instructionRevision?: number;
+  /** A request drains already admitted workflows before releasing ownership. */
+  pauseRequested?: boolean;
+  /** Durable dispatch continuation; completed workflows are never replayed. */
+  checkpoint?: RoomCheckpoint;
   id: string;
   backend?: CouncilConfig['backend'];
   title: string;

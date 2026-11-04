@@ -13,6 +13,8 @@ import { summarizeRun } from './summary.js';
 import { VERSION } from './version.js';
 import { metadataPressure } from './metadata.js';
 import { RoomManager } from './rooms.js';
+import { DelegationManager } from './delegation.js';
+import { PrivateChatManager } from './private-chats.js';
 import { serveDashboard } from './dashboard.js';
 import { BillingManager } from './billing.js';
 import { planRouting } from './routing.js';
@@ -57,7 +59,9 @@ export class CouncilService {
     closing = false;
     shutdownWaits = new AbortController();
     roomManager;
+    delegationManager;
     billingManager;
+    privateChatManager;
     dashboard;
     get rooms() {
         if (this.closing)
@@ -73,20 +77,37 @@ export class CouncilService {
             throw new Error(this.fault);
         return this.billingManager ??= new BillingManager(this.config);
     }
+    get delegation() {
+        if (this.closing)
+            throw new Error('Council is shutting down.');
+        if (this.fault)
+            throw new Error(this.fault);
+        return this.delegationManager ??= new DelegationManager(this);
+    }
+    get privateChats() {
+        if (this.closing)
+            throw new Error('Council is shutting down.');
+        if (this.fault)
+            throw new Error(this.fault);
+        return this.privateChatManager ??= new PrivateChatManager(this);
+    }
     billingView() {
-        return { agents: this.billing.list().map(record => ({ ...record,
+        const records = this.billing.list(), now = Date.now();
+        return { agents: records.map(record => ({ ...record,
                 effectiveSkills: record.skills ?? this.config.agents[record.alias]?.skills ?? [],
-                availability: this.billing.availability(record.alias) })), skills: collaborationSkills() };
+                availability: this.billing.availabilityFor(record, now), subscriptionProtection: this.billing.subscriptionProtectionFor(record, now) })), skills: collaborationSkills() };
     }
     routePlan(input) {
         if (this.closing)
             throw new Error('Council is shutting down.');
         if (this.fault)
             throw new Error(this.fault);
-        const records = this.billing.list();
+        const records = this.billing.list(), now = Date.now();
         const availability = Object.fromEntries(records.map(record => {
-            const value = this.billing.availability(record.alias);
-            return [record.alias, { availability: value.status, fresh: value.status !== 'unknown', reason: value.reasons.join('; ') }];
+            const value = this.billing.availabilityFor(record, now);
+            const protection = this.billing.subscriptionProtectionFor(record, now);
+            return [record.alias, { availability: protection.allowed ? value.status : 'exhausted',
+                    fresh: protection.allowed ? value.status !== 'unknown' : true, reason: [...value.reasons, ...protection.reasons].join('; ') }];
         }));
         const agents = Object.fromEntries(Object.entries(this.config.agents).map(([alias, agent]) => [alias,
             { ...agent, routing: records.find(record => record.alias === alias)?.routing ?? undefined }]));
@@ -132,6 +153,11 @@ export class CouncilService {
             this.runner = runner ?? createRunner(config);
             this.engine = new WorkflowEngine(config, this.runner, this.store, {
                 instanceId: this.instanceId,
+                assertAgentDispatch: agent => {
+                    if (this.billingManager || existsSync(join(this.config.stateDir, 'billing.sqlite')))
+                        this.billing.assertSubscriptionAllowed(agent);
+                },
+                privateChats: () => this.privateChats,
                 onStateFailure: () => this.degrade('Council state persistence failed. Inspect storage and restart this host before accepting new work.'),
             });
             this.heartbeat = setInterval(() => this.heartbeatTick(), 1000);
@@ -178,26 +204,29 @@ export class CouncilService {
             throw new Error('This server already has 20 active runs. Wait for a result before starting more.');
         const input = parseWorkflow(value);
         const planned = this.engine.plan(input);
-        const aliases = new Set([...planned.agents, ...(planned.judge ? [planned.judge] : []), ...Object.values(input.advisors ?? {}).map(advisor => advisor.agent)]);
+        const aliases = new Set([...planned.agents, ...(planned.judge ? [planned.judge] : []), ...Object.values(input.advisors ?? {}).map(advisor => advisor.agent),
+            ...Object.values(input.privateChats ?? {}).flatMap(chat => chat.peers)]);
         const localSkills = this.billingManager || existsSync(join(this.config.stateDir, 'billing.sqlite')) ? this.billing : undefined;
         for (const alias of aliases) {
-            if (input.agentSettings?.[alias]?.skills !== undefined)
-                continue;
+            const settings = input.agentSettings?.[alias];
+            const profile = this.config.agents[alias];
             const override = localSkills?.get(alias).skills;
-            const skills = override ?? this.config.agents[alias]?.skills;
-            if (skills !== undefined && skills !== null)
-                input.agentSettings = { ...input.agentSettings,
-                    [alias]: { ...input.agentSettings?.[alias], skills: [...skills] } };
+            const skills = settings?.skills ?? override ?? profile.skills ?? [];
+            const effective = { ...(profile.model !== undefined ? { model: profile.model } : {}),
+                ...(profile.effort !== undefined ? { effort: profile.effort } : {}), ...settings,
+                skills: [...skills] };
+            if (Object.keys(effective).length)
+                input.agentSettings = { ...input.agentSettings, [alias]: effective };
         }
-        this.engine.plan(input);
+        this.engine.plan(input, { resolvedSettings: true });
         const now = new Date().toISOString();
         const run = { id: randomUUID(), input, status: 'queued', createdAt: now, updatedAt: now, steps: [] };
         const billing = localSkills ? [...aliases].map(alias => {
             const record = localSkills.get(alias);
-            return { alias, model: input.agentSettings?.[alias]?.model ?? this.config.agents[alias]?.model ?? null,
+            return { alias, model: input.agentSettings?.[alias]?.model ?? null,
                 mode: record.mode, accountKey: record.accountKey, plan: record.plan, source: record.source,
                 observedAt: record.observedAt, validUntil: record.validUntil, prices: record.prices,
-                availability: localSkills.availability(alias) };
+                availability: localSkills.availabilityFor(record, now), subscriptionProtection: localSkills.subscriptionProtectionFor(record, now) };
         }) : [];
         this.store.createRun(run, this.instanceId, [
             ...(provenance?.previousId ? [{ type: 'run.continued', data: { previousId: provenance.previousId } }] : []),
@@ -208,7 +237,8 @@ export class CouncilService {
         const controller = new AbortController();
         const settled = new AbortController();
         setMaxListeners(0, settled.signal);
-        const done = Promise.resolve().then(() => this.engine.run(input, { id: run.id, signal: controller.signal }))
+        const done = Promise.resolve().then(() => this.engine.run(input, { id: run.id, signal: controller.signal, resolvedSettings: true,
+            ...(provenance?.roomId ? { privateChatRoomId: provenance.roomId } : {}) }))
             .catch((error) => {
             const persistenceFailure = error instanceof WorkflowPersistenceError;
             if (persistenceFailure)
@@ -240,7 +270,7 @@ export class CouncilService {
     completion(id) {
         const job = this.jobs.get(id);
         if (job)
-            return job.done.then(run => this.emergencyResults.has(id) ? structuredClone(run) : run);
+            return job.done.then(run => structuredClone(run));
         const run = this.getRun(id);
         if (!run)
             return Promise.reject(new Error('Run not found.'));
@@ -430,6 +460,10 @@ export class CouncilService {
         const hasMore = runs.length === limit && !!next && this.store.listRunSummaries(1, next).length > 0;
         return { runs, nextCursor: hasMore ? Buffer.from(JSON.stringify(next)).toString('base64url') : null };
     }
+    /** Read complete retained events without scheduling or changing workflow state. */
+    eventPage(id, after = 0, limit = 100, type) {
+        return this.store.eventPage(id, after, limit, type);
+    }
     inboxPage(agent, unreadOnly = true, limit = 20, cursor) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100)
             throw new Error('Inbox page limit must be from 1 to 100.');
@@ -570,8 +604,17 @@ export class CouncilService {
         const removed = [];
         const alreadyRemoved = [];
         try {
-            const history = this.store.events(id).filter(event => event.type === 'workspace.cleaned');
-            const cleaned = new Set(history.map(event => event.data.path));
+            const cleaned = new Set();
+            let after = 0;
+            for (;;) {
+                signal.throwIfAborted();
+                const page = this.store.eventPage(id, after, 100, 'workspace.cleaned');
+                for (const event of page.events)
+                    cleaned.add(event.data.path);
+                if (!page.hasMore)
+                    break;
+                after = page.nextAfter;
+            }
             const workspaces = new GitWorkspaces(this.config.workspaceRoot, this.config.stateDir);
             for (const artifact of run.workspaces ?? []) {
                 if (cleaned.has(artifact.path)) {
@@ -597,10 +640,22 @@ export class CouncilService {
         this.closePromise = (async () => {
             let earlierFailure;
             try {
-                await this.dashboard?.then(dashboard => dashboard.close(), () => { });
+                this.delegationManager?.close();
             }
             catch (error) {
                 earlierFailure = error;
+            }
+            try {
+                this.privateChatManager?.close();
+            }
+            catch (error) {
+                earlierFailure ??= error;
+            }
+            try {
+                await this.dashboard?.then(dashboard => dashboard.close(), () => { });
+            }
+            catch (error) {
+                earlierFailure ??= error;
             }
             try {
                 await this.roomManager?.close();

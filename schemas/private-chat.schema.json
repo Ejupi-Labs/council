@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council private-chat",
+  "type": "object",
+  "properties": {
+    "participants": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\u0000]+$"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "roomId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "maxLength": 100
+    }
+  },
+  "required": [
+    "participants"
+  ],
+  "additionalProperties": false
+}

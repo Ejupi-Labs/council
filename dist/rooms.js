@@ -14,11 +14,15 @@ const memberSchema = objectSchema({ agent: text(64), role: { type: 'string', enu
 const roomSchema = objectSchema({ title: text(200), brief: text(), members: { type: 'array', items: memberSchema, minItems: 1 },
     tasks: { type: 'array', items: taskSchema, default: [] },
     rounds: { type: 'integer', minimum: 1, default: 1 }, maxCalls: { type: 'integer', minimum: 1 },
-    autoExecute: { type: 'boolean', default: true }, contextLimit: { type: 'integer', minimum: 1 } }, ['title', 'brief', 'members']);
+    autoExecute: { type: 'boolean', default: true }, contextLimit: { type: 'integer', minimum: 1 },
+    privateChatMaxRequests: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } }, ['title', 'brief', 'members']);
 const ballotSchema = objectSchema({ vote: { type: 'string', enum: ['approve', 'revise', 'abstain'] }, rationale: text(),
     assignments: { type: 'object', additionalProperties: text(64) } }, ['vote', 'rationale', 'assignments']);
 class InstructionsChanged extends Error {
     constructor() { super('Project manager instructions changed. In-flight results are retained; start a new discussion before dispatching further tasks.'); }
+}
+class PauseRequested extends Error {
+    constructor() { super('Room paused after admitted workflows drained. No completed workflow will be replayed.'); }
 }
 const active = (room) => room.status === 'discussing' || room.status === 'running';
 function nonempty(value, label, bytes) {
@@ -112,6 +116,18 @@ export class RoomManager {
             throw new Error(`Room not found (404): ${id}`);
         return structuredClone(room);
     }
+    metadata(id) {
+        if (typeof id !== 'string' || !id || id.length > 100)
+            throw new Error('Room not found (404).');
+        const saved = this.emergency.get(id);
+        const room = saved ?? this.store.metadata(id);
+        if (!room)
+            throw new Error(`Room not found (404): ${id}`);
+        const { messages: _messages, ...metadata } = room;
+        return structuredClone(metadata);
+    }
+    /** Reconcile a proven-dead owner without reading history or replaying work. */
+    recover(id) { this.metadata(id); this.store.recover(id); }
     messagePage(id, limit = 100, cursor) { this.get(id); return this.store.messagePage(id, limit, cursor); }
     create(value) {
         this.available();
@@ -130,7 +146,8 @@ export class RoomManager {
             status: 'idle', tasks: input.tasks.map((task, index) => this.task(task, `task-${index + 1}`)),
             messages: [message('system', 'system', 'The project manager owns task briefs and permissions. Discussion is read-only; approved work uses the original task permissions.')],
             rounds: input.rounds, maxCalls: input.maxCalls ?? this.service.config.maxCalls, autoExecute: input.autoExecute, contextLimit: input.contextLimit ?? null,
-            callsUsed: 0, revision: 1, instructionRevision: 0, createdAt: now, updatedAt: now };
+            callsUsed: 0, revision: 1, instructionRevision: 0, createdAt: now, updatedAt: now,
+            ...(input.privateChatMaxRequests !== undefined ? { privateChatMaxRequests: input.privateChatMaxRequests } : {}) };
         this.validateDependencies(room.tasks);
         this.store.insert(room);
         this.publish(room);
@@ -144,10 +161,12 @@ export class RoomManager {
         return this.change(id, room => {
             room.messages.push(message(input.author, 'human', input.body));
             room.instructionRevision = (room.instructionRevision ?? 0) + 1;
-            if (room.status === 'ready') {
+            if (room.status === 'ready' || room.status === 'paused') {
                 this.invalidateDecision(room);
                 room.status = 'needs_attention';
                 room.error = new InstructionsChanged().message;
+                delete room.checkpoint;
+                delete room.pauseRequested;
             }
             else if (active(room))
                 room.error = new InstructionsChanged().message;
@@ -165,6 +184,8 @@ export class RoomManager {
             room.status = 'idle';
             delete room.decision;
             delete room.error;
+            delete room.checkpoint;
+            delete room.pauseRequested;
             room.messages.push(message('project-manager', 'task', `Added ${task.id}: ${task.title} (${task.permission}).`));
         }, { requireIdle: true });
     }
@@ -187,13 +208,14 @@ export class RoomManager {
             value.status = 'discussing';
             delete value.decision;
             delete value.error;
+            value.checkpoint = { phase: 'discussion', nextRound: 1 };
+            delete value.pauseRequested;
             for (const task of pending(value)) {
                 task.status = 'pending';
                 delete task.assignee;
             }
             value.messages.push(message('system', 'system', 'Read-only discussion queued. Every voting member must return a valid ballot before a decision can execute.'));
-        }, { claim: { id: this.owner, pid: process.pid }, requireIdle: true });
-        this.queue(id, job => this.discuss(id, job), room);
+        }, { claim: { id: this.owner, pid: process.pid }, requireIdle: true }, room => this.queue(id, job => this.discuss(id, job), room));
         return room;
     }
     execute(id) {
@@ -210,8 +232,9 @@ export class RoomManager {
             this.reservePlan(value, false);
             value.status = 'running';
             delete value.error;
-        }, { claim: { id: this.owner, pid: process.pid }, requireIdle: true });
-        this.queue(id, job => this.executeTasks(id, job), room);
+            value.checkpoint = { phase: 'execution' };
+            delete value.pauseRequested;
+        }, { claim: { id: this.owner, pid: process.pid }, requireIdle: true }, room => this.queue(id, job => this.executeTasks(id, job), room));
         return room;
     }
     cancel(id) {
@@ -221,6 +244,54 @@ export class RoomManager {
             this.abort(job);
         this.publish(requested);
         return requested;
+    }
+    pause(id) {
+        this.available();
+        const room = this.store.requestPause(id);
+        const job = this.jobs.get(id);
+        if (job)
+            job.snapshot = structuredClone(room);
+        this.publish(room);
+        return room;
+    }
+    resume(id) {
+        this.available();
+        const initial = this.get(id);
+        this.assertBackend(initial);
+        if (initial.status !== 'paused' || !initial.checkpoint)
+            throw new Error('Only a durably paused room can resume.');
+        const phase = initial.checkpoint.phase;
+        if (phase !== 'ready' && this.jobs.size >= 20)
+            throw new Error('This room manager already owns 20 active jobs.');
+        const room = this.change(id, value => {
+            this.assertBackend(value);
+            if (value.status !== 'paused' || value.checkpoint?.phase !== phase)
+                throw new Error('Room pause checkpoint changed before resume.');
+            if (value.tasks.some(task => ['running', 'failed', 'cancelled'].includes(task.status)))
+                throw new Error('Paused room contains incomplete or failed admitted work; it cannot be replayed.');
+            if (phase !== 'discussion') {
+                if (!value.decision?.approved || value.decision.instructionRevision === undefined
+                    || value.decision.instructionRevision !== (value.instructionRevision ?? 0))
+                    throw new Error('Room approval does not cover current instructions. Start a new discussion before executing.');
+                if (pending(value).some(task => !task.assignee || value.decision.assignments[task.id] !== task.assignee))
+                    throw new Error('Paused task assignments do not match the approved plan.');
+            }
+            if (phase === 'discussion') {
+                const nextRound = value.checkpoint.phase === 'discussion' ? value.checkpoint.nextRound : 0;
+                if (!Number.isSafeInteger(nextRound) || nextRound < 1 || nextRound > value.rounds)
+                    throw new Error('Room discussion continuation is invalid; start a new discussion.');
+                this.reservePlan(value, true, nextRound);
+            }
+            else if (phase === 'execution')
+                this.reservePlan(value, false);
+            value.status = phase === 'discussion' ? 'discussing' : phase === 'execution' ? 'running' : 'ready';
+            delete value.pauseRequested;
+            delete value.error;
+            if (phase === 'ready')
+                delete value.checkpoint;
+            value.messages.push(message('system', 'system', phase === 'ready' ? 'Room resumed to its approved ready plan. Execute explicitly to begin work.' : 'Room resumed from its durable dispatch checkpoint; completed workflows are retained.'));
+        }, { requireIdle: true, ...(phase !== 'ready' ? { claim: { id: this.owner, pid: process.pid } } : {}) }, phase === 'ready' ? undefined : room => this.queue(id, job => phase === 'discussion' ? this.discuss(id, job) : this.executeTasks(id, job), room));
+        return room;
     }
     async wait(id, timeoutMs = 600000, signal) {
         if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 600000)
@@ -288,6 +359,8 @@ export class RoomManager {
                                     const evidence = saved.tasks.find(candidate => candidate.id === task.id);
                                     if (evidence?.runId && !task.runId)
                                         task.runId = evidence.runId;
+                                    if (evidence?.workspaces && !task.workspaces)
+                                        task.workspaces = structuredClone(evidence.workspaces);
                                     if (evidence?.resultPreview && !task.resultPreview)
                                         task.resultPreview = evidence.resultPreview;
                                     if (['pending', 'assigned', 'running'].includes(task.status)) {
@@ -359,11 +432,14 @@ export class RoomManager {
         }
         catch { /* A disconnected UI cannot alter room persistence. */ }
     } }
-    change(id, action, options) {
+    change(id, action, options, beforePublish) {
         const room = this.store.mutate(id, action, options);
         const job = this.jobs.get(id);
         if (job)
             job.snapshot = structuredClone(room);
+        // Mutation has committed. Track admitted work before a subscriber can close
+        // or reenter this manager in response to the published active state.
+        beforePublish?.(room);
         this.publish(room);
         return room;
     }
@@ -410,16 +486,28 @@ export class RoomManager {
         job.done = Promise.resolve().then(() => operation(job)).catch(async (error) => {
             const cancelled = job.cancelRequested && error === job.controller.signal.reason && !job.failure;
             const instructionsChanged = error instanceof InstructionsChanged && !job.failure && !cancelled;
-            if (!instructionsChanged)
+            const paused = error instanceof PauseRequested && !job.failure && !cancelled;
+            if (!instructionsChanged && !paused)
                 this.abortRuns(job);
             await Promise.allSettled([...job.runs].map(run => this.service.completion(run)));
             try {
                 this.own(id, room => {
-                    if (instructionsChanged) {
+                    if (instructionsChanged || paused && (room.instructionRevision ?? 0) !== job.instructionRevision) {
                         this.invalidateDecision(room);
                         room.status = 'needs_attention';
                         room.error = error.message;
-                        room.messages.push(message('system', 'decision', error.message));
+                        if (!instructionsChanged)
+                            room.error = new InstructionsChanged().message;
+                        room.messages.push(message('system', 'decision', room.error));
+                        return;
+                    }
+                    if (paused) {
+                        this.assertInstructions(room, job);
+                        if (!room.pauseRequested || !room.checkpoint)
+                            throw new Error('Room pause continuation could not be verified.');
+                        room.status = 'paused';
+                        delete room.error;
+                        room.messages.push(message('system', 'system', error.message));
                         return;
                     }
                     room.status = cancelled ? 'cancelled' : 'failed';
@@ -437,6 +525,8 @@ export class RoomManager {
                 const room = structuredClone(job.snapshot);
                 room.status = 'failed';
                 room.error = this.fault;
+                delete room.pauseRequested;
+                delete room.checkpoint;
                 room.revision++;
                 room.updatedAt = new Date().toISOString();
                 for (const task of room.tasks)
@@ -456,7 +546,8 @@ export class RoomManager {
                     this.abortRuns(other);
                 }
             }
-        }).finally(() => { clearInterval(poll); this.jobs.delete(id); job.settled.abort(); });
+        }).finally(() => { clearInterval(poll); if (this.jobs.get(id) === job)
+            this.jobs.delete(id); job.settled.abort(); });
     }
     abortRuns(job) { for (const id of job.runs) {
         try {
@@ -518,11 +609,15 @@ export class RoomManager {
             { ...(member.model ? { model: member.model } : {}), ...(member.effort ? { effort: member.effort } : {}), ...(member.skills !== undefined ? { skills: [...member.skills] } : {}) }]));
     }
     taskInput(room, task, member) {
-        const names = [member.agent, ...(member.advisor ? [member.advisor] : [])];
+        this.validatePrerequisiteEvidence(room, task);
+        const peers = room.privateChatMaxRequests ? room.members.filter(candidate => candidate.agent !== member.agent).map(candidate => candidate.agent) : [];
+        const names = [member.agent, ...(member.advisor ? [member.advisor] : []), ...peers];
         return { mode: 'delegate', agents: [member.agent], permission: task.permission,
-            task: `Room task ${task.id}: ${task.title}\n\n${task.brief}\n\nComplete only this project-manager task. Preserve its stated permission and report verification evidence.`,
+            task: `Room task ${task.id}: ${task.title}\n\n${task.brief}\n\nComplete only this project-manager task. Preserve its stated permission and report verification evidence.`
+                + ((task.dependsOn?.length ?? 0) > 0 ? `\n\nPrerequisite tasks: ${task.dependsOn.join(', ')}. Their complete reports and retained workflow/worktree/patch references are in shared context. Prerequisite worktrees are separate evidence and are never merged into your current workspace automatically. Do not edit those worktrees or assume their changes are already present. Inspect the referenced evidence within your permission and tool policy, and verify the actual files you rely on. If a sandbox or file policy blocks access, report that limitation and the unverified work as incomplete; do not claim it was inspected or integrated.` : ''),
             context: this.context(room), contextLimit: room.contextLimit, agentSettings: this.settings(room, names),
-            ...(member.advisor ? { advisors: { [member.agent]: { agent: member.advisor, maxRequests: member.advisorMaxRequests ?? 1 } } } : {}) };
+            ...(member.advisor ? { advisors: { [member.agent]: { agent: member.advisor, maxRequests: member.advisorMaxRequests ?? 1 } } } : {}),
+            ...(peers.length ? { privateChats: { [member.agent]: { peers, maxRequests: room.privateChatMaxRequests } } } : {}) };
     }
     discussionInput(room, round) {
         const members = voters(room), tasks = pending(room);
@@ -542,16 +637,48 @@ export class RoomManager {
             if (page.nextCursor === null)
                 break;
         } while (true);
-        const sections = [JSON.stringify({ roomBrief: room.brief }), ...room.tasks.map(task => JSON.stringify({ task: task.id, brief: task.brief,
-                status: task.status, dependsOn: task.dependsOn, runId: task.runId })),
-            ...history.map(value => JSON.stringify({ author: value.author, kind: value.kind, body: value.body }))];
+        const sections = [JSON.stringify({ roomBrief: room.brief }), ...room.tasks.map(task => {
+                const run = task.runId ? this.service.getRun(task.runId) : undefined;
+                const workspaces = task.workspaces ?? run?.workspaces ?? (run?.input.permission === 'read' ? [] : undefined);
+                return JSON.stringify({ task: task.id, brief: task.brief, status: task.status, dependsOn: task.dependsOn, runId: task.runId,
+                    workflowRecordAvailable: task.runId ? Boolean(run) : undefined,
+                    fullResultResource: run ? `council://runs/${run.id}` : undefined, workspaces,
+                    workspaceEvidence: !task.runId ? undefined : workspaces === undefined ? 'Workspace metadata is unavailable; do not assume prerequisite changes are present.'
+                        : workspaces.length ? 'Retained export metadata; inspect paths to verify current access and contents.' : 'The workflow recorded no retained worktrees.' });
+            }),
+            ...history.map(value => JSON.stringify({ author: value.author, kind: value.kind, body: value.body, runId: value.runId }))];
         const context = sections.join('\n');
         if (room.contextLimit !== null && context.length > room.contextLimit)
             throw new Error(`Room context requires ${context.length} characters, exceeding the configured context budget ${room.contextLimit}; increase the context budget or use full context.`);
         return context;
     }
+    taskWorkspaces(task) {
+        if (task.workspaces !== undefined)
+            return task.workspaces;
+        if (!task.runId)
+            return undefined;
+        const run = this.service.getRun(task.runId);
+        return run?.workspaces ?? (run?.input.permission === 'read' ? [] : undefined);
+    }
+    validatePrerequisiteEvidence(room, task) {
+        for (const id of task.dependsOn ?? []) {
+            const prerequisite = room.tasks.find(candidate => candidate.id === id);
+            if (!prerequisite || prerequisite.status !== 'completed')
+                continue; // Pending prerequisites have no result yet during planning.
+            if (!prerequisite.runId)
+                throw new Error(`Prerequisite ${id} has no retained workflow identity; its completion cannot be verified.`);
+            const run = this.service.getRun(prerequisite.runId);
+            if (run && run.status !== 'completed')
+                throw new Error(`Prerequisite ${id} workflow ${run.id} is ${run.status}; no dependent task will be dispatched.`);
+            const artifacts = run?.workspaces ?? this.taskWorkspaces(prerequisite);
+            if (artifacts === undefined)
+                throw new Error(`Prerequisite ${id} has no retained artifact metadata; inspect its workflow before continuing.`);
+            if (artifacts.some(artifact => artifact.exportError || artifact.exportStatus !== 'ready'))
+                throw new Error(`Prerequisite ${id} has an unverified or failed workspace export; no dependent task will be dispatched.`);
+        }
+    }
     cost(input) { return this.service.engine.plan(input).estimatedCalls; }
-    reservePlan(room, discussion) {
+    reservePlan(room, discussion, nextRound = 1) {
         const members = voters(room);
         for (const task of pending(room))
             for (const dependency of task.dependsOn ?? []) {
@@ -559,8 +686,9 @@ export class RoomManager {
                 if (!prerequisite || prerequisite.status === 'failed' || prerequisite.status === 'cancelled')
                     throw new Error(`Task ${task.id} has an unavailable prerequisite ${dependency}. Create a new task plan before starting provider work.`);
             }
-        let required = discussion ? this.cost(this.discussionInput(room, 1)) * room.rounds : 0;
-        for (const task of pending(room)) {
+        let required = discussion ? this.cost(this.discussionInput(room, nextRound)) * (room.rounds - nextRound + 1) : 0;
+        // Manual discussion stops at ready; execution is admitted and budgeted separately.
+        for (const task of !discussion || room.autoExecute ? pending(room) : []) {
             const candidates = !discussion && task.assignee ? members.filter(member => member.agent === task.assignee) : members;
             if (!candidates.length)
                 throw new Error('Task has no valid voting-member assignee.');
@@ -575,11 +703,13 @@ export class RoomManager {
         let run;
         this.own(id, room => {
             this.assertInstructions(room, job);
+            if (room.pauseRequested)
+                throw new PauseRequested();
             if (room.callsUsed + estimated > room.maxCalls)
                 throw new Error('Room call budget exhausted before dispatch.');
             this.check(id, job);
             room.callsUsed += estimated;
-            run = this.service.start(input);
+            run = this.service.start(input, { roomId: id });
             job.runs.add(run.id);
             if (taskId) {
                 const task = room.tasks.find(value => value.id === taskId);
@@ -644,7 +774,8 @@ export class RoomManager {
                 .map(member => { const ballot = ballots.get(member.agent); return `${member.agent} (${ballot.vote}${ballot.vote === 'approve' ? `; alternative assignments ${JSON.stringify(ballot.assignments)}` : ''}): ${ballot.rationale}`; }) };
     }
     async discuss(id, job) {
-        for (let round = 1; round <= this.get(id).rounds; round++) {
+        const checkpoint = this.get(id).checkpoint;
+        for (let round = checkpoint?.phase === 'discussion' ? checkpoint.nextRound : 1; round <= this.get(id).rounds; round++) {
             this.check(id, job);
             this.assertInstructions(this.get(id), job);
             const before = this.get(id), run = await this.launch(id, job, this.discussionInput(before, round));
@@ -681,6 +812,7 @@ export class RoomManager {
             this.own(id, room => {
                 this.assertInstructions(room, job);
                 room.decision = decision;
+                room.checkpoint = { phase: 'discussion', nextRound: round + 1 };
                 room.messages.push(message('system', 'decision', `Round ${round}: ${decision.approved ? 'approved' : 'revision required'} (${decision.approveWeight}/${decision.totalWeight} approval weight). ${decision.rationale}`));
                 if (decision.approved) {
                     for (const task of pending(room)) {
@@ -688,6 +820,7 @@ export class RoomManager {
                         task.status = 'assigned';
                     }
                     room.status = room.autoExecute ? 'running' : 'ready';
+                    room.checkpoint = { phase: room.autoExecute ? 'execution' : 'ready' };
                 }
             });
             if (decision.approved) {
@@ -704,41 +837,68 @@ export class RoomManager {
         this.check(id, job);
         this.assertInstructions(this.get(id), job);
         this.reservePlan(this.get(id), false);
-        while (pending(this.get(id)).length) {
-            this.check(id, job);
-            const room = this.get(id);
-            this.assertInstructions(room, job);
-            const ready = pending(room).filter(task => (task.dependsOn ?? []).every(dependency => room.tasks.find(value => value.id === dependency)?.status === 'completed'))
-                .slice(0, this.service.config.maxConcurrency);
-            if (!ready.length)
-                throw new Error('Pending task dependencies cannot be satisfied; no further task was dispatched.');
-            const results = await Promise.allSettled(ready.map(async (task) => {
-                const member = room.members.find(value => value.agent === task.assignee && value.role !== 'advisor');
-                if (!member)
-                    throw new Error('Approved task assignee is unavailable.');
-                const run = await this.launch(id, job, this.taskInput(room, task, member), task.id);
-                this.own(id, current => {
-                    const target = current.tasks.find(value => value.id === task.id);
-                    target.status = run.status === 'completed' ? 'completed' : run.status === 'cancelled' ? 'cancelled' : 'failed';
-                    target.resultPreview = excerpt(run.output ?? '');
-                    if (run.error)
-                        target.error = run.error;
-                    current.messages.push(message(member.agent, 'task', `${task.id}: ${target.status}\n${run.output ?? ''}`, run.id));
-                    for (const step of run.steps)
-                        if (step.role.startsWith('advisor-for-'))
-                            current.messages.push(message(step.agent, 'advisor', step.result.output, run.id));
-                });
-                if (run.status !== 'completed')
-                    throw new Error(`Task ${task.id} ${run.status}: ${run.error ?? 'Incomplete workflow.'}`);
-            }));
-            this.check(id, job);
-            const rejected = results.find(result => result.status === 'rejected' && !(result.reason instanceof InstructionsChanged))
-                ?? results.find(result => result.status === 'rejected');
-            if (rejected?.status === 'rejected')
-                throw rejected.reason;
-            this.assertInstructions(this.get(id), job);
+        const running = new Map();
+        let stopped;
+        const retainFailure = (reason) => {
+            // A real task failure outranks changed guidance or a pause, regardless of
+            // completion order. Every admitted task still publishes its own evidence.
+            if (!stopped || stopped.reason instanceof PauseRequested
+                || stopped.reason instanceof InstructionsChanged && !(reason instanceof PauseRequested))
+                stopped = { reason };
+        };
+        const executeTask = async (room, task) => {
+            const member = room.members.find(value => value.agent === task.assignee && value.role !== 'advisor');
+            if (!member)
+                throw new Error('Approved task assignee is unavailable.');
+            const run = await this.launch(id, job, this.taskInput(room, task, member), task.id);
+            this.own(id, current => {
+                const target = current.tasks.find(value => value.id === task.id);
+                target.status = run.status === 'completed' ? 'completed' : run.status === 'cancelled' ? 'cancelled' : 'failed';
+                target.workspaces = structuredClone(run.workspaces ?? []);
+                target.resultPreview = excerpt(run.output ?? '');
+                if (run.error)
+                    target.error = run.error;
+                current.messages.push(message(member.agent, 'task', `${task.id}: ${target.status}\n${run.output ?? ''}`, run.id));
+                for (const step of run.steps)
+                    if (step.role.startsWith('advisor-for-'))
+                        current.messages.push(message(step.agent, 'advisor', step.result.output, run.id));
+            });
+            if (run.status !== 'completed')
+                throw new Error(`Task ${task.id} ${run.status}: ${run.error ?? 'Incomplete workflow.'}`);
+        };
+        for (;;) {
+            if (!stopped) {
+                try {
+                    this.check(id, job);
+                    const room = this.get(id);
+                    this.assertInstructions(room, job);
+                    const remaining = pending(room);
+                    if (room.pauseRequested && remaining.length)
+                        throw new PauseRequested();
+                    const ready = remaining.filter(task => (task.dependsOn ?? []).every(dependency => room.tasks.find(value => value.id === dependency)?.status === 'completed'))
+                        .slice(0, Math.max(0, this.service.config.maxConcurrency - running.size));
+                    if (remaining.length && !ready.length && !running.size)
+                        throw new Error('Pending task dependencies cannot be satisfied; no further task was dispatched.');
+                    for (const task of ready) {
+                        // Handle rejection immediately, before another settled task can
+                        // release a slot. No rejected call is left unobserved while draining.
+                        const done = executeTask(room, task).then(() => task.id, error => { retainFailure(error); return task.id; });
+                        running.set(task.id, done);
+                    }
+                }
+                catch (error) {
+                    retainFailure(error);
+                }
+            }
+            if (!running.size)
+                break;
+            // Refill a free slot as soon as any prerequisite completes, rather than
+            // waiting for an unrelated slow member of a fixed dispatch wave.
+            running.delete(await Promise.race(running.values()));
         }
         this.check(id, job);
+        if (stopped)
+            throw stopped.reason;
         this.own(id, room => {
             this.assertInstructions(room, job);
             if (room.tasks.some(task => task.status !== 'completed'))

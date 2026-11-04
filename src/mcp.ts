@@ -9,6 +9,8 @@ import type { RoomRecord } from './rooms-types.js';
 import { billingInputDefinition, billingImportDefinition } from './billing-schema.js';
 import { routingDefinition } from './routing-schema.js';
 import { collaborationSkills } from './skills.js';
+import { delegationConfigureDefinition, delegationReportDefinition, delegationResolveDefinition, delegationWatchDefinition } from './delegation-schema.js';
+import { privateChatCreateDefinition, privateChatSendDefinition, privateChatPageDefinition, privateChatWatchDefinition, privateChatListDefinition } from './private-chats-schema.js';
 
 function compactRun(run: RunRecord) {
   return summarizeRun(run);
@@ -38,7 +40,12 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
     () => ({ skills: collaborationSkills() }));
   tool('council_billing', 'Inspect local per-agent billing, shared-account limits, observation freshness and routing preferences. Unknown data is not unlimited. No credential reads or provider probes.',
     objectSchema({ agent: text(1, 64) }), read,
-    input => input.agent ? { ...service.billing.get(input.agent), availability: service.billing.availability(input.agent) } : service.billingView());
+    input => {
+      if (!input.agent) return service.billingView();
+      const record = service.billing.get(input.agent);
+      const now = Date.now();
+      return { ...record, availability: service.billing.availabilityFor(record, now), subscriptionProtection: service.billing.subscriptionProtectionFor(record, now) };
+    });
   tool('council_billing_update', 'Save explicitly supplied local billing metadata, routing preferences and skills. Quota edits require an observation time; routing-only changes never refresh quota. Shared-account changes affect all linked aliases.',
     objectSchema({ agent: text(1, 64), settings: billingInputDefinition, expectedRevision: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } }, ['agent', 'settings']), write,
     input => service.billing.update(input.agent, input.settings, input.expectedRevision ?? service.billing.get(input.agent).revision));
@@ -132,6 +139,35 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
     });
   tool('council_ui', 'Open the local Council project-manager dashboard for rooms, tasks, weighted decisions and advisors. Binds only to this machine. Does not call a model.', objectSchema({}), write,
     () => service.openDashboard());
+  tool('council_chat_create', 'Open an idempotent private one-to-one thread for exactly two task-instance actor labels, optionally associated with a room. No public room post or model call. Labels are trusted local coordination metadata, not authenticated identities.', privateChatCreateDefinition, write,
+    input => service.privateChats.create(input as any));
+  tool('council_chat_send', 'Send a complete message only to an existing private pair thread. The sender must be one of its participants. Optional idempotencyKey makes retries safe. Does not broadcast, change room instructions, or wake a disconnected vendor chat.', privateChatSendDefinition, write,
+    input => service.privateChats.send(input as any));
+  tool('council_chat_list', 'List private thread metadata for an exact actor/task-instance label, optionally scoped to one room; message bodies require an explicit history read.', privateChatListDefinition, read,
+    input => service.privateChats.list(input.actor, input.roomId));
+  tool('council_chat_actors', 'Discover local private-chat participant/task-instance labels from metadata, optionally scoped to a room. This reads no message bodies and grants no execution permission.', objectSchema({ roomId: id }), read,
+    input => service.privateChats.actors(input.roomId));
+  tool('council_chat_history', 'Read complete private pair messages in ascending pages as one of its participant labels. Follow nextCursor with the same chat and actor; no private transcript is injected into room-global context.', privateChatPageDefinition, read,
+    input => service.privateChats.page(input as any));
+  tool('council_chat_watch', 'Wait in the server for a private thread to receive messages, returning metadata only. Reuse its lastSequence and explicitly read history when needed; yield while waiting instead of model polling. Cancelling the wait does not cancel peer work.', privateChatWatchDefinition, read,
+    (input, signal) => service.privateChats.watch(input as any, signal));
+  tool('council_delegate_status', 'Read the saved human-delegate mandate and explicitly monitored room IDs. The delegate is your connected MCP host agent, not a newly spawned model. Labels are not authenticated identities.', objectSchema({}), read,
+    () => service.delegation.get());
+  tool('council_delegate_configure', 'Set human-led or agent-delegated coordination with an explicit mandate and tracked room IDs. Requires the current configuration revision. Does not grant task permissions, start models, or cancel admitted work. Use room Pause or Stop separately.', delegationConfigureDefinition, write,
+    input => service.delegation.configure(input as any));
+  tool('council_delegate_report', 'Record a complete executive update, decision request, blocker or completion report with observed room revisions. Reports are separate from task instructions and never invalidate approvals. Decision and blocked reports remain open until explicitly resolved.', delegationReportDefinition, write,
+    input => service.delegation.report(input as any));
+  tool('council_delegate_resolve', 'Record an explicit reply to an open executive question using its current report revision. This reply is retained in the inbox; send room guidance separately if project instructions must change.',
+    objectSchema({ id, ...delegationResolveDefinition.properties }, ['id', ...(delegationResolveDefinition.required ?? [])]), write,
+    input => { const { id: reportId, ...reply } = input; return service.delegation.resolve(reportId, reply as any); });
+  tool('council_delegate_reports', 'Read complete durable executive reports in ascending pages, optionally only unresolved decision requests and blockers. Follow nextCursor to retain all evidence.',
+    objectSchema({ limit: integer(1, 100, 20), cursor: integer(0, Number.MAX_SAFE_INTEGER, 0), openOnly: boolean(false) }), read,
+    input => service.delegation.reportsPage(input));
+  tool('council_delegate_changes', 'Read reports changed since a previous watch reportRevision, including replies to older questions. Returns their current complete state in change-revision order; follow nextCursor. Unlike an append-only report cursor, this discovers replies on existing reports.',
+    objectSchema({ after: integer(0, Number.MAX_SAFE_INTEGER, 0), limit: integer(1, 100, 20) }), read,
+    input => service.delegation.reportChangesPage(input));
+  tool('council_delegate_watch', 'Wait inside the server for a mandate change, report/reply, project guidance, or a monitored room reaching an actionable state. Routine active-room progress does not wake the model. Reuse the returned cursor; yield while waiting. This does not invoke models or push into disconnected vendor chats.', delegationWatchDefinition, read,
+    (input, signal) => service.delegation.watch(input as any, signal));
   tool('council_rooms', 'List compact project rooms without loading chat history or invoking models.', objectSchema({ limit: integer(1, 100, 20) }), read,
     input => service.rooms.list().slice(0, input.limit));
   tool('council_room_create', 'Create a durable project room with explicit member weights, model/effort settings, bounded discussion and task permissions. No model calls until started.', roomDefinition, write,
@@ -150,6 +186,12 @@ export function createMcpServer(service: CouncilService): CouncilMcpServer {
     async (input, signal) => { const room = service.rooms.startDiscussion(input.id); return compactRoom(input.waitMs ? await service.rooms.wait(room.id, input.waitMs, signal) : room); });
   tool('council_room_execute', 'Execute an approved room plan when automatic execution was disabled. Existing task permissions and call limits still apply.', objectSchema({ id }, ['id']), { ...write, openWorldHint: true },
     input => compactRoom(service.rooms.execute(input.id)));
+  tool('council_room_pause', 'Pause at the next workflow admission boundary. Already admitted work drains under its original instructions; no new workflow is admitted. Retains completed work and waits in the server by default. Does not suspend vendor processes.',
+    objectSchema({ id, waitMs: integer(0, 600_000, 600_000) }, ['id']), write,
+    async (input, signal) => { signal.throwIfAborted(); const room = service.rooms.pause(input.id); return compactRoom(input.waitMs ? await service.rooms.wait(room.id, input.waitMs, signal) : room); });
+  tool('council_room_resume', 'Resume a paused room from its durable checkpoint without replaying completed tasks. Current approvals, permissions, backend and remaining call budget are checked. A paused ready plan returns to ready; execution requires its existing explicit action.',
+    objectSchema({ id, waitMs: integer(0, 600_000, 600_000) }, ['id']), { ...write, openWorldHint: true },
+    async (input, signal) => { signal.throwIfAborted(); const room = service.rooms.resume(input.id); return compactRoom(input.waitMs ? await service.rooms.wait(room.id, input.waitMs, signal) : room); });
   tool('council_room_cancel', 'Cancel owned active room work and preserve all partial evidence. Terminal work is unchanged.', objectSchema({ id }, ['id']), write,
     input => compactRoom(service.rooms.cancel(input.id)));
   tool('council_room_history', 'Read complete room messages with a bounded ascending cursor. Ordinary room status omits chat history to save context.',

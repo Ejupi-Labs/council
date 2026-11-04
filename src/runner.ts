@@ -59,6 +59,11 @@ function failed(request: AgentRequest, error: string): AgentResult {
   return { agent: request.agent, status: 'failed', output: '', durationMs: 0, error };
 }
 
+function resolvedSettings(agent: AgentConfig, request: AgentRequest): Pick<AgentRequest, 'model' | 'effort'> {
+  return request.resolvedSettings ? { model: request.model, effort: request.effort }
+    : { model: request.model ?? agent.model, effort: request.effort ?? agent.effort };
+}
+
 /** Reject unsupported explicit effort before executable lookup or provider dispatch. */
 export function reasoningEffortError(config: CouncilConfig, agent: AgentConfig, effort: unknown): string | undefined {
   if (effort === undefined) return undefined;
@@ -75,7 +80,7 @@ function validateRequest(config: CouncilConfig, request: AgentRequest): AgentRes
   if (request.signal?.aborted) return { agent: request.agent, status: 'cancelled', output: '', durationMs: 0, error: 'Agent request cancelled.' };
   if (request.permission !== 'read' && request.permission !== 'write') return failed(request, 'Agent permission must be read or write.');
   if (!config.agents[request.agent]?.enabled) return failed(request, 'Agent is not enabled in Council configuration.');
-  const effortError = reasoningEffortError(config, config.agents[request.agent]!, request.effort === undefined ? config.agents[request.agent]!.effort : request.effort);
+  const effortError = reasoningEffortError(config, config.agents[request.agent]!, resolvedSettings(config.agents[request.agent]!, request).effort);
   if (effortError) return failed(request, effortError);
   if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0) return failed(request, 'Agent timeout must be positive.');
   if (!Number.isSafeInteger(config.maxOutputBytes) || config.maxOutputBytes < 1) return failed(request, 'Invalid agent output limit.');
@@ -219,7 +224,9 @@ class CodexProtocol implements AgentProtocol {
     if (event.type === 'turn.started') { if (this.active) control.fail('Codex returned duplicate turn start.'); this.active = true; }
     if (event.type === 'item.completed' && isObject(event.item) && event.item.type === 'agent_message') {
       if (!this.active || typeof event.item.text !== 'string') { control.fail('Codex returned assistant text outside the active turn.'); return; }
-      control.append(event.item.text);
+      // Exec emits complete messages, including progress preambles. Its SDK
+      // selects the last completed message as the answer for this turn.
+      control.replace(event.item.text);
     }
     if (event.type === 'turn.completed') { if (!this.active) control.fail('Codex returned completion without an active turn.'); else control.complete('end_turn'); }
   }
@@ -278,8 +285,7 @@ class ExternalAcpxProtocol implements AgentProtocol {
 }
 
 function nativeArguments(agent: AgentConfig, request: AgentRequest): string[] {
-  const model = request.model ?? agent.model;
-  const effort = request.effort ?? agent.effort;
+  const { model, effort } = resolvedSettings(agent, request);
   if (agent.profile === 'codex') return ['--ask-for-approval', 'never', 'exec', '--json', '--color', 'never', '--skip-git-repo-check', '--ephemeral',
     '--sandbox', request.permission === 'write' ? 'workspace-write' : 'read-only', '--cd', resolve(request.cwd), ...(model ? ['--model', model] : []),
     ...(effort ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []), '-'];
@@ -309,7 +315,7 @@ export class NativeRunner implements AgentRunner {
     const environment = this.options.environment ?? process.env;
     if (transport === 'native') return { transport, launch: await resolveLaunch(agent.command ?? (agent.profile === 'antigravity' ? 'agy' : agent.profile), [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
     const defaults = agent.command ? { command: agent.command, args: agent.args ?? [] } : defaultAcp(agent);
-    const effort = request.effort ?? agent.effort;
+    const { effort } = resolvedSettings(agent, request);
     return { transport, launch: await resolveLaunch(defaults.command, [...agent.args ?? defaults.args, ...(effort ? ['--effort', effort] : [])], request.cwd, environment, signal) };
   }
   async run(request: AgentRequest): Promise<AgentResult> {
@@ -319,7 +325,7 @@ export class NativeRunner implements AgentRunner {
       const scoped = { ...request, signal };
       const { launch, transport } = await this.launch(agent, scoped, signal);
       scoped.timeoutMs = remaining();
-      const protocol = transport === 'acp' ? new AcpProtocol(scoped, request.model ?? agent.model)
+      const protocol = transport === 'acp' ? new AcpProtocol(scoped, resolvedSettings(agent, scoped).model)
         : agent.profile === 'codex' ? new CodexProtocol(request.prompt)
         : agent.profile === 'antigravity' ? new AntigravityProtocol(request.prompt) : new ClaudeProtocol(scoped);
       return await runProtocol(launch, protocol, scoped, this.config, this.options.environment ?? process.env);
@@ -351,7 +357,7 @@ export class AcpxRunner implements AgentRunner {
       const scoped = { ...request, signal };
       const launch = await this.executable(request.cwd, signal);
       scoped.timeoutMs = remaining();
-      const write = request.permission === 'write', model = request.model ?? agent.model;
+      const write = request.permission === 'write', { model } = resolvedSettings(agent, request);
       launch.args.push('--format', 'json', '--json-strict', '--cwd', resolve(request.cwd), write ? '--approve-all' : '--deny-all',
         '--permission-policy', JSON.stringify({ defaultAction: write ? 'approve' : 'deny' }), '--non-interactive-permissions', 'deny', '--timeout', String(scoped.timeoutMs / 1000),
         ...(model ? ['--model', model] : []), agent.profile, 'exec', '--file', '-');

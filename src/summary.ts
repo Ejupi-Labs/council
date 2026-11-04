@@ -2,6 +2,8 @@ import type { EventRecord, RunRecord, RunStatus, WorkspaceArtifact } from './typ
 
 export const MAX_RUN_SUMMARY_BYTES = 64 * 1024;
 export const MAX_COMPACT_EVENT_DATA_BYTES = 8 * 1024;
+/** Paging bounds response materialization, never the contents of an individual event. */
+export const MAX_EVENT_PAGE_BYTES = 1024 * 1024;
 
 export interface RunSummary {
   id: string;
@@ -26,6 +28,7 @@ export interface EventPage {
   events: EventRecord[];
   nextAfter: number;
   hasMore: boolean;
+  nextCursor: number | null;
 }
 
 export interface PruneResult {

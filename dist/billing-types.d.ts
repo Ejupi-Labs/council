@@ -7,6 +7,7 @@ export interface BillingWindow {
     id: string;
     label: string;
     unit: string;
+    scope: 'subscription' | 'credits' | 'other';
     limit: number | null;
     remaining: number | null;
     used: number | null;
@@ -36,6 +37,9 @@ export interface BillingInput {
     routing?: (Pick<BillingRouting, 'tier'> & Partial<Omit<BillingRouting, 'tier'>>) | null;
     /** null inherits the configured agent skills; [] explicitly disables them. */
     skills?: string[] | null;
+    stopAtSubscriptionLimit?: boolean;
+    /** null or [] selects every subscription-scoped window, never paid credits. */
+    subscriptionWindowIds?: string[] | null;
 }
 export interface BillingRecord {
     alias: string;
@@ -54,6 +58,21 @@ export interface BillingRecord {
     prices: BillingPrices | null;
     routing: BillingRouting | null;
     skills: string[] | null;
+    stopAtSubscriptionLimit: boolean;
+    subscriptionWindowIds: string[] | null;
+    /** Exhaustion observations retained until a newer fresh positive allowance is observed. */
+    subscriptionExhausted: Record<string, string>;
+}
+export interface SubscriptionProtection {
+    enabled: boolean;
+    allowed: boolean;
+    status: 'disabled' | 'available' | 'exhausted' | 'unknown';
+    alias: string;
+    accountKey: string | null;
+    evaluatedAt: string;
+    observedAt: string | null;
+    windowIds: string[];
+    reasons: string[];
 }
 export type BillingAvailabilityStatus = 'available' | 'exhausted' | 'unknown';
 export interface BillingAvailabilityWindow extends BillingWindow {

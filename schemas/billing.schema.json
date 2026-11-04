@@ -94,6 +94,14 @@
             "maxLength": 128,
             "pattern": "^[^\\u0000]+$"
           },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "credits",
+              "other"
+            ]
+          },
           "limit": {
             "type": [
               "number",
@@ -208,6 +216,21 @@
         "tier"
       ],
       "additionalProperties": false
+    },
+    "stopAtSubscriptionLimit": {
+      "type": "boolean"
+    },
+    "subscriptionWindowIds": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[^\\u0000]+$"
+      }
     },
     "skills": {
       "type": [

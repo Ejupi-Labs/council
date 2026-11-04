@@ -20,4 +20,5 @@ export const roomDefinition = objectSchema({ title: text(1, 200), brief: { type:
   maxCalls: { type: 'integer', minimum: 1 },
   autoExecute: { type: 'boolean', default: true },
   contextLimit: { type: ['integer', 'null'], minimum: 1, default: null },
+  privateChatMaxRequests: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
 }, ['title', 'brief', 'members']);

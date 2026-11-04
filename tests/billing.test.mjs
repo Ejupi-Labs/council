@@ -76,6 +76,42 @@ test('aliases sharing an account use one pool and shared edits invalidate every 
   assert.equal(billing.db.prepare('SELECT count(*) AS count FROM billing_accounts').get().count, 1);
 });
 
+test('model prices stay alias-local while quota observations and their revision conflicts remain shared', t => {
+  const billing = fixture(t).open();
+  billing.importSnapshot('small', { ...snapshot(), accountKey: 'same-account', source: { kind: 'reported', label: 'Shared quota report' },
+    prices: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 } });
+  const small = billing.get('small');
+  const large = billing.update('large', { accountKey: 'same-account', prices: { currency: 'EUR', inputPerMillion: 10, outputPerMillion: 20 } });
+  assert.deepEqual(billing.get('small'), small, 'Linking another model with its own rates does not rewrite the shared observation.');
+  assert.deepEqual(large.prices, { currency: 'EUR', inputPerMillion: 10, outputPerMillion: 20 });
+  assert.deepEqual(large.windows, small.windows); assert.deepEqual(large.source, small.source);
+  const edited = billing.update('large', { prices: { outputPerMillion: 25 } }, large.revision);
+  assert.equal(edited.revision, large.revision + 1);
+  assert.deepEqual(edited.prices, { currency: 'EUR', inputPerMillion: 10, outputPerMillion: 25 });
+  assert.deepEqual(billing.get('small'), small);
+  assert.deepEqual(edited.source, small.source); assert.equal(edited.observedAt, small.observedAt);
+  assert.throws(() => billing.update('large', { prices: null }, large.revision), BillingRevisionConflict);
+  billing.update('small', { observedAt: iso(0), windows: [{ ...small.windows[0], remaining: 1, used: 9 }] }, small.revision);
+  assert.equal(billing.get('large').revision, edited.revision + 1);
+  assert.deepEqual(billing.get('large').prices, edited.prices);
+  assert.equal(billing.get('large').windows[0].remaining, 1);
+  assert.throws(() => billing.update('large', { prices: null }, edited.revision), BillingRevisionConflict);
+});
+
+test('model prices survive account relinking and detaching, and only explicit removal clears them', t => {
+  const billing = fixture(t).open();
+  billing.update('small', { ...snapshot(), prices: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 } });
+  billing.update('large', { ...snapshot(), accountKey: 'shared', prices: { currency: 'EUR', inputPerMillion: 10, outputPerMillion: 20 } });
+  const ownPrices = billing.get('small').prices, sharedPrices = billing.get('large').prices;
+  assert.deepEqual(billing.update('small', { accountKey: 'shared' }).prices, ownPrices);
+  assert.deepEqual(billing.update('small', { accountKey: null }).prices, ownPrices);
+  assert.deepEqual(billing.get('large').prices, sharedPrices);
+  assert.equal(billing.update('small', { prices: null }).prices, null);
+  billing.update('small', { prices: ownPrices });
+  assert.equal(billing.remove('small').prices, null);
+  assert.deepEqual(billing.get('large').prices, sharedPrices);
+});
+
 test('alias-local routing and skill overrides never refresh or rewrite another alias shared observation', t => {
   const billing = fixture(t).open();
   billing.importSnapshot('small', { ...snapshot(), accountKey: 'shared', source: { kind: 'reported', label: 'Explicit normalized report' } });
@@ -120,9 +156,9 @@ test('invalid billing data, unknown skills and inconsistent import provenance fa
 
 test('quota observations are never automatically refreshed when prices or routing metadata change', t => {
   const billing = fixture(t).open(); billing.importSnapshot('small', { ...snapshot(), source: { kind: 'reported', label: 'Normalized input only' } });
-  const observedAt = billing.get('small').observedAt;
+  const { observedAt, source } = billing.get('small');
   billing.update('small', { prices: { currency: 'USD', inputPerMillion: 1.25 } });
-  assert.equal(billing.get('small').observedAt, observedAt); assert.equal(billing.get('small').source.kind, 'manual');
+  assert.equal(billing.get('small').observedAt, observedAt); assert.deepEqual(billing.get('small').source, source);
   billing.update('small', { routing: { tier: 'small' } }); assert.equal(billing.get('small').observedAt, observedAt);
   assert.equal(billing.get('small').windows[0].remaining, 5);
 });
@@ -209,6 +245,61 @@ test('startup retries immediate WAL contention and restores its short runtime ti
   try { billing = setup.open(); } finally { DatabaseSync.prototype.exec = nativeExec; }
   assert.equal(attempts, 3); assert.equal(billing.db.prepare('PRAGMA busy_timeout').get().timeout, 250);
   assert.equal(billing.db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
+});
+
+test('version 1 migration preserves shared model rates on every linked alias without changing quotas or revisions', t => {
+  const setup = fixture(t); mkdirSync(setup.config.stateDir, { recursive: true });
+  const raw = new DatabaseSync(setup.filename), account = { ...snapshot(), prices: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 3 } };
+  raw.exec(`PRAGMA journal_mode=WAL;
+    CREATE TABLE billing_accounts(account_id TEXT PRIMARY KEY, document TEXT NOT NULL);
+    CREATE TABLE billing_aliases(alias TEXT PRIMARY KEY, revision INTEGER NOT NULL, account_id TEXT REFERENCES billing_accounts(account_id), routing TEXT, skills TEXT);
+    CREATE INDEX billing_account_aliases ON billing_aliases(account_id); PRAGMA user_version=1;`);
+  raw.prepare('INSERT INTO billing_accounts VALUES(?,?)').run('shared:legacy', JSON.stringify(account));
+  const insert = raw.prepare('INSERT INTO billing_aliases VALUES(?,?,?,?,?)');
+  insert.run('small', 7, 'shared:legacy', JSON.stringify({ tier: 'small', capabilities: ['read'], costRank: 1, qualityRank: 1 }), JSON.stringify([]));
+  insert.run('large', 11, 'shared:legacy', null, JSON.stringify(['council-advisor']));
+  insert.run('disabled', 3, null, null, null); raw.close();
+  const billing = setup.open(), small = billing.get('small'), large = billing.get('large');
+  assert.equal(billing.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(small.revision, 7); assert.equal(large.revision, 11); assert.equal(billing.get('disabled').revision, 3);
+  for (const record of [small, large]) {
+    assert.deepEqual(record.prices, account.prices); assert.deepEqual(record.windows, account.windows.map(window => ({ ...window, scope: 'subscription' })));
+    assert.deepEqual(record.source, account.source); assert.equal(record.observedAt, account.observedAt);
+    assert.equal(record.validUntil, account.validUntil); assert.equal(record.accountKey, 'legacy');
+  }
+  assert.deepEqual(small.skills, []); assert.deepEqual(large.skills, ['council-advisor']); assert.equal(small.routing.tier, 'small');
+  assert.equal(billing.get('disabled').prices, null);
+  const stored = JSON.parse(billing.db.prepare('SELECT document FROM billing_accounts WHERE account_id=?').get('shared:legacy').document);
+  assert.equal(Object.hasOwn(stored, 'prices'), false);
+  billing.update('large', { prices: { outputPerMillion: 9 } }, large.revision);
+  assert.deepEqual(billing.get('small'), small); assert.equal(billing.get('large').prices.outputPerMillion, 9);
+  assert.deepEqual(setup.open().get('small'), small, 'Reopening an upgraded database does not migrate or revise it again.');
+});
+
+test('a failed model-price migration rolls back the schema, rates and alias revisions together', t => {
+  const setup = fixture(t); mkdirSync(setup.config.stateDir, { recursive: true });
+  const raw = new DatabaseSync(setup.filename), account = { ...snapshot(), prices: { currency: null, inputPerMillion: 0, outputPerMillion: 3 } };
+  raw.exec(`CREATE TABLE billing_accounts(account_id TEXT PRIMARY KEY, document TEXT NOT NULL);
+    CREATE TABLE billing_aliases(alias TEXT PRIMARY KEY, revision INTEGER NOT NULL, account_id TEXT REFERENCES billing_accounts(account_id), routing TEXT, skills TEXT);
+    CREATE INDEX billing_account_aliases ON billing_aliases(account_id); PRAGMA user_version=1;`);
+  raw.prepare('INSERT INTO billing_accounts VALUES(?,?)').run('agent:small', JSON.stringify(account));
+  raw.prepare('INSERT INTO billing_aliases VALUES(?,?,?,?,?)').run('small', 4, 'agent:small', null, null); raw.close();
+  const prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function (sql) {
+    if (sql.startsWith('UPDATE billing_accounts SET document=')) throw new Error('Injected model-price migration failure.');
+    return prepare.call(this, sql);
+  };
+  try { assert.throws(() => setup.open(), /migration failure/); }
+  finally { DatabaseSync.prototype.prepare = prepare; }
+  const inspect = new DatabaseSync(setup.filename);
+  try {
+    assert.equal(inspect.prepare('PRAGMA user_version').get().user_version, 1);
+    assert.equal(inspect.prepare('PRAGMA table_info(billing_aliases)').all().some(column => column.name === 'prices'), false);
+    assert.equal(inspect.prepare('SELECT revision FROM billing_aliases WHERE alias=?').get('small').revision, 4);
+    assert.deepEqual(JSON.parse(inspect.prepare('SELECT document FROM billing_accounts').get().document), account);
+  } finally { inspect.close(); }
+  const recovered = setup.open().get('small');
+  assert.equal(recovered.revision, 4); assert.deepEqual(recovered.prices, account.prices); assert.deepEqual(recovered.windows, account.windows.map(window => ({ ...window, scope: 'subscription' })));
 });
 
 test('future billing schemas are refused before data, permissions or persistent journal mode changes', t => {

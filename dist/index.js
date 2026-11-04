@@ -24,4 +24,10 @@ export * from './billing.js';
 export * from './routing-types.js';
 export * from './routing-schema.js';
 export * from './routing.js';
+export * from './delegation-types.js';
+export * from './delegation-schema.js';
+export * from './delegation.js';
+export * from './private-chats-types.js';
+export * from './private-chats-schema.js';
+export * from './private-chats.js';
 //# sourceMappingURL=index.js.map

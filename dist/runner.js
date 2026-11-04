@@ -72,6 +72,10 @@ function providerAnswerFailure(output) {
 function failed(request, error) {
     return { agent: request.agent, status: 'failed', output: '', durationMs: 0, error };
 }
+function resolvedSettings(agent, request) {
+    return request.resolvedSettings ? { model: request.model, effort: request.effort }
+        : { model: request.model ?? agent.model, effort: request.effort ?? agent.effort };
+}
 /** Reject unsupported explicit effort before executable lookup or provider dispatch. */
 export function reasoningEffortError(config, agent, effort) {
     if (effort === undefined)
@@ -93,7 +97,7 @@ function validateRequest(config, request) {
         return failed(request, 'Agent permission must be read or write.');
     if (!config.agents[request.agent]?.enabled)
         return failed(request, 'Agent is not enabled in Council configuration.');
-    const effortError = reasoningEffortError(config, config.agents[request.agent], request.effort === undefined ? config.agents[request.agent].effort : request.effort);
+    const effortError = reasoningEffortError(config, config.agents[request.agent], resolvedSettings(config.agents[request.agent], request).effort);
     if (effortError)
         return failed(request, effortError);
     if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0)
@@ -365,7 +369,9 @@ class CodexProtocol {
                 control.fail('Codex returned assistant text outside the active turn.');
                 return;
             }
-            control.append(event.item.text);
+            // Exec emits complete messages, including progress preambles. Its SDK
+            // selects the last completed message as the answer for this turn.
+            control.replace(event.item.text);
         }
         if (event.type === 'turn.completed') {
             if (!this.active)
@@ -468,8 +474,7 @@ class ExternalAcpxProtocol {
     }
 }
 function nativeArguments(agent, request) {
-    const model = request.model ?? agent.model;
-    const effort = request.effort ?? agent.effort;
+    const { model, effort } = resolvedSettings(agent, request);
     if (agent.profile === 'codex')
         return ['--ask-for-approval', 'never', 'exec', '--json', '--color', 'never', '--skip-git-repo-check', '--ephemeral',
             '--sandbox', request.permission === 'write' ? 'workspace-write' : 'read-only', '--cd', resolve(request.cwd), ...(model ? ['--model', model] : []),
@@ -508,7 +513,7 @@ export class NativeRunner {
         if (transport === 'native')
             return { transport, launch: await resolveLaunch(agent.command ?? (agent.profile === 'antigravity' ? 'agy' : agent.profile), [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
         const defaults = agent.command ? { command: agent.command, args: agent.args ?? [] } : defaultAcp(agent);
-        const effort = request.effort ?? agent.effort;
+        const { effort } = resolvedSettings(agent, request);
         return { transport, launch: await resolveLaunch(defaults.command, [...agent.args ?? defaults.args, ...(effort ? ['--effort', effort] : [])], request.cwd, environment, signal) };
     }
     async run(request) {
@@ -520,7 +525,7 @@ export class NativeRunner {
             const scoped = { ...request, signal };
             const { launch, transport } = await this.launch(agent, scoped, signal);
             scoped.timeoutMs = remaining();
-            const protocol = transport === 'acp' ? new AcpProtocol(scoped, request.model ?? agent.model)
+            const protocol = transport === 'acp' ? new AcpProtocol(scoped, resolvedSettings(agent, scoped).model)
                 : agent.profile === 'codex' ? new CodexProtocol(request.prompt)
                     : agent.profile === 'antigravity' ? new AntigravityProtocol(request.prompt) : new ClaudeProtocol(scoped);
             return await runProtocol(launch, protocol, scoped, this.config, this.options.environment ?? process.env);
@@ -565,7 +570,7 @@ export class AcpxRunner {
             const scoped = { ...request, signal };
             const launch = await this.executable(request.cwd, signal);
             scoped.timeoutMs = remaining();
-            const write = request.permission === 'write', model = request.model ?? agent.model;
+            const write = request.permission === 'write', { model } = resolvedSettings(agent, request);
             launch.args.push('--format', 'json', '--json-strict', '--cwd', resolve(request.cwd), write ? '--approve-all' : '--deny-all', '--permission-policy', JSON.stringify({ defaultAction: write ? 'approve' : 'deny' }), '--non-interactive-permissions', 'deny', '--timeout', String(scoped.timeoutMs / 1000), ...(model ? ['--model', model] : []), agent.profile, 'exec', '--file', '-');
             return await runProtocol(launch, new ExternalAcpxProtocol(request.prompt), scoped, this.config, this.options.environment ?? process.env);
         });

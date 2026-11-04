@@ -26,6 +26,8 @@ export interface CouncilConfig {
 export interface AgentRequest {
   agent: string; prompt: string; cwd: string; permission: Permission;
   timeoutMs: number; signal?: AbortSignal; model?: string; effort?: ReasoningEffort;
+  /** Internal admission snapshot: undefined model/effort retain native defaults. */
+  resolvedSettings?: true;
 }
 export interface AgentResult {
   agent: string; status: ResultStatus; output: string; durationMs: number;
@@ -45,6 +47,8 @@ export interface WorkflowInput {
   assignments?: Record<string, string>;
   agentSettings?: Record<string, { model?: string; effort?: ReasoningEffort; skills?: string[] }>;
   advisors?: Record<string, { agent: string; maxRequests?: number }>;
+  /** Explicit bounded private coordination; each request allows a peer reply and sender resumption. */
+  privateChats?: Record<string, { peers: string[]; maxRequests?: number }>;
   contextLimit?: number | null;
 }
 export interface WorkflowStep {

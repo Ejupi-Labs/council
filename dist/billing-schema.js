@@ -5,6 +5,7 @@ const nullableText = (maximum) => ({ ...text(maximum), type: ['string', 'null'] 
 const count = { type: ['number', 'null'], minimum: 0 };
 const rank = { type: ['number', 'null'], exclusiveMinimum: 0 };
 export const billingWindowDefinition = objectSchema({ id: text(128), label: text(), unit: text(128),
+    scope: { type: 'string', enum: ['subscription', 'credits', 'other'] },
     limit: count, remaining: count, used: count, resetAt: nullableText(64) }, ['id', 'label', 'unit']);
 export const billingSourceDefinition = { ...objectSchema({ kind: { type: 'string', enum: ['manual', 'reported'] }, label: text() }, ['kind', 'label']), type: ['object', 'null'] };
 export const billingRoutingDefinition = { ...objectSchema({ tier: { type: 'string', enum: ['small', 'standard', 'large'] },
@@ -14,6 +15,7 @@ export const billingDefinition = objectSchema({ mode: { type: 'string', enum: ['
     accountKey: nullableText(256), plan: nullableText(), source: billingSourceDefinition,
     observedAt: nullableText(64), validUntil: nullableText(64), windows: { type: 'array', items: billingWindowDefinition },
     prices: billingPricesDefinition, routing: billingRoutingDefinition,
+    stopAtSubscriptionLimit: { type: 'boolean' }, subscriptionWindowIds: { type: ['array', 'null'], items: text(128) },
     skills: { type: ['array', 'null'], items: { type: 'string', enum: BUILT_IN_SKILL_IDS } } });
 export const billingInputDefinition = billingDefinition;
 export const billingUpdateDefinition = billingDefinition;

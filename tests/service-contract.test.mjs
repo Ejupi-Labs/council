@@ -34,16 +34,20 @@ test('mutating a returned queued record cannot change the task or participants t
   } });
   const requested = input();
   const queued = service.start(requested);
+  const admittedInput = structuredClone(queued.input);
   queued.input.task = 'Execute a different task.';
   queued.input.agents[0] = 'junie';
   queued.input.mode = 'council';
+  queued.input.agentSettings.codex.skills.push('council-advisor');
+  queued.input.agentSettings.codex.model = 'caller-mutated-model';
   queued.status = 'failed';
   requested.task = 'Caller also changed the original input.';
   const result = await service.completion(queued.id);
-  assert.equal(result.status, 'completed'); assert.deepEqual(result.input, input());
+  assert.equal(result.status, 'completed'); assert.deepEqual(result.input, admittedInput);
   assert.equal(requests.length, 1); assert.equal(requests[0].agent, 'codex');
+  assert.equal(requests[0].model, undefined); assert.equal(requests[0].prompt.includes('Selected collaboration skills'), false);
   assert.ok(requests[0].prompt.includes(input().task)); assert.ok(!requests[0].prompt.includes('different task'));
-  assert.deepEqual(service.getRun(queued.id).input, input());
+  assert.deepEqual(service.getRun(queued.id).input, admittedInput);
 });
 
 test('an idle newly configured host advertises its smaller shared call limit before its first task', async t => {

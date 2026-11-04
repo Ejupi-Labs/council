@@ -1,7 +1,9 @@
 import { WorkflowEngine } from './engine.js';
 import { CouncilStore } from './store.js';
-import { type RunSummary } from './summary.js';
+import { type EventPage, type RunSummary } from './summary.js';
 import { RoomManager } from './rooms.js';
+import { DelegationManager } from './delegation.js';
+import { PrivateChatManager } from './private-chats.js';
 import { BillingManager } from './billing.js';
 import type { RoutingInput } from './routing-types.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
@@ -27,10 +29,14 @@ export declare class CouncilService {
     private closing;
     private readonly shutdownWaits;
     private roomManager?;
+    private delegationManager?;
     private billingManager?;
+    private privateChatManager?;
     private dashboard?;
     get rooms(): RoomManager;
     get billing(): BillingManager;
+    get delegation(): DelegationManager;
+    get privateChats(): PrivateChatManager;
     billingView(): {
         agents: {
             alias: string;
@@ -49,8 +55,12 @@ export declare class CouncilService {
             prices: import("./billing-types.js").BillingPrices | null;
             routing: import("./billing-types.js").BillingRouting | null;
             skills: string[] | null;
+            stopAtSubscriptionLimit: boolean;
+            subscriptionWindowIds: string[] | null;
+            subscriptionExhausted: Record<string, string>;
             effectiveSkills: string[];
             availability: import("./billing-types.js").BillingAvailability;
+            subscriptionProtection: import("./billing-types.js").SubscriptionProtection;
         }[];
         skills: ({
             id: "dont-kill-an-ant-with-a-bazooka";
@@ -83,6 +93,7 @@ export declare class CouncilService {
     start(value: unknown, provenance?: {
         previousId?: string;
         routing?: unknown;
+        roomId?: string;
     }): RunRecord;
     run(input: WorkflowInput): Promise<RunRecord>;
     completion(id: string): Promise<RunRecord>;
@@ -183,6 +194,8 @@ export declare class CouncilService {
         runs: RunSummary[];
         nextCursor: string | null;
     };
+    /** Read complete retained events without scheduling or changing workflow state. */
+    eventPage(id: string, after?: number, limit?: number, type?: string): EventPage;
     inboxPage(agent: string, unreadOnly?: boolean, limit?: number, cursor?: string): {
         messages: import("./types.js").Message[];
         nextCursor: string | null;

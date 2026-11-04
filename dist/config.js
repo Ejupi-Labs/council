@@ -37,6 +37,7 @@ export const workflowDefinition = objectSchema({
     assignments: { type: 'object', additionalProperties: fullString(1) },
     agentSettings: { type: 'object', additionalProperties: objectSchema({ model: boundedString(1, 200), effort: reasoningEffortDefinition, skills: { type: 'array', items: { type: 'string', enum: BUILT_IN_SKILL_IDS } } }) },
     advisors: { type: 'object', additionalProperties: objectSchema({ agent: boundedString(1, 64), maxRequests: { type: 'integer', minimum: 1, default: 1 } }, ['agent']) },
+    privateChats: { type: 'object', additionalProperties: objectSchema({ peers: { type: 'array', items: boundedString(1, 64), minItems: 1 }, maxRequests: { type: 'integer', minimum: 1, default: 1 } }, ['peers']) },
     contextLimit: { type: ['integer', 'null'], minimum: 1 },
 }, ['mode', 'task', 'agents']);
 export const configSchema = {

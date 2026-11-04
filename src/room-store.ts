@@ -109,6 +109,14 @@ export class RoomStore {
     return room;
   }
 
+  /** Read coordination state without fetching or decoding any chat history. */
+  metadata(id: string): Omit<RoomRecord, 'messages'> | undefined {
+    const row = this.row(id);
+    if (!row) return undefined;
+    const { messages: _messages, ...metadata } = JSON.parse(row.document) as RoomRecord;
+    return metadata;
+  }
+
   list(): RoomSummary[] {
     const rows = this.db.prepare('SELECT document FROM rooms ORDER BY updated_at DESC,id DESC LIMIT 1000').all() as { document: string }[];
     return rows.map(row => {
@@ -133,6 +141,14 @@ export class RoomStore {
         room.status = 'cancelled'; room.error = 'Cancellation was accepted before room completion.';
         for (const task of room.tasks) if (['pending', 'assigned', 'running'].includes(task.status)) task.status = 'cancelled';
       }
+      if (options.release) {
+        if (room.pauseRequested && ['discussing', 'running', 'ready'].includes(room.status)) {
+          if (!room.checkpoint) throw new Error('Room pause has no durable continuation checkpoint.');
+          room.status = 'paused';
+        }
+        delete room.pauseRequested;
+        if (room.status !== 'paused') delete room.checkpoint;
+      }
       room.revision = row.revision + 1;
       room.updatedAt = new Date().toISOString();
       this.append(id, room.messages);
@@ -155,6 +171,7 @@ export class RoomStore {
         if (options.activeOnly) return room;
         if (ACTIVE.has(room.status)) throw new Error('Active room ownership is missing; cancellation could not be verified.');
         room.status = 'cancelled'; room.error = 'Room cancelled by the project manager.';
+        delete room.pauseRequested; delete room.checkpoint;
         for (const task of room.tasks) if (['pending', 'assigned'].includes(task.status)) task.status = 'cancelled';
         room.messages.push({ id: randomUUID(), author: 'system', kind: 'system', body: room.error, createdAt: new Date().toISOString() });
         room.revision = row.revision + 1; room.updatedAt = new Date().toISOString();
@@ -169,6 +186,31 @@ export class RoomStore {
       this.db.prepare('UPDATE rooms SET cancel_requested=1,revision=?,updated_at=?,document=? WHERE id=?')
         .run(room.revision, room.updatedAt, json({ ...room, messages: [] }), id);
       return room;
+    });
+  }
+
+  requestPause(id: string): RoomRecord {
+    return this.transaction(() => {
+      const row = this.row(id), room = this.get(id);
+      if (!row || !room) throw new Error('Room not found.');
+      if (room.status === 'paused' || ['completed', 'failed', 'cancelled'].includes(room.status) || row.cancel_requested) return room;
+      if (!['discussing', 'running', 'ready'].includes(room.status)) throw new Error('Only an active or approved ready room can pause.');
+      if (room.pauseRequested) return room;
+      if (room.status === 'ready' && !row.owner) {
+        room.status = 'paused'; room.checkpoint = { phase: 'ready' };
+      } else {
+        if (!row.owner) throw new Error('Active room ownership is missing; pause could not be verified.');
+        if (!room.checkpoint) throw new Error('The active room owner does not support durable pause checkpoints. Let it finish or stop it; do not resume its unfinished work.');
+        room.pauseRequested = true;
+      }
+      room.messages.push({ id: randomUUID(), author: 'system', kind: 'system', body: room.status === 'paused'
+        ? 'Room paused. Resuming restores the approved ready plan without executing it.'
+        : 'Pause requested. Already admitted workflows will drain; further workflow admission is blocked.', createdAt: new Date().toISOString() });
+      room.revision = row.revision + 1; room.updatedAt = new Date().toISOString();
+      this.append(id, room.messages);
+      this.db.prepare('UPDATE rooms SET status=?,revision=?,updated_at=?,document=? WHERE id=?')
+        .run(room.status, room.revision, room.updatedAt, json({ ...room, messages: [] }), id);
+      return structuredClone(room);
     });
   }
 
@@ -187,8 +229,9 @@ export class RoomStore {
       nextCursor: rows.length > limit ? rows[limit - 1]!.sequence : null };
   }
 
-  recover(): void {
-    const rows = this.db.prepare('SELECT id,owner,owner_pid FROM rooms WHERE owner IS NOT NULL').all() as { id: string; owner: string; owner_pid: number }[];
+  recover(id?: string): void {
+    const query = this.db.prepare(`SELECT id,owner,owner_pid FROM rooms WHERE owner IS NOT NULL${id === undefined ? '' : ' AND id=?'}`);
+    const rows = (id === undefined ? query.all() : query.all(id)) as { id: string; owner: string; owner_pid: number }[];
     for (const row of rows) {
       if (alive(row.owner_pid)) continue;
       this.transaction(() => {
@@ -196,6 +239,7 @@ export class RoomStore {
         if (!current || current.owner !== row.owner || alive(current.owner_pid!)) return;
         const room = JSON.parse(current.document) as RoomRecord;
         room.status = current.cancel_requested ? 'cancelled' : 'failed';
+        delete room.pauseRequested; delete room.checkpoint;
         room.error = 'The owning process exited. Partial evidence was retained; unfinished work was not replayed.';
         for (const task of room.tasks) if (['running', 'assigned'].includes(task.status)) {
           task.status = current.cancel_requested ? 'cancelled' : 'failed'; task.error = room.error;

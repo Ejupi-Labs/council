@@ -1,4 +1,5 @@
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkflowPlan } from './types.js';
+import type { PrivateChatManager } from './private-chats.js';
 /** Legacy sizing constants retained for callers; these no longer limit workflow inputs. */
 export declare const MAX_TASK_CHARS = 32000;
 export declare const MAX_CONTEXT_CHARS = 64000;
@@ -33,10 +34,16 @@ export declare class WorkflowEngine {
         artifactTimeoutMs?: number;
         cancellationArtifactTimeoutMs?: number;
         onStateFailure?: (error: Error) => void;
+        assertAgentDispatch?: (agent: string) => void;
+        privateChats?: () => Pick<PrivateChatManager, 'create' | 'send' | 'page'>;
     });
-    plan(input: WorkflowInput): WorkflowPlan;
+    plan(input: WorkflowInput, options?: {
+        resolvedSettings?: true;
+    }): WorkflowPlan;
     run(input: WorkflowInput, options?: {
         id?: string;
         signal?: AbortSignal;
+        resolvedSettings?: true;
+        privateChatRoomId?: string;
     }): Promise<RunRecord>;
 }

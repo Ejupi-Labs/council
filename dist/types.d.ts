@@ -37,6 +37,8 @@ export interface AgentRequest {
     signal?: AbortSignal;
     model?: string;
     effort?: ReasoningEffort;
+    /** Internal admission snapshot: undefined model/effort retain native defaults. */
+    resolvedSettings?: true;
 }
 export interface AgentResult {
     agent: string;
@@ -74,6 +76,11 @@ export interface WorkflowInput {
     }>;
     advisors?: Record<string, {
         agent: string;
+        maxRequests?: number;
+    }>;
+    /** Explicit bounded private coordination; each request allows a peer reply and sender resumption. */
+    privateChats?: Record<string, {
+        peers: string[];
         maxRequests?: number;
     }>;
     contextLimit?: number | null;

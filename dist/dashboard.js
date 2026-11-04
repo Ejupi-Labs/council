@@ -5,6 +5,9 @@ import { parseSchema } from './schema.js';
 import { dashboardHtml } from './dashboard-ui.js';
 import { BillingRevisionConflict } from './billing.js';
 import { collaborationSkills } from './skills.js';
+import { RunEventsUnavailableError } from './store.js';
+import { DelegationRevisionConflict } from './delegation.js';
+import { PrivateChatConflict } from './private-chats.js';
 const BODY_LIMIT = 256 * 1024;
 const SSE_QUEUE_LIMIT = 256 * 1024;
 const SSE_CONNECTION_LIMIT = 16;
@@ -87,6 +90,7 @@ export async function serveDashboard(service, rooms, options = {}) {
     let host = '', origin = '', closed = false, polling = false;
     let closePromise;
     let snapshot = JSON.stringify(await rooms.list());
+    let delegateSnapshot = '';
     const json = (response, status, value) => {
         response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify(value));
@@ -136,6 +140,110 @@ export async function serveDashboard(service, rooms, options = {}) {
                 throw new HttpError(401, 'Open the complete dashboard link to authorize this session.');
             if (request.method !== 'GET' && request.method !== 'POST')
                 throw new HttpError(405, 'Method not allowed.');
+            if (pathname === '/api/private-chats/actors' || pathname === '/api/private-chats') {
+                if (pathname.endsWith('/actors') && request.method !== 'GET')
+                    throw new HttpError(405, 'Method not allowed.');
+                if (request.method === 'POST')
+                    json(response, 201, service.privateChats.create(await readObject(request)));
+                else {
+                    const actors = pathname.endsWith('/actors');
+                    for (const key of url.searchParams.keys())
+                        if (!(actors ? ['roomId'] : ['actor', 'roomId']).includes(key) || url.searchParams.getAll(key).length !== 1)
+                            throw new HttpError(400, 'Use an exact actor and optional room ID.');
+                    json(response, 200, actors ? service.privateChats.actors(url.searchParams.get('roomId') ?? undefined)
+                        : service.privateChats.list(url.searchParams.get('actor') ?? '', url.searchParams.get('roomId') ?? undefined));
+                }
+                return;
+            }
+            if (pathname === '/api/private-chats/watch') {
+                if (request.method !== 'POST')
+                    throw new HttpError(405, 'Method not allowed.');
+                const input = await readObject(request), controller = new AbortController();
+                const abort = () => controller.abort(new DOMException('Private chat watch disconnected.', 'AbortError'));
+                response.once('close', abort);
+                request.once('aborted', abort);
+                try {
+                    json(response, 200, await service.privateChats.watch(input, controller.signal));
+                }
+                finally {
+                    response.removeListener('close', abort);
+                    request.removeListener('aborted', abort);
+                }
+                return;
+            }
+            const chatMatch = /^\/api\/private-chats\/([a-zA-Z0-9_-]{1,100})\/messages$/.exec(pathname);
+            if (chatMatch) {
+                if (request.method === 'POST')
+                    json(response, 201, service.privateChats.send({ ...await readObject(request), chatId: chatMatch[1] }));
+                else {
+                    for (const key of url.searchParams.keys())
+                        if (!['actor', 'after', 'limit'].includes(key) || url.searchParams.getAll(key).length !== 1)
+                            throw new HttpError(400, 'Use one actor, after cursor and page limit.');
+                    const bound = (key, fallback) => {
+                        const value = url.searchParams.get(key);
+                        if (value === null)
+                            return fallback;
+                        if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value)))
+                            throw new HttpError(400, 'Chat page bounds must be non-negative safe integers.');
+                        return Number(value);
+                    };
+                    json(response, 200, service.privateChats.page({ chatId: chatMatch[1], actor: url.searchParams.get('actor') ?? '', after: bound('after', 0), limit: bound('limit', 100) }));
+                }
+                return;
+            }
+            if (pathname === '/api/delegation') {
+                if (request.method === 'GET')
+                    json(response, 200, service.delegation.get());
+                else
+                    json(response, 200, service.delegation.configure(await readObject(request)));
+                return;
+            }
+            if (pathname === '/api/delegation/reports') {
+                if (request.method === 'POST')
+                    json(response, 201, service.delegation.report(await readObject(request)));
+                else {
+                    for (const key of url.searchParams.keys())
+                        if (!['limit', 'cursor', 'openOnly'].includes(key) || url.searchParams.getAll(key).length !== 1)
+                            throw new HttpError(400, 'Use one report page limit, cursor and openOnly filter.');
+                    const bound = (key, fallback) => {
+                        const value = url.searchParams.get(key);
+                        if (value === null)
+                            return fallback;
+                        if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value)))
+                            throw new HttpError(400, 'Report page bounds must be non-negative safe integers.');
+                        return Number(value);
+                    };
+                    const openOnly = url.searchParams.get('openOnly');
+                    if (openOnly !== null && openOnly !== 'true' && openOnly !== 'false')
+                        throw new HttpError(400, 'openOnly must be true or false.');
+                    json(response, 200, service.delegation.reportsPage({ limit: bound('limit', 20), cursor: bound('cursor', 0), openOnly: openOnly === 'true' }));
+                }
+                return;
+            }
+            if (pathname === '/api/delegation/changes') {
+                if (request.method !== 'GET')
+                    throw new HttpError(405, 'Method not allowed.');
+                for (const key of url.searchParams.keys())
+                    if (!['limit', 'after'].includes(key) || url.searchParams.getAll(key).length !== 1)
+                        throw new HttpError(400, 'Use one change page limit and after revision.');
+                const bound = (key, fallback) => {
+                    const value = url.searchParams.get(key);
+                    if (value === null)
+                        return fallback;
+                    if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value)))
+                        throw new HttpError(400, 'Change page bounds must be non-negative safe integers.');
+                    return Number(value);
+                };
+                json(response, 200, service.delegation.reportChangesPage({ after: bound('after', 0), limit: bound('limit', 20) }));
+                return;
+            }
+            const delegateReply = /^\/api\/delegation\/reports\/([a-zA-Z0-9_-]{1,100})\/resolve$/.exec(pathname);
+            if (delegateReply) {
+                if (request.method !== 'POST')
+                    throw new HttpError(405, 'Method not allowed.');
+                json(response, 200, service.delegation.resolve(delegateReply[1], await readObject(request)));
+                return;
+            }
             if (pathname === '/api/skills' && request.method === 'GET') {
                 json(response, 200, { skills: collaborationSkills() });
                 return;
@@ -152,13 +260,39 @@ export async function serveDashboard(service, rooms, options = {}) {
                 if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
                     throw new HttpError(400, 'Supply the billing revision shown by the current agent view.');
                 const saved = service.billing.update(billingMatch[1], settings, expectedRevision);
-                json(response, 200, { ...saved, effectiveSkills: saved.skills ?? service.config.agents[saved.alias]?.skills ?? [], availability: service.billing.availability(saved.alias) });
+                const now = Date.now();
+                json(response, 200, { ...saved, effectiveSkills: saved.skills ?? service.config.agents[saved.alias]?.skills ?? [], availability: service.billing.availabilityFor(saved, now), subscriptionProtection: service.billing.subscriptionProtectionFor(saved, now) });
                 return;
             }
             if (pathname === '/api/routing/plan') {
                 if (request.method !== 'POST')
                     throw new HttpError(405, 'Method not allowed.');
                 json(response, 200, service.routePlan(await readObject(request)));
+                return;
+            }
+            const runMatch = /^\/api\/runs\/([a-zA-Z0-9_-]{1,256})(?:\/(events))?$/.exec(pathname);
+            if (runMatch) {
+                if (request.method !== 'GET')
+                    throw new HttpError(405, 'Method not allowed.');
+                if (runMatch[2] === 'events') {
+                    for (const key of url.searchParams.keys())
+                        if (!['after', 'limit', 'type'].includes(key) || url.searchParams.getAll(key).length !== 1)
+                            throw new HttpError(400, 'Use one after cursor, page limit and optional exact event type.');
+                    const bound = (key, fallback) => {
+                        const value = url.searchParams.get(key);
+                        if (value === null)
+                            return fallback;
+                        if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value)))
+                            throw new HttpError(400, 'Event page bounds must be non-negative safe integers in decimal notation.');
+                        return Number(value);
+                    };
+                    json(response, 200, service.eventPage(runMatch[1], bound('after', 0), bound('limit', 100), url.searchParams.has('type') ? url.searchParams.get('type') : undefined));
+                    return;
+                }
+                const run = service.getRun(runMatch[1]);
+                if (!run)
+                    throw new HttpError(404, 'Workflow not found. Its stored result may have been pruned.');
+                json(response, 200, run);
                 return;
             }
             if (pathname === '/api/bootstrap' && request.method === 'GET') {
@@ -174,6 +308,8 @@ export async function serveDashboard(service, rooms, options = {}) {
                 clients.add(response);
                 response.once('close', () => clients.delete(response));
                 writeEvent(response, ': connected\n\n');
+                if ('delegation' in service)
+                    writeEvent(response, `event: delegation\ndata: ${JSON.stringify(service.delegation.overview())}\n\n`);
                 return;
             }
             if (pathname === '/api/rooms') {
@@ -183,7 +319,7 @@ export async function serveDashboard(service, rooms, options = {}) {
                     json(response, 201, await rooms.create(await readObject(request)));
                 return;
             }
-            const match = /^\/api\/rooms\/([a-zA-Z0-9_-]{1,100})(?:\/(messages|tasks|discuss|execute|cancel|history))?$/.exec(pathname);
+            const match = /^\/api\/rooms\/([a-zA-Z0-9_-]{1,100})(?:\/(messages|tasks|discuss|execute|pause|resume|cancel|history))?$/.exec(pathname);
             if (!match)
                 throw new HttpError(404, 'API endpoint not found.');
             const id = match[1], action = match[2];
@@ -224,6 +360,10 @@ export async function serveDashboard(service, rooms, options = {}) {
                 result = await rooms.startDiscussion(id);
             else if (action === 'execute')
                 result = await rooms.execute(id);
+            else if (action === 'pause')
+                result = await rooms.pause(id);
+            else if (action === 'resume')
+                result = await rooms.resume(id);
             else
                 result = await rooms.cancel(id);
             json(response, 200, result);
@@ -236,7 +376,7 @@ export async function serveDashboard(service, rooms, options = {}) {
             }
             if (failure instanceof HttpError && [408, 413].includes(failure.status))
                 response.setHeader('Connection', 'close');
-            json(response, failure instanceof HttpError ? failure.status : failure instanceof BillingRevisionConflict ? 409 : 400, { error: failure instanceof Error ? failure.message : 'The operation failed.',
+            json(response, failure instanceof HttpError ? failure.status : failure instanceof RunEventsUnavailableError ? 404 : failure instanceof BillingRevisionConflict || failure instanceof DelegationRevisionConflict || failure instanceof PrivateChatConflict ? 409 : 400, { error: failure instanceof Error ? failure.message : 'The operation failed.',
                 ...(failure && typeof failure === 'object' && 'code' in failure ? { code: failure.code } : {}) });
         });
     });
@@ -262,12 +402,22 @@ export async function serveDashboard(service, rooms, options = {}) {
         polling = true;
         void Promise.resolve().then(() => rooms.list()).then(value => {
             const next = JSON.stringify(value);
-            if (closed || next === snapshot)
+            if (closed)
                 return;
-            snapshot = next;
-            const frame = `event: rooms\ndata: ${next}\n\n`;
-            for (const client of clients)
-                writeEvent(client, frame);
+            if (next !== snapshot) {
+                snapshot = next;
+                const frame = `event: rooms\ndata: ${next}\n\n`;
+                for (const client of clients)
+                    writeEvent(client, frame);
+            }
+            if ('delegation' in service) {
+                const nextDelegate = JSON.stringify(service.delegation.overview());
+                if (nextDelegate !== delegateSnapshot) {
+                    delegateSnapshot = nextDelegate;
+                    for (const client of clients)
+                        writeEvent(client, `event: delegation\ndata: ${nextDelegate}\n\n`);
+                }
+            }
         }).catch(() => {
             for (const client of clients) {
                 client.end();

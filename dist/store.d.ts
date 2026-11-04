@@ -1,5 +1,10 @@
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord, WorkspaceArtifact } from './types.js';
-import { type PruneResult, type RunSummary } from './summary.js';
+import { type EventPage, type PruneResult, type RunSummary } from './summary.js';
+export declare class RunEventsUnavailableError extends Error {
+    readonly status = 404;
+    readonly code = "COUNCIL_RUN_EVENTS_UNAVAILABLE";
+    constructor();
+}
 /** Durable collaboration state shared by all Council processes in one workspace. */
 export declare class CouncilStore {
     private readonly db;
@@ -34,6 +39,8 @@ export declare class CouncilStore {
     appendEvent(runId: string, type: string, data: unknown): EventRecord;
     private writeEvent;
     events(runId: string, after?: number): EventRecord[];
+    /** Complete event payloads, with indexed exact-type filtering and stable ascending cursors. */
+    eventPage(runId: string, after?: number, limit?: number, type?: string): EventPage;
     compactEvents(runId: string, after?: number, limit?: number): EventRecord[];
     isCancellationRequested(runId: string): boolean;
     sendMessage(input: {

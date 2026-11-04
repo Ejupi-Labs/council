@@ -91,6 +91,8 @@ Omit `model` to preserve native settings. Council never substitutes another mode
 
 Commands are spawned without a shell. Recognized npm launchers are resolved to their real JavaScript/native entrypoints on Windows. Arbitrary `.cmd`, `.bat` and PowerShell wrappers are refused; configure the executable or interpreter and `args` explicitly.
 
+Native Codex JSON output uses the last completed agent message as the selected answer. Progress narration is not prepended to machine-readable advisor requests or room ballots, and an empty final answer fails rather than reusing an earlier preamble. This follows the final-answer distinction in the [official non-interactive guidance](https://learn.chatgpt.com/docs/non-interactive-mode); configured output and transport guards still apply.
+
 The optional `acpx` backend remains available for an independently installed ACPX CLI. ACPX and its adapters are not installed or downloaded by Council.
 
 ## Project rooms and server-side waiting
@@ -103,6 +105,8 @@ node dist/cli.js ui --workspace /absolute/path/to/project
 
 Open its printed loopback URL. `--backend mock` provides an explicitly labelled offline simulation. The interface runs locally, requires its generated access token, and keeps room state and full chat history in `.council/rooms.sqlite`. Stop the foreground server with Ctrl+C. `council_ui` opens the same interface from a connected MCP session.
 
+Opening a freshly printed complete link in an existing dashboard tab refreshes authorization, including a tab previously opened without its token. The token stays in the URL fragment during navigation and is cleared after initialization. Unrelated fragment changes do not reload the dashboard.
+
 Create a room, select lead/worker/advisor profiles, and define tasks with read/write permissions and dependencies. Each voting member submits a proposal; an explicit weighted majority approves the plan. The highest-weight approving proposal supplies assignments, with the lead and then member order breaking assignment ties. Disagreements and alternative assignments remain in history. Advisor-only members neither vote nor execute tasks. Weights express the project manager's decision policy; they are not automatic intelligence scores or proof of correctness.
 
 An omitted member weight inherits the profile's configured `authority`, or 1 when none is configured. A new project-manager message invalidates a ready approval. If instructions change during discussion or execution, already-dispatched workflows drain under their original instructions, including calls waiting for an execution slot; their evidence stays available and further room tasks require a fresh discussion. Use Stop to cancel admitted work. Completed tasks and retained writes are never replayed automatically. Failed or cancelled rooms retain their history and artifacts; create a new room for replacement work.
@@ -113,7 +117,23 @@ Each room records whether it belongs to the native, ACPX or mock backend. Anothe
 
 Approved tasks execute automatically by default. The server advances discussion rounds and dependent tasks without asking an orchestrating model to poll. Write tasks retain isolated worktrees for review and never merge automatically. Invalid ballots, failed calls or an unresolved vote require attention rather than authorizing partial work as success.
 
+**Pause** blocks admission of further room workflows. Already admitted workflows, including calls waiting for a slot and their internal advisor/resumption calls, finish under their original instructions. The room then saves a checkpoint and releases its active job; no model calls or polling turns are needed while it remains paused. This control does not suspend vendor processes. **Stop** cancels admitted work instead.
+
+**Resume** continues the saved discussion round or unfinished approved tasks without replaying completed tasks or retained writes. A paused ready plan returns to ready and still needs **Execute tasks**. Paused rooms survive a normal host restart. New project-manager guidance invalidates the paused checkpoint and requires a fresh discussion. Failed or cancelled work is never resumed automatically; backend, approval and remaining call-budget checks still apply. Use the same Council build in every host; legacy active owners without durable checkpoints cannot accept a pause.
+
+The MCP controls `council_room_pause` and `council_room_resume` wait in the server by default, up to the chosen `waitMs` deadline; `waitMs: 0` returns immediately. Cancelling that wait does not undo an accepted pause or cancel the room's work. Manual rooms (`autoExecute: false`) reserve discussion calls when starting discussion, then check the full task/advisor budget when execution is explicitly requested. Automatic rooms retain the combined preflight.
+
+Dependent tasks receive complete room reports with workflow identities and retained artifact metadata. Worktree paths identify separate evidence; predecessor changes are not automatically present in the follower's workspace. A failed or unverified prerequisite export stops dependent dispatch. Workers must report blocked file access and unverified integration as incomplete work.
+
 Context is complete by default. Room history, task briefs and peer handoffs are not shortened to save tokens. Context and call budgets can be chosen explicitly; an insufficient context budget fails before dispatch instead of silently omitting evidence. UI task cards and recent-history windows are labelled previews, with full history available separately. Model and provider context limits remain native to the selected runtime. Transport and persistence errors are reported explicitly.
+
+Use **View workflow** on a task or linked chat message to inspect its full selected result, every recorded step and retained worktree/patch paths. Failed and cancelled work stays labelled as incomplete evidence. **Download snapshot JSON** exports that exact stored snapshot, including task/context and recorded settings, without starting an agent call. Reloading the snapshot is an explicit read; a pruned workflow is reported as unavailable rather than replaced by its preview.
+
+The **Event timeline** loads complete stored events only when requested. It shows sequence numbers, timestamps and expandable JSON payloads, including recorded routing/billing observations and step outcomes. Apply an exact, case-sensitive event type to inspect one category; leave the filter empty for all types. **Load more events** continues the current history and **Check for newer events** reads later events explicitly. Snapshot reloads retain already loaded timeline entries. These controls invoke no model and do not poll.
+
+Event pages bound download size, not stored history or payload precision. Each event is returned intact, including oversized events on their own page, and cursors never skip an unread event. The library API is `service.eventPage(runId, after, limit, type?)`, also available as authenticated `GET /api/runs/:id/events`. It returns `{ events, nextAfter, hasMore, nextCursor }`; use `nextAfter` when explicitly checking for later appends, even after an empty page. The JSON download exports the workflow snapshot; event pages are separate reads. Full event data is never substituted with a compact summary.
+
+**Full history** opens immediately with a loading indicator and displays read errors inside the dialog. Closing a view stops its pending read, and late responses or native close events from an earlier opening cannot invalidate a newly reopened view. History pages retain complete message bodies.
 
 Debate rounds retain every earlier round. Later stages receive the relevant advisor request and answer alongside the worker's result, even when the worker omits those details. Explicit continuations preserve the previous task, project context, all step outcomes and retained artifact metadata, together with the new caller context. Shared step evidence appears once per handoff.
 
@@ -129,15 +149,39 @@ This setting is an example for a ten-minute Council wait. It is not written to y
 
 `council_wait` returns the complete selected answer and every step's status metadata from a consistent run snapshot. Step bodies stay in the full run resource to avoid repeating their tokens. `council wait` exits nonzero for failed, cancelled or still-pending work; a wait timeout leaves the workflow running.
 
+Embedded callers of `service.completion(id)` receive independent copies of full results. Editing one returned object cannot alter another consumer's task, steps, retained artifact metadata or status. Artifact cleanup checks its complete indexed cleanup history, so an earlier successful cleanup remains an idempotent no-op even after many later events.
+
+## Private one-to-one coordination
+
+Five workers can pursue their tasks while two with overlapping responsibilities coordinate in a separate pair thread. Open **Private chats** to inspect pair messages as the local human. Participant/task-instance labels and room filters keep their delivery separate from global room history; labels are coordination metadata, not authenticated identities or an operating-system secrecy boundary.
+
+Enable **Private peer exchanges per task (optional)** when creating a room, or configure explicit workflow `privateChats` peers and request quotas. Managed workers yield an exact `council_private_chat_request` JSON envelope; Council gives the peer a separate read-only reply turn and resumes the sender in its existing workspace. Each request reserves two possible calls. Raw pair turns are kept in the private-chat database and excluded from shared workflow lineage, room history and public advisor prompts. Existing call limits, exact settings, cancellation and subscription protection still apply.
+
+Connected host agents can instead use `council_chat_create`, `council_chat_send`, `council_chat_list`, `council_chat_actors`, `council_chat_history` and `council_chat_watch`. The watch blocks in the server without model polling. Messages do not inject into an already-running vendor session, modify room instructions or approve work. Read the [protocol, scope and examples](docs/private-chats.md).
+
+## Human or agent management
+
+Manage Council directly, or ask the connected host agent to act as your executive delegate: set up the board, select agents, follow explicit tracked rooms and report material decisions or blockers to you. The management mandate and report inbox are durable. Reports stay separate from room instructions, and explicit human responses do not automatically change task permissions or approve a room plan.
+
+Open **Human delegate** to save a mandate, track rooms, read or answer executive reports, and use **Prepare agent handoff** to generate a prompt for the connected host. Its live badge shows open decisions and blockers without loading their complete report bodies into routine updates.
+
+`council_delegate_status`, `council_delegate_configure`, `council_delegate_report`, `council_delegate_reports`, `council_delegate_resolve`, `council_delegate_changes` and `council_delegate_watch` expose this workflow over MCP. The watch waits in the server for actionable changes while suppressing ordinary active progress, so the host can yield instead of polling. The change feed retrieves replies to earlier reports without rereading the full inbox. Switching to human management changes the coordinator; use the existing Pause or Stop controls when you also intend to affect room execution.
+
+Agent management uses the connected external host. It does not spawn a vendor process, keep the host model running after disconnection or push into another vendor chat. Labels and mandates are coordination metadata, not authenticated identities or new grants of permission. Read the [CEO/board workflow](docs/delegation.md) or use the [Human delegate skill](skills/council-human-delegate/SKILL.md).
+
 ## Model profiles
 
 Profiles may name an exact `model`, supported `effort`, and a default `authority` for room setup. Room settings and `agentSettings` override model/effort for that work without changing the profile defaults. Multiple aliases can target the same harness with different models. Model IDs are passed unchanged; Council does not substitute another model after a failure.
+
+New workflows snapshot the configured model, effort and effective skills of their actual participants, judge and advisors when admitted. Later profile edits cannot change those recorded choices. Unconfigured native model/effort defaults remain unrecorded; historical runs may also omit inherited settings.
 
 ## Billing, limits and appropriately sized models
 
 Open **Agents & billing** in the dashboard to record each alias's billing mode (`api`, `subscription`, `local` or `unknown`), plan, optional token prices and allowance windows. Windows have user-defined labels and units; Council does not assume that a subscription has a particular weekly limit. Enter an observation time and either a reset time or validity bound. Expired, future or unbounded observations remain visible as historical data and become unknown for routing. A passed reset time never implies replenishment. Blank quantities and prices mean unknown, including API accounts with no usage report.
 
-Link aliases with the same **shared account key** when they draw from the same allowance. Their quota is stored once, while skills and model-routing preferences stay separate per alias. Shared-account edits invalidate linked views' revisions, so an obsolete form cannot overwrite a newer report. Account links are explicit; matching harness names do not establish account identity. Billing state stays in `.council/billing.sqlite`, outside Git and release packages.
+Enable **Stop at subscription limit** per alias to block Council calls when included allowance is exhausted or cannot be verified. Classify included windows as `subscription` and paid balances as `credits`; paid credits never count toward the guard's allowance. An observed zero stays blocked across expired/reset dates until a fresh positive report arrives. The guard checks queued dispatches and active calls, including room tasks, advisors and private peer exchanges. It uses explicit reports rather than live provider probes and cannot impose a provider-side spending cap; see the [protection contract and limits](docs/billing-format.md#stop-at-included-subscription-limits).
+
+Link aliases with the same **shared account key** when they draw from the same allowance. Their quota is stored once, while model prices, skills and model-routing preferences stay separate per alias. Shared-account edits invalidate linked views' revisions, so an obsolete form cannot overwrite a newer report. Account links are explicit; matching harness names do not establish account identity. Billing state stays in `.council/billing.sqlite`, outside Git and release packages.
 
 Provider observations can be imported through `council_billing_import` or `council billing-import --agent <alias> --input-file <snapshot.json>`. Use a normalized report from an available host connector or another trusted source and verify the alias-to-account link. Council does not read vendor credentials, scrape undocumented account APIs or pretend that every provider exposes live limits. The [billing format](docs/billing-format.md) describes manual edits, reported observations and freshness. Configured prices are reference rates, not measured charges. Council does not decrement reported subscription allowance from an invented tokens-per-call estimate.
 
@@ -156,16 +200,20 @@ Routine economy routing prefers suitable configured small profiles. Task class c
 
 ## Collaboration skills
 
-The plugin ships four discoverable skills:
+The plugin ships four worker collaboration skills:
 
 - [Don't kill an ant with a bazooka](skills/dont-kill-an-ant-with-a-bazooka/SKILL.md): choose proportionate models, effort and collaboration, then wait without polling.
 - [Implementation and review](skills/council-implementation-review/SKILL.md): implementation, independent read-only review and revision.
 - [Independent perspectives](skills/council-independent-perspectives/SKILL.md): preserve independent analyses, evidence and material disagreement.
 - [Focused advisor](skills/council-advisor/SKILL.md): resolve a concrete uncertainty with read-only cross-model advice.
 
+[Human delegate](skills/council-human-delegate/SKILL.md) is a separate host orchestration skill for delegated project management and reporting. It is not part of the worker skill catalog and is never injected into worker prompts.
+
 Assign skills in **Agents & billing**, through an agent profile's `skills` array, or per run with `agentSettings[alias].skills` / CLI `--skills`. Room members also accept explicit skill arrays. A local `null` assignment inherits project defaults; `[]` disables inherited skills. Only the selected skills' short worker guidance is injected into that agent's prompt. Host orchestration instructions are not injected into workers, and skills never expand task permissions or permit recursive delegation. Effective assignments are snapshotted in run input. Routing and configured billing observations are recorded atomically with admission; billing observations are not charge receipts.
 
 The economy skill chooses Council workers. It cannot change the model already running the host conversation, the host's scheduling policy or the provider's own context and usage rules.
+
+The [open-source comparison](docs/oss-comparison.md) records design references from OpenHands, Ruflo, AutoGen, CrewAI, LangGraph and oh-my-claudecode, with dated GitHub popularity snapshots.
 
 ## Cross-model advisors and explicit reasoning effort
 

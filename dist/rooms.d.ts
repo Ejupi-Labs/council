@@ -16,6 +16,9 @@ export declare class RoomManager {
     subscribe(listener: (room: RoomRecord) => void): () => void;
     list(): RoomSummary[];
     get(id: string): RoomRecord;
+    metadata(id: string): Omit<RoomRecord, 'messages'>;
+    /** Reconcile a proven-dead owner without reading history or replaying work. */
+    recover(id: string): void;
     messagePage(id: string, limit?: number, cursor?: number): {
         messages: RoomMessage[];
         nextCursor: number | null;
@@ -29,6 +32,8 @@ export declare class RoomManager {
     startDiscussion(id: string): RoomRecord;
     execute(id: string): RoomRecord;
     cancel(id: string): RoomRecord;
+    pause(id: string): RoomRecord;
+    resume(id: string): RoomRecord;
     wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RoomRecord>;
     close(): Promise<void>;
     private available;
@@ -49,6 +54,8 @@ export declare class RoomManager {
     private taskInput;
     private discussionInput;
     private context;
+    private taskWorkspaces;
+    private validatePrerequisiteEvidence;
     private cost;
     private reservePlan;
     private launch;

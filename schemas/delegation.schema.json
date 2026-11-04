@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Council delegation",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "human",
+        "agent"
+      ]
+    },
+    "delegate": {
+      "type": "string",
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$"
+    },
+    "mandate": {
+      "type": "string",
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$"
+    },
+    "roomIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100,
+        "pattern": "^[a-zA-Z0-9_-]+$"
+      }
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "mode",
+    "delegate",
+    "mandate",
+    "roomIds",
+    "expectedRevision"
+  ],
+  "additionalProperties": false
+}

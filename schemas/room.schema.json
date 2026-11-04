@@ -137,6 +137,11 @@
       ],
       "minimum": 1,
       "default": null
+    },
+    "privateChatMaxRequests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
     }
   },
   "required": [

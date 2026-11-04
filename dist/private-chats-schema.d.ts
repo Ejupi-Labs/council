@@ -1,0 +1,8 @@
+import { type JsonSchema } from './schema.js';
+export declare const privateChatCreateDefinition: JsonSchema;
+export declare const privateChatSendDefinition: JsonSchema;
+export declare const privateChatPageDefinition: JsonSchema;
+export declare const privateChatWatchDefinition: JsonSchema;
+export declare const privateChatListDefinition: JsonSchema;
+export declare const privateChatActorsDefinition: JsonSchema;
+export declare const privateChatGetDefinition: JsonSchema;

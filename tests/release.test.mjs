@@ -56,7 +56,9 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   const packagedPaths = packed[0].files.map(file => file.path.replaceAll('\\', '/'));
   for (const file of ['dist/cli.js', 'plugin.json', 'mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/council/SKILL.md',
     'skills/dont-kill-an-ant-with-a-bazooka/SKILL.md', 'skills/council-implementation-review/SKILL.md',
-    'skills/council-independent-perspectives/SKILL.md', 'skills/council-advisor/SKILL.md', 'schemas/billing.schema.json', 'schemas/routing.schema.json']) {
+    'skills/council-independent-perspectives/SKILL.md', 'skills/council-advisor/SKILL.md', 'schemas/billing.schema.json', 'schemas/routing.schema.json',
+    'skills/council-human-delegate/SKILL.md', 'docs/delegation.md', 'schemas/delegation.schema.json', 'dist/delegation.js', 'dist/dashboard-delegate-ui.js',
+    'schemas/private-chat.schema.json', 'dist/private-chats.js', 'dist/private-chat-protocol.js', 'dist/dashboard-private-chats-ui.js', 'docs/private-chats.md']) {
     assert.ok(packagedPaths.includes(file), `The release must contain ${file}.`);
   }
   assert.ok(packagedPaths.every(file => !/(^|\/)(?:\.council|\.serena|node_modules|tests)(?:\/|$)/.test(file)), 'Local state, dependencies and test fixtures must not enter the release.');
@@ -109,7 +111,9 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   assert.equal(client.getServerVersion().version, releaseVersion);
   const available = (await client.listTools()).tools.map(tool => tool.name);
   for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel', 'council_health', 'council_run_page', 'council_backup', 'council_prune', 'council_patches',
-    'council_billing', 'council_billing_update', 'council_billing_import', 'council_route_plan', 'council_route_run', 'council_skills']) assert.ok(available.includes(name));
+    'council_billing', 'council_billing_update', 'council_billing_import', 'council_route_plan', 'council_route_run', 'council_skills',
+    'council_delegate_status', 'council_delegate_configure', 'council_delegate_report', 'council_delegate_resolve', 'council_delegate_reports', 'council_delegate_changes', 'council_delegate_watch',
+    'council_chat_create', 'council_chat_send', 'council_chat_list', 'council_chat_actors', 'council_chat_history', 'council_chat_watch']) assert.ok(available.includes(name));
   const call = async (name, input) => {
     const response = await client.callTool({ name, arguments: input });
     assert.notEqual(response.isError, true, `Installed MCP tool ${name} failed: ${response.content?.map(item => item.text ?? '').join(' ')}`);

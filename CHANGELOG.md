@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- Add per-alias subscription protection that blocks provider dispatch at exhausted or unverifiable included allowance even when paid credits remain. Retain exhaustion until a fresh positive observation, separate credit/other windows, and recheck queued, advisor, judge, continuation and private-peer calls. Request cancellation of active calls after a blocking report and retain honest failed evidence.
+- Add durable private one-to-one chats with task-instance participants, optional room association, complete ascending history, explicit discovery, safe keyed retries and server-side metadata-only waits. Pair messages never become room guidance or public update events.
+- Add opt-in managed private peer exchanges: reserve reply/resumption calls, release the sender's slot, run a separate read-only coordination turn and resume the sender. Keep raw turns outside workflow steps, shared lineage, room history and public advisor context.
+- Add English Private chats controls, per-task private-exchange budgets and subscription protection controls in Agents & billing; preserve drafts and scope isolation across asynchronous reads, sends, creation, closure and retry.
+
+- Add human-led or agent-delegated project management with a durable mandate, explicitly monitored rooms, an executive report inbox, revision-checked replies and a host-only human-delegate skill. The connected MCP host coordinates work; saving a mandate does not spawn a provider.
+- Wait for actionable board changes inside the server, suppress routine active-room progress, and read incremental report changes so replies to older questions remain discoverable. Keep reports separate from project instructions and approvals.
+- Add English Human delegate controls, a saved-mandate handoff prompt, complete paged reports, preserved reply drafts and live open-question badges without loading report bodies into the update stream.
+- Schedule newly ready task dependencies as soon as a concurrency slot is free, while preserving failure, cancellation, pause and instruction-change admission boundaries and draining admitted work.
+- Monitor room metadata without decoding conversation history, and detect tracked owners that exit after monitoring begins. Preserve partial evidence and completed work without replaying unfinished workflows.
+- Fix the remaining mixed-observation billing responses for single-agent MCP reads and HTTP saves.
+
+- Give each completion consumer an independent copy of the full run, preventing one caller from rewriting another caller's result in memory.
+- Keep artifact cleanup idempotent across long histories by reading every indexed cleanup-event page before touching worktrees; cancellation or evidence-read failure stops cleanup safely.
+- Select the final completed Codex message as the answer instead of concatenating progress narration into advisor requests or JSON ballots; reject an empty final answer.
+- Ignore delayed native close events from an older dialog session after a view is reopened. Open full history immediately with visible loading and inline first-page errors.
+- Recover authorization when a fresh token link changes only the fragment of an already-open dashboard tab; leave unrelated fragments alone.
+- Evaluate billing availability from the captured observation used by views, routing preferences and admission receipts, avoiding mixed account revisions during concurrent updates.
+
+- Add an on-demand workflow event timeline with exact-type filtering, complete expandable payloads, stable paging and explicit newer-event checks; keep loaded history through snapshot reloads and reject stale responses.
+- Add indexed, read-only event pages that remain consistent during pruning, return oversized events intact and report missing histories explicitly. Reuse existing database indexes without a schema migration.
+- Track room jobs after commit and before publishing active states, so synchronous shutdown subscribers cannot leave newly admitted or resumed rooms with orphaned ownership.
+
+- Add durable room Pause/Resume controls in the dashboard and MCP. Drain admitted workflows, save discussion/execution checkpoints, release paused jobs, and resume without replaying completed tasks or writes.
+- Preserve cancellation, failure and renewed-instruction precedence over pause; reject legacy active owners without checkpoint support and retain newly resumed jobs during reentrant publication.
+- Reserve only the discussion bound for manual rooms; keep full task/advisor preflight for explicit execution and combined reservations for automatic rooms.
+- Record a dated comparison of six widely starred open-source orchestration projects and the design patterns applied locally.
+
+- Add a read-only workflow evidence inspector and exact JSON snapshot download to room task cards and linked messages; retain complete outputs, every step and artifact export failures without agent calls.
+- Snapshot configured participant, judge and advisor model/effort settings at admission while preserving explicit overrides and unknown native defaults.
+- Keep reference token prices local to each alias even when allowance windows are shared; migrate existing billing prices transactionally without changing quota provenance.
+- Preserve prerequisite workflow identities and worktree/patch metadata in dependent room tasks; reject missing or unverified prerequisite evidence before dispatch and keep full reports once in history.
+- Protect the original billing draft during asynchronous discard/reload, preserve exact imported labels and unchanged capability names, and accept explicitly unknown price currency.
+
 - Add local per-agent billing modes, nullable reference prices, shared-account allowance windows, observation provenance/freshness and revision-checked edits/imports without vendor credential access.
 - Add deterministic economy/balanced/quality routing, explicit task classes and capabilities, direct/review/parallel/council presets, and opt-in larger-tier escalation; preserve caller-selected models and report unknown quotas.
 - Ship four assignable collaboration skills, including Don't kill an ant with a bazooka; inject only worker guidance and retain effective assignments and billing/routing admission receipts.

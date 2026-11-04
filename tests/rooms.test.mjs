@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -552,4 +552,94 @@ test('quoted JSON-looking rationale text is ordinary ballot evidence and does no
   const room = manager.create(input({ members: [member('codex')], autoExecute: false })); manager.startDiscussion(room.id);
   const result = await manager.wait(room.id);
   assert.equal(result.status, 'ready'); assert.equal(result.decision.rationale, rationale);
+});
+
+test('dependent tasks receive exact retained artifacts and the complete prerequisite report once without assuming a merge', { timeout: 60000 }, async t => {
+  const output = 'PREREQUISITE_FULL_BEGIN ' + 'verified evidence '.repeat(600) + ' PREREQUISITE_FULL_END';
+  let producerCwd, handoff;
+  const { manager, service, requests, root, peer } = fixture(t, async request => {
+    const data = ballotData(request); if (data) return complete(request, approve(data));
+    if (/Room task task-1:/.test(request.prompt)) {
+      producerCwd = request.cwd; writeFileSync(join(request.cwd, 'prerequisite.txt'), 'Retained implementation evidence.\n');
+      return complete(request, output);
+    }
+    handoff = JSON.parse(request.prompt.split('\n').find(line => line.startsWith('{"task":"task-1"')));
+    assert.equal(handoff.workflowRecordAvailable, true);
+    assert.equal(handoff.fullResultResource, `council://runs/${handoff.runId}`);
+    assert.deepEqual(handoff.workspaces, service.getRun(handoff.runId).workspaces);
+    assert.equal(handoff.workspaces[0].path, producerCwd); assert.equal(handoff.workspaces[0].exportStatus, 'ready');
+    assert.match(readFileSync(handoff.workspaces[0].patchPath, 'utf8'), /Retained implementation evidence/);
+    const history = request.prompt.split('\n').filter(line => line.startsWith('{"author":')).map(line => JSON.parse(line));
+    const reports = history.filter(message => message.kind === 'task' && message.body.includes('PREREQUISITE_FULL_BEGIN'));
+    assert.equal(reports.length, 1); assert.equal(reports[0].body, 'task-1: completed\n' + output); assert.equal(reports[0].runId, handoff.runId);
+    assert.equal(request.prompt.split('PREREQUISITE_FULL_END').length - 1, 1);
+    assert.equal(request.permission, 'read'); assert.equal(request.cwd, root); assert.equal(existsSync(join(request.cwd, 'prerequisite.txt')), false);
+    assert.match(request.prompt, /never merged into your current workspace automatically/);
+    assert.match(request.prompt, /If a sandbox or file policy blocks access/);
+    return complete(request, 'Reviewed the retained patch; the original checkout remains separate.');
+  }, { git: true });
+  const room = manager.create(input({ members: [member('codex')], tasks: [task('Produce retained files', { permission: 'write' }), task('Review predecessor evidence', { dependsOn: ['task-1'] })] }));
+  manager.startDiscussion(room.id); const result = await manager.wait(room.id);
+  assert.equal(result.status, 'completed'); assert.equal(requests.length, 3); assert.ok(handoff);
+  assert.deepEqual(result.tasks[0].workspaces, service.getRun(result.tasks[0].runId).workspaces);
+  assert.deepEqual(peer().get(room.id).tasks[0].workspaces, result.tasks[0].workspaces);
+  assert.equal(existsSync(join(root, 'prerequisite.txt')), false); assert.ok(result.tasks[0].resultPreview.includes('Preview truncated'));
+});
+
+test('failed prerequisite exports retain their exact artifact diagnostics and never dispatch dependent tasks', { timeout: 60000 }, async t => {
+  let implementationCalls = 0;
+  const { manager, service, peer } = fixture(t, async request => {
+    const data = ballotData(request); if (data) return complete(request, approve(data));
+    implementationCalls++; writeFileSync(join(request.cwd, 'unexported.txt'), 'Retained partial write.\n'); return complete(request, 'The fake writer finished its edit.');
+  }, { git: true });
+  service.engine.workspaces.export = async () => { throw new Error('Injected prerequisite patch export failure.'); };
+  const room = manager.create(input({ members: [member('codex')], tasks: [task('Writer', { permission: 'write' }), task('Blocked follower', { dependsOn: ['task-1'] })] }));
+  manager.startDiscussion(room.id); const result = await manager.wait(room.id);
+  assert.equal(result.status, 'failed'); assert.equal(implementationCalls, 1); assert.equal(result.tasks[0].status, 'failed');
+  assert.equal(result.tasks[1].runId, undefined); assert.equal(result.tasks[1].status, 'cancelled');
+  const artifacts = service.getRun(result.tasks[0].runId).workspaces;
+  assert.deepEqual(result.tasks[0].workspaces, artifacts); assert.equal(artifacts[0].exportStatus, 'failed');
+  assert.match(artifacts[0].exportError, /Injected prerequisite patch export failure/);
+  assert.deepEqual(peer().get(room.id).tasks[0].workspaces, artifacts);
+});
+
+test('pruned read-only workflow records retain full room dependency reports and explicitly report record availability', async t => {
+  const output = 'PRUNED_FULL_BEGIN ' + 'historical report '.repeat(300) + ' PRUNED_FULL_END';
+  let followerEvidence;
+  const { manager, service } = fixture(t, async request => {
+    const data = ballotData(request); if (data) return complete(request, approve(data));
+    if (/Room task task-1:/.test(request.prompt)) return complete(request, output);
+    followerEvidence = JSON.parse(request.prompt.split('\n').find(line => line.startsWith('{"task":"task-1"')));
+    const report = request.prompt.split('\n').filter(line => line.startsWith('{"author":')).map(line => JSON.parse(line)).find(message => message.kind === 'task' && message.runId === followerEvidence.runId && message.body.includes('PRUNED_FULL_BEGIN'));
+    assert.equal(report.body, 'task-1: completed\n' + output);
+    return complete(request, 'Used the durable room report without assuming the pruned workflow still exists.');
+  });
+  const room = manager.create(input({ members: [member('codex')] })); manager.startDiscussion(room.id);
+  const original = await manager.wait(room.id); assert.deepEqual(original.tasks[0].workspaces, []);
+  service.prune({ before: '9999-12-31T23:59:59.000Z', keepLatest: 0, dryRun: false });
+  assert.equal(service.getRun(original.tasks[0].runId), undefined);
+  manager.addTask(room.id, task('Use retained report', { dependsOn: ['task-1'] })); manager.startDiscussion(room.id);
+  const result = await manager.wait(room.id);
+  assert.equal(result.status, 'completed'); assert.equal(followerEvidence.workflowRecordAvailable, false);
+  assert.equal(followerEvidence.fullResultResource, undefined); assert.deepEqual(followerEvidence.workspaces, []);
+});
+
+test('unverifiable completed prerequisites fail before any new discussion or task call', t => {
+  for (const state of ['missing-identity', 'missing-artifacts', 'failed-workflow', 'pending-export']) {
+    const { manager, service, requests } = fixture(t);
+    const room = manager.create(input({ members: [member('codex')], tasks: [task('Prerequisite'), task('Dependent', { dependsOn: ['task-1'] })] }));
+    manager.store.mutate(room.id, current => {
+      current.tasks[0].status = 'completed';
+      if (state !== 'missing-identity') current.tasks[0].runId = 'retained-prerequisite';
+      if (state === 'failed-workflow' || state === 'pending-export') current.tasks[0].workspaces = [];
+    });
+    const getRun = service.getRun.bind(service);
+    service.getRun = id => id !== 'retained-prerequisite' ? getRun(id) : state === 'failed-workflow' || state === 'pending-export'
+      ? { id, input: { mode: 'delegate', task: 'Stored fixture', agents: ['codex'], permission: 'write' },
+        status: state === 'failed-workflow' ? 'failed' : 'completed', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', steps: [],
+        workspaces: state === 'pending-export' ? [{ agent: 'codex', path: '/retained/worktree', patchPath: '/retained/patch', changed: true, exportStatus: 'pending' }] : [] }
+      : undefined;
+    assert.throws(() => manager.startDiscussion(room.id), /Prerequisite/);
+    assert.equal(requests.length, 0); assert.equal(manager.get(room.id).status, 'idle');
+  }
 });

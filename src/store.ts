@@ -3,7 +3,7 @@ import { chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtem
 import { basename, dirname, join, resolve } from 'node:path';
 import { backup, DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord, WorkspaceArtifact } from './types.js';
-import { summarizeEvent, summarizeRun, type PruneResult, type RunSummary } from './summary.js';
+import { MAX_EVENT_PAGE_BYTES, summarizeEvent, summarizeRun, type EventPage, type PruneResult, type RunSummary } from './summary.js';
 
 const SCHEMA_VERSION = 5;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
@@ -84,6 +84,15 @@ function cutoffTimestamp(value: string): string {
 
 type OwnedRunRow = { status: RunRecord['status']; revision: number; owner_instance: string | null; owner_pid: number | null; cancel_requested: number };
 type InstanceRow = { id: string; pid: number; heartbeat_at: number; slot_limit: number | null };
+
+export class RunEventsUnavailableError extends Error {
+  readonly status = 404;
+  readonly code = 'COUNCIL_RUN_EVENTS_UNAVAILABLE';
+  constructor() {
+    super('Workflow not found (404). Its stored record and event history may have been pruned.');
+    this.name = 'RunEventsUnavailableError';
+  }
+}
 
 /** Durable collaboration state shared by all Council processes in one workspace. */
 export class CouncilStore {
@@ -347,6 +356,42 @@ export class CouncilStore {
       sequence: number; run_id: string; type: string; data: string; created_at: string;
     }[];
     return rows.map(row => ({ sequence: row.sequence, runId: row.run_id, type: row.type, data: JSON.parse(row.data), createdAt: row.created_at }));
+  }
+
+  /** Complete event payloads, with indexed exact-type filtering and stable ascending cursors. */
+  eventPage(runId: string, after = 0, limit = 100, type?: string): EventPage {
+    text(runId, 'Run id', 256);
+    if (!Number.isSafeInteger(after) || after < 0) throw new Error('Event cursor must be a non-negative safe integer.');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Full event page limit must be from 1 to 100.');
+    if (type !== undefined) text(type, 'Event type', 128);
+    const read = (): EventPage => {
+      // One snapshot keeps existence, matching keys and complete payloads consistent with pruning.
+      if (!this.statement('SELECT 1 FROM runs WHERE id = ?').get(runId)) throw new RunEventsUnavailableError();
+      const keys = (type === undefined
+        ? this.statement('SELECT sequence FROM events INDEXED BY events_run_sequence WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?').all(runId, after, limit + 1)
+        : this.statement('SELECT sequence FROM events INDEXED BY events_run_type_sequence WHERE run_id = ? AND type = ? AND sequence > ? ORDER BY sequence LIMIT ?').all(runId, type, after, limit + 1)) as { sequence: number }[];
+      const events: EventRecord[] = [];
+      let bytes = 2; // The events array brackets.
+      for (const key of keys.slice(0, limit)) {
+        // Inspect only the candidate size before reading/decoding its JSON. A large
+        // first event is returned intact alone; a later one remains at the cursor.
+        const row = this.statement('SELECT type, created_at, length(CAST(data AS BLOB)) AS data_bytes FROM events WHERE sequence = ? AND run_id = ?')
+          .get(key.sequence, runId) as { type: string; created_at: string; data_bytes: number } | undefined;
+        if (!row) throw new Error('Workflow event metadata is unavailable in the current storage snapshot.');
+        const metadata = { sequence: key.sequence, runId, type: row.type, data: null, createdAt: row.created_at };
+        const eventBytes = Buffer.byteLength(JSON.stringify(metadata), 'utf8') - 4 + row.data_bytes + (events.length ? 1 : 0);
+        if (events.length && bytes + eventBytes > MAX_EVENT_PAGE_BYTES) break;
+        const payload = this.statement('SELECT data FROM events WHERE sequence = ? AND run_id = ?').get(key.sequence, runId) as { data: string } | undefined;
+        if (!payload) throw new Error('Workflow event payload is unavailable in the current storage snapshot.');
+        events.push({ ...metadata, data: JSON.parse(payload.data) });
+        bytes += eventBytes;
+        if (bytes >= MAX_EVENT_PAGE_BYTES) break;
+      }
+      const nextAfter = events.at(-1)?.sequence ?? after;
+      const hasMore = keys.length > events.length;
+      return { events, nextAfter, hasMore, nextCursor: hasMore ? nextAfter : null };
+    };
+    return this.db.isTransaction ? read() : this.transaction(read, false);
   }
 
   compactEvents(runId: string, after = 0, limit = 100): EventRecord[] {

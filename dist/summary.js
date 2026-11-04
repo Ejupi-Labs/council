@@ -1,5 +1,7 @@
 export const MAX_RUN_SUMMARY_BYTES = 64 * 1024;
 export const MAX_COMPACT_EVENT_DATA_BYTES = 8 * 1024;
+/** Paging bounds response materialization, never the contents of an individual event. */
+export const MAX_EVENT_PAGE_BYTES = 1024 * 1024;
 export function summarizeRun(run, revision = 1) {
     let truncated = run.steps.length > 64 || (run.workspaces?.length ?? 0) > 64 || (run.error?.length ?? 0) > 2048 || run.steps.some(step => (step.result.error?.length ?? 0) > 1024);
     const workspaces = run.workspaces?.slice(0, 64).map(artifact => {

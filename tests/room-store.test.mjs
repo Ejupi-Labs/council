@@ -115,3 +115,18 @@ test('atomic room cancellation handles the latest idle or ready state and preser
     assert.equal(store.get(record.id).revision, record.revision);
   }
 });
+
+test('coordination metadata reads never fetch or decode chat history and remain independent copies', t => {
+  const setup = fixture(t), store = setup.open(), original = room();
+  original.messages = [message(1)]; store.insert(original);
+  const { messages, ...expected } = original;
+  const metadata = store.metadata(original.id);
+  assert.deepEqual(metadata, expected); assert.equal(Object.hasOwn(metadata, 'messages'), false);
+  metadata.tasks[0].brief = 'Consumer edit'; assert.deepEqual(store.metadata(original.id), expected);
+  const database = new DatabaseSync(join(setup.directory, 'rooms.sqlite'));
+  try { database.prepare('UPDATE room_messages SET document=? WHERE room_id=?').run('{invalid history JSON', original.id); }
+  finally { database.close(); }
+  assert.throws(() => store.get(original.id), SyntaxError);
+  assert.deepEqual(store.metadata(original.id), expected, 'Status monitoring is independent of complete history decoding.');
+  assert.equal(store.metadata('missing-room'), undefined);
+});

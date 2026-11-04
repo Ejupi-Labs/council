@@ -120,6 +120,32 @@
         "additionalProperties": false
       }
     },
+    "privateChats": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "peers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "minItems": 1
+          },
+          "maxRequests": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        },
+        "required": [
+          "peers"
+        ],
+        "additionalProperties": false
+      }
+    },
     "contextLimit": {
       "type": [
         "integer",
