@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { ManagedProcess, ProcessCleanupError } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { retryWindowsSharing } from './fs-retry.js';
+import { gitStatusUntrackedPaths, GIT_STATUS_OUTPUT_BYTES } from './git-status.js';
 function segment(value) {
     const label = value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'workspace';
     return `${label}-${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
@@ -114,7 +115,7 @@ export class GitWorkspaces {
                 throw error; });
         }
     }
-    git(cwd, args, input, signal) {
+    git(cwd, args, input, signal, statusOutput = false) {
         if (signal?.aborted)
             return Promise.reject(new Error('Git workspace operation cancelled.'));
         return new Promise((accept, reject) => {
@@ -146,8 +147,8 @@ export class GitWorkspaces {
             signal?.addEventListener('abort', abort, { once: true });
             child.stdout.on('data', (chunk) => {
                 bytes += chunk.length;
-                if (bytes > 64 * 1024 * 1024)
-                    stop('Git workspace output exceeds 64 MiB.');
+                if (bytes > (statusOutput ? GIT_STATUS_OUTPUT_BYTES : 64 * 1024 * 1024))
+                    stop(statusOutput ? 'Git workspace status output exceeds 192 MiB.' : 'Git workspace output exceeds 64 MiB.');
                 else
                     chunks.push(chunk);
             });
@@ -287,8 +288,7 @@ export class GitWorkspaces {
     }
     async exportWorktree(artifact, signal) {
         const manifest = await this.verify(artifact, signal);
-        await this.assertExportableSubmodules(manifest, signal);
-        const untracked = await this.git(manifest.path, ['ls-files', '--others', '--exclude-standard', '-z'], undefined, signal);
+        const untracked = gitStatusUntrackedPaths(await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], undefined, signal, true));
         if (untracked.length > 0)
             await this.git(manifest.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked, signal);
         const patch = await this.patch(manifest, signal);

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Remove one supervised Git discovery call per patch export while preserving raw path bytes, rename framing, repository-root scope and dirty-submodule refusal. Keep separate 64 MiB tracked/untracked limits inside a bounded combined status read.
+- Apply CLI event limits inside SQLite before decoding payloads, and document room, snapshot, retention and recovery options in command help.
+- Preserve terminal room failures and bounded pre-cleanup process/state diagnostics in offline endurance logs. Rotate verified, drained storage fixtures within the existing disk budget, and report artifact cycle limits separately from elapsed-duration qualification.
+
 - Add schema 6 durable cleanup incidents, transactional admission and ready-artifact guards, failed finalization, bounded status pages and a read-only dashboard. Preserve incidents across recovery/restart/restore and retain an audited, exact-revision offline acknowledgement after operator inspection; never replay work or clear automatically.
 - Report each actual agent/Git cleanup uncertainty separately from local fence notifications and foreign refusal. Preserve private evidence, draining slots, pending artifacts and a fixed warning when durable incident persistence fails, including emergency finalization.
 

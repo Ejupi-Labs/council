@@ -86,11 +86,11 @@ Options:
   --rounds <n>           Debate rounds within your configured call budget
   --max-calls <n>        Per-run bound within project limits
   --agent <alias>       Agent for billing inspection or updates
-  --input-file <path>   Billing settings/snapshot or complete routing JSON
-  --revision <n>        Expected billing revision for a conditional update
+  --input-file <path>    Room, message, task, billing or routing JSON
+  --revision <n>         Expected billing revision or exact quarantine generation
   --task-class <name>   routine | standard | complex (routing)
   --strategy <name>     economy | balanced | quality (routing default: economy)
-  --collaboration <n>   direct | review | parallel | council (default: direct)
+  --collaboration <name> direct | review | parallel | council (default: direct)
   --requires <names>    Comma-separated required configured capabilities
   --participants <n>    Team size for routed collaboration
   --allow-escalation    Explicitly allow a larger model tier when necessary
@@ -98,8 +98,16 @@ Options:
   --write               Enable isolated worktrees for requested edits
   --json                JSON output (default; export emits Markdown)
   --summary             Use lightweight summaries for runs/events
-  --cursor <token>      Continue a runs --summary page
-  --keep-latest <n>     Preserve newest runs during pruning (default: 100)
+  --limit <n>            Maximum results; valid range depends on the command
+  --cursor <token>       Continue a runs --summary, room-history or quarantine page
+  --after <n>            Read events after this sequence number (default: 0)
+  --output <path>        New report file, backup file or snapshot directory
+  --integrity            Check every present collaboration database with health
+  --before <timestamp>   Prune cutoff with an explicit timezone
+  --keep-latest <n>      Preserve newest runs during pruning (default: 100)
+  --execute              Execute the reviewed prune preview
+  --reviewed             Confirm artifact review or offline quarantine inspection
+  --discard              Permit cleanup to discard reviewed dirty worktree changes
   --version             Print version
   --help                Show help
 
@@ -298,7 +306,7 @@ async function main(): Promise<void> {
     } else if (command === 'events') {
       const after = Number(values.after ?? 0), limit = Number(values.limit ?? 100);
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Event cursor must be non-negative and limit must be from 1 to 1000.');
-      print(values.summary ? service.store.compactEvents(id!, after, limit) : service.store.events(id!, after).slice(0, limit));
+      print(values.summary ? service.store.compactEvents(id!, after, limit) : service.store.events(id!, after, limit));
     } else if (command === 'recover') print({ recovered: [...service.recoveredRuns, ...service.store.recoverOrphans()].map(run => ({ id: run.id, status: run.status, error: run.error })) });
     else if (command === 'cancel') {
       const request = service.requestCancellation(id!);

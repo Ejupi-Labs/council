@@ -192,10 +192,16 @@ try {
   failure = error instanceof Error ? error.stack?.slice(0, 8000) ?? error.message : String(error).slice(0, 8000);
   record({ event: 'failed', error: failure }); process.exitCode = 1;
 } finally {
+  const workloadStopped = performance.now();
+  const observedWorkloadMs = workloadStarted === undefined ? undefined : workloadStopped - workloadStarted;
   try { await service?.close(); } catch (error) { failure ??= error instanceof Error ? error.message : String(error); process.exitCode = 1; }
-  await Promise.allSettled([...ownedGit].map(child => child.forceKill()));
+  const cleanupResults = await Promise.allSettled([...ownedGit].map(child => child.forceKill()));
+  for (const result of cleanupResults) if (result.status === 'rejected') {
+    failure ??= result.reason instanceof Error ? result.reason.message : 'Owned Git cleanup could not be verified.';
+    process.exitCode = 1;
+  }
   process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
-  const summary = { startedAt, finishedAt: new Date().toISOString(), elapsedMs: Math.round(performance.now() - started), setupMs: workloadStarted === undefined ? undefined : Math.round(workloadStarted - started), workloadMs: workloadStarted === undefined ? undefined : Math.round(performance.now() - workloadStarted), success: !failure && !interrupted, interrupted, version, snapshotDigest, completedCycles, cancelledRuns, patches, patchBytes, peakFixtureBytes, peakHeap, peakRss, ...(failure ? { error: failure, preservedFixture: temporary } : {}) };
+  const summary = { startedAt, finishedAt: new Date().toISOString(), elapsedMs: Math.round(performance.now() - started), setupMs: workloadStarted === undefined ? undefined : Math.round(workloadStarted - started), workloadMs: observedWorkloadMs === undefined ? undefined : Math.round(observedWorkloadMs), cleanupMs: Math.round(performance.now() - workloadStopped), requestedDurationMs: options.durationMs, cycleLimit: options.cycles, durationReached: observedWorkloadMs !== undefined && observedWorkloadMs >= options.durationMs, stopReason: failure ? 'failed' : interrupted ? 'interrupted' : observedWorkloadMs >= options.durationMs ? 'duration' : 'cycle-limit', success: !failure && !interrupted, interrupted, version, snapshotDigest, completedCycles, cancelledRuns, patches, patchBytes, peakFixtureBytes, peakHeap, peakRss, ...(failure ? { error: failure, preservedFixture: temporary } : {}) };
   if (failure) writeFileSync(join(temporary, 'FAILED.json'), JSON.stringify(summary, null, 2) + '\n');
   else rmSync(checkedTemporary(temporary), { recursive: true, force: true });
   writeFileSync(summaryFile, JSON.stringify(summary, null, 2) + '\n'); record({ event: 'finished', ...summary });

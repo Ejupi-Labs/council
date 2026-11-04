@@ -406,10 +406,11 @@ export class CouncilStore {
     return { ...event, sequence: Number(result.lastInsertRowid) };
   }
 
-  events(runId: string, after = 0): EventRecord[] {
+  events(runId: string, after = 0, limit = 1000): EventRecord[] {
     text(runId, 'Run id', 256);
     if (!Number.isSafeInteger(after) || after < 0) throw new Error('Event cursor must be a non-negative integer');
-    const rows = this.statement('SELECT sequence, run_id, type, data, created_at FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT 1000').all(runId, after) as {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Event page limit must be from 1 to 1000.');
+    const rows = this.statement('SELECT sequence, run_id, type, data, created_at FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?').all(runId, after, limit) as {
       sequence: number; run_id: string; type: string; data: string; created_at: string;
     }[];
     return rows.map(row => ({ sequence: row.sequence, runId: row.run_id, type: row.type, data: JSON.parse(row.data), createdAt: row.created_at }));

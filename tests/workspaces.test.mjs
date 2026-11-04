@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { GitWorkspaces } from '../dist/workspaces.js';
+import { gitStatusUntrackedPaths } from '../dist/git-status.js';
 import { killProcessTree, ManagedProcess, ProcessCleanupError } from '../dist/process.js';
 
 function fixture(t, commit = true) {
@@ -583,4 +584,60 @@ test('a direct SDK state alias with missing descendants publishes canonical arti
   assert.equal(readFileSync(join(root, 'base.txt'), 'utf8'), 'committed content\n');
   await new GitWorkspaces(root, requested).cleanup(repaired, { reviewed: true, discardChanges: true });
   assert.equal(existsSync(workspace.path), false);
+});
+
+test('combined export discovery removes one supervised call while retaining complete new paths and repeated patch bytes', async t => {
+  const { manager, root, git } = fixture(t), workspace = await manager.create('combined-discovery', 'codex');
+  writeFileSync(join(workspace.path, '[a].txt'), 'Literal bracket contents.\n');
+  writeFileSync(join(workspace.path, 'a.txt'), 'Matching plain contents.\n');
+  mkdirSync(join(workspace.path, 'new directory')); writeFileSync(join(workspace.path, 'new directory', '雪-é.txt'), 'Complete Unicode evidence.\n');
+  const commands = [], original = manager.git.bind(manager);
+  manager.git = async (...args) => { commands.push({ cwd: args[0], args: args[1], combinedLimit: args[4] === true }); return original(...args); };
+  const first = await manager.export(workspace), patch = readFileSync(first.patchPath);
+  assert.deepEqual(commands.map(call => call.args[0]), ['worktree', 'status', 'add', 'diff']);
+  assert.equal(commands[1].cwd, workspace.path); assert.ok(commands[1].args.includes('--untracked-files=all'));
+  assert.equal(commands[1].combinedLimit, true); assert.ok(commands.filter(call => call.args[0] !== 'status').every(call => !call.combinedLimit));
+  commands.length = 0; await manager.export(first);
+  assert.deepEqual(commands.map(call => call.args[0]), ['worktree', 'status', 'diff']);
+  assert.deepEqual(readFileSync(first.patchPath), patch);
+  git('apply', '--check', first.patchPath); git('apply', first.patchPath);
+  assert.equal(readFileSync(join(root, '[a].txt'), 'utf8'), 'Literal bracket contents.\n');
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'Matching plain contents.\n');
+  assert.equal(readFileSync(join(root, 'new directory', '雪-é.txt'), 'utf8'), 'Complete Unicode evidence.\n');
+});
+
+test('combined discovery retains repository-root scope for a selected nested project', async t => {
+  const { root, dir, git } = fixture(t), selected = join(root, 'project'); mkdirSync(selected);
+  writeFileSync(join(selected, 'tracked.txt'), 'Committed nested project.\n'); git('add', '.'); git('commit', '--quiet', '-m', 'nested scope');
+  const manager = new GitWorkspaces(selected, join(dir, 'nested-export')), workspace = await manager.create('nested-discovery', 'codex');
+  writeFileSync(join(workspace.cwd, 'new-inside.txt'), 'Inside selected project.\n');
+  writeFileSync(join(workspace.path, 'new-outside.txt'), 'Sibling repository evidence.\n');
+  const original = manager.git.bind(manager); let statusCwd;
+  manager.git = (...args) => { if (args[1][0] === 'status') statusCwd = args[0]; return original(...args); };
+  const exported = await manager.export(workspace);
+  assert.equal(statusCwd, workspace.path); assert.notEqual(statusCwd, workspace.cwd);
+  git('apply', '--check', exported.patchPath); git('apply', exported.patchPath);
+  assert.equal(readFileSync(join(root, 'project', 'new-inside.txt'), 'utf8'), 'Inside selected project.\n');
+  assert.equal(readFileSync(join(root, 'new-outside.txt'), 'utf8'), 'Sibling repository evidence.\n');
+});
+
+test('POSIX combined status preserves invalid UTF-8 untracked paths through export', { skip: process.platform === 'win32' }, async t => {
+  const { manager, root, git } = fixture(t), workspace = await manager.create('raw-posix-discovery', 'codex');
+  const rawName = Buffer.concat([Buffer.from('raw-'), Buffer.from([0xff, 0x80])]);
+  const rawPath = Buffer.concat([Buffer.from(workspace.path + '/'), rawName]);
+  try { writeFileSync(rawPath, 'Complete raw pathname evidence.\n'); }
+  catch (error) {
+    if (['EILSEQ', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) { t.skip('Filesystem rejects invalid UTF-8 filenames: ' + error.code); return; }
+    throw error;
+  }
+  const exported = await manager.export(workspace); git('apply', '--check', exported.patchPath); git('apply', exported.patchPath);
+  assert.equal(readFileSync(Buffer.concat([Buffer.from(root + '/'), rawName]), 'utf8'), 'Complete raw pathname evidence.\n');
+});
+
+test('POSIX combined discovery preserves a literal colon filename independently of pathspec interpretation', { skip: process.platform === 'win32' }, async t => {
+  const { manager } = fixture(t), workspace = await manager.create('colon-posix-discovery', 'codex');
+  const colon = ':(exclude)victim'; writeFileSync(join(workspace.path, colon), 'Literal colon filename.\n');
+  const bytes = execFileSync('git', ['-C', workspace.path, 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], { windowsHide: true });
+  const discovered = gitStatusUntrackedPaths(bytes);
+  assert.deepEqual(discovered, Buffer.from(colon + '\0'), 'Discovery preserves literal bytes; pathspec interpretation is a separate add concern.');
 });

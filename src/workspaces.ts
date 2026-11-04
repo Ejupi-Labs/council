@@ -6,6 +6,7 @@ import type { WorkspaceArtifact } from './types.js';
 import { ManagedProcess, ProcessCleanupError } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { retryWindowsSharing } from './fs-retry.js';
+import { gitStatusUntrackedPaths, GIT_STATUS_OUTPUT_BYTES } from './git-status.js';
 
 export interface WorkspaceHandle extends WorkspaceArtifact { cwd: string; baseHead: string }
 interface Manifest { path: string; patchPath: string; agent: string; cwd: string; baseHead: string; gitDir?: string; removed?: boolean }
@@ -108,7 +109,7 @@ export class GitWorkspaces {
     }
   }
 
-  private git(cwd: string, args: string[], input?: Buffer, signal?: AbortSignal): Promise<Buffer> {
+  private git(cwd: string, args: string[], input?: Buffer, signal?: AbortSignal, statusOutput = false): Promise<Buffer> {
     if (signal?.aborted) return Promise.reject(new Error('Git workspace operation cancelled.'));
     return new Promise((accept, reject) => {
       const child = new ManagedProcess({ command: 'git', args: ['-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + join(this.state, 'disabled-hooks'), '-C', cwd, ...args],
@@ -136,7 +137,7 @@ export class GitWorkspaces {
       signal?.addEventListener('abort', abort, { once: true });
       child.stdout.on('data', (chunk: Buffer) => {
         bytes += chunk.length;
-        if (bytes > 64 * 1024 * 1024) stop('Git workspace output exceeds 64 MiB.');
+        if (bytes > (statusOutput ? GIT_STATUS_OUTPUT_BYTES : 64 * 1024 * 1024)) stop(statusOutput ? 'Git workspace status output exceeds 192 MiB.' : 'Git workspace output exceeds 64 MiB.');
         else chunks.push(chunk);
       });
       child.stderr.on('data', (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString('utf8')).slice(0, 4096); });
@@ -259,8 +260,7 @@ export class GitWorkspaces {
 
   private async exportWorktree(artifact: WorkspaceArtifact, signal: AbortSignal): Promise<WorkspaceArtifact> {
     const manifest = await this.verify(artifact, signal);
-    await this.assertExportableSubmodules(manifest, signal);
-    const untracked = await this.git(manifest.path, ['ls-files', '--others', '--exclude-standard', '-z'], undefined, signal);
+    const untracked = gitStatusUntrackedPaths(await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none'], undefined, signal, true));
     if (untracked.length > 0) await this.git(manifest.path, ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], untracked, signal);
     const patch = await this.patch(manifest, signal);
     signal.throwIfAborted();

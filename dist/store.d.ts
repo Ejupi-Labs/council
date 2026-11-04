@@ -41,7 +41,7 @@ export declare class CouncilStore {
     }): RunSummary[];
     appendEvent(runId: string, type: string, data: unknown): EventRecord;
     private writeEvent;
-    events(runId: string, after?: number): EventRecord[];
+    events(runId: string, after?: number, limit?: number): EventRecord[];
     /** Complete event payloads, with indexed exact-type filtering and stable ascending cursors. */
     eventPage(runId: string, after?: number, limit?: number, type?: string): EventPage;
     compactEvents(runId: string, after?: number, limit?: number): EventRecord[];

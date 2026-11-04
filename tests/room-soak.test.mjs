@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { roomSoakDiagnostic, roomSoakEntryFailure } from '../scripts/room-soak.mjs';
 
 const repository = realpathSync.native(fileURLToPath(new URL('../', import.meta.url))), script = realpathSync.native(fileURLToPath(new URL('../scripts/room-soak.mjs', import.meta.url)));
 const events = output => output.trim().split(/\r?\n/).filter(line => line.startsWith('{')).map(line => JSON.parse(line));
@@ -92,4 +93,107 @@ test('invalid room-soak options fail before starting a workload or creating a pr
   try { execFileSync(process.execPath, [script, '--duration-ms', '0'], { cwd: repository, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 10000 });
     assert.fail('A zero-duration workload must be rejected.'); } catch (error) { captured = error; }
   assert.equal(captured.status, 1); assert.equal(captured.stdout, ''); assert.match(captured.stderr, /Duration must be/);
+});
+
+test('entry failure detection preserves public terminal errors without misclassifying expected live states', () => {
+  assert.match(roomSoakEntryFailure({ status: 'failed', error: 'database is locked' }).message, /^Room failed before task entry: database is locked$/);
+  assert.match(roomSoakEntryFailure({ status: 'cancelled', error: 'Cancellation was accepted.' }).message, /Cancellation was accepted/);
+  for (const status of ['idle', 'ready', 'running', 'paused', 'completed', 'needs_attention']) assert.equal(roomSoakEntryFailure({ status }), undefined);
+});
+
+test('failure diagnostics bound complete metadata and exclude prompts, output, private bodies and raw stderr', () => {
+  const secret = 'PRIVATE_RAW_USER_CONTENT', control = '\u0001'.repeat(4000);
+  const row = { id: control, status: 'failed', runId: control, error: 'database is locked', input: { task: secret }, output: secret, body: secret };
+  const diagnostic = roomSoakDiagnostic({ scenario: 'cancel', phase: 'task entry (2)', error: 'database is locked',
+    room: { ...row, tasks: Array.from({ length: 100 }, () => ({ ...row })), privateBody: secret },
+    runs: Array.from({ length: 100 }, () => ({ ...row, steps: [{ ...row, error: '{"council_private_reply":{"body":"' + secret + '"}}' }] })),
+    slots: Array.from({ length: 100 }, () => ({ token: control, instance_id: control, run_id: control, body: secret })),
+    waiters: Array.from({ length: 100 }, () => ({ instance_id: control, run_id: control, waiter_id: control })),
+    instances: Array.from({ length: 100 }, () => ({ id: control, pid: 12345 })),
+    workers: [{ pid: 12345, connected: true, exited: false, stderr: secret + '\nstate.degraded\ndatabase is locked\n', output: secret }],
+    counts: { runs: 150, activeRuns: 0, slots: 100, slotWaiters: 100, instances: 100, privateBody: secret },
+    readFailures: [{ area: 'runs', code: 5, body: secret }, { area: secret, code: 6 }],
+  });
+  const json = JSON.stringify(diagnostic);
+  assert.ok(Buffer.byteLength(json) < 64 * 1024); assert.equal(json.includes(secret), false);
+  assert.equal(diagnostic.error, 'database is locked'); assert.equal(diagnostic.truncated, true);
+  assert.ok(diagnostic.omitted.tasks > 0); assert.equal(diagnostic.omitted.runs, 150 - diagnostic.runs.length);
+  assert.deepEqual(diagnostic.readFailures, [{ area: 'runs', code: 5 }]);
+  assert.equal(diagnostic.workers[0].stderr.hasContent, true);
+  assert.ok(diagnostic.workers[0].stderr.signals.includes('state.degraded'));
+});
+
+test('a real child pre-dispatch failure reports its cause and pre-cleanup state while draining every worker', { timeout: 60000 }, () => {
+  const parent = realpathSync.native(tmpdir()), source = realpathSync.native(mkdtempSync(join(parent, 'council-room-soak-failure-')));
+  mkdirSync(join(source, 'scripts')); cpSync(join(repository, 'dist'), join(source, 'dist'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), readFileSync(join(repository, 'package.json')));
+  writeFileSync(join(source, 'scripts', 'coordination-soak.mjs'), readFileSync(join(repository, 'scripts', 'coordination-soak.mjs')));
+  const original = readFileSync(script, 'utf8'), site = "  process.on('disconnect', () => { void service.close()";
+  assert.equal(original.split(site).length, 2);
+  const injection = "  const start = service.start.bind(service); service.start = input => { if (input.task.startsWith('Room task ')) throw new Error('Deliberate offline pre-dispatch failure.'); return start(input); };\n";
+  writeFileSync(join(source, 'scripts', 'room-soak.mjs'), original.replace(site, injection + site));
+  let captured, retained, verified = false;
+  try {
+    try { execFileSync(process.execPath, [join(source, 'scripts', 'room-soak.mjs'), '--duration-ms', '1000', '--checkpoint-ms', '1000'], {
+      cwd: source, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 45000, maxBuffer: 512 * 1024,
+    }); assert.fail('Injected pre-dispatch failure must fail the soak.'); } catch (error) { captured = error; }
+    assert.equal(captured.status, 1, captured.stderr);
+    const rows = events(captured.stdout), summary = rows.at(-1), diagnostic = rows.find(row => row.event === 'failure_diagnostic')?.diagnostic;
+    assert.equal(summary.status, 'failed'); assert.match(summary.error, /Room failed before task entry: Deliberate offline pre-dispatch failure/);
+    assert.equal(summary.error.includes('Timed out: task entry'), false); assert.equal(summary.fakeAgentCalls, 2);
+    assert.equal(summary.workersStarted, 2); assert.equal(summary.workersExited, 2); assert.equal(summary.fixtureRemoved, false);
+    assert.equal(diagnostic.room.status, 'failed'); assert.equal(diagnostic.room.error, 'Deliberate offline pre-dispatch failure.');
+    assert.match(diagnostic.phase, /^task entry/); assert.equal(diagnostic.workers.length, 2);
+    assert.ok(diagnostic.workers.every(worker => worker.exited === false), 'Failure state must be captured before worker shutdown.');
+    assert.ok(diagnostic.workers.some(worker => worker.lastReply?.status === 'running'));
+    assert.equal(diagnostic.runs.length, 1); assert.equal(diagnostic.runs[0].status, 'completed');
+    assert.ok(diagnostic.room.tasks.every(task => task.runId === undefined));
+    retained = realpathSync.native(summary.fixture); assert.equal(dirname(retained), parent); assert.ok(basename(retained).startsWith('council-room-soak-'));
+    for (const name of readdirSync(retained).filter(name => name.startsWith('fixture-'))) {
+      const database = new DatabaseSync(join(retained, name, 'project', '.council', 'state.db'), { readOnly: true });
+      try {
+        for (const table of ['instances', 'slots', 'slot_waiters']) assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ' + table).get().count, 0);
+        assert.equal(database.prepare("SELECT COUNT(*) AS count FROM runs WHERE status IN ('queued','running')").get().count, 0);
+      } finally { database.close(); }
+    }
+    verified = true;
+  } finally {
+    if (verified) {
+      assert.equal(dirname(realpathSync.native(source)), parent); assert.ok(basename(source).startsWith('council-room-soak-failure-'));
+      rmSync(retained, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      rmSync(source, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  }
+});
+
+test('a diagnostic write failure outranks interruption after actual spawned workers drain', { timeout: 60000 }, () => {
+  const url = new URL('../scripts/room-soak.mjs', import.meta.url).href;
+  const driver = `import fs from 'node:fs';import childProcess from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';
+import {roomSoak,roomSoakOptions} from ${JSON.stringify(url)};
+const controller=new AbortController(),append=fs.appendFileSync,spawn=childProcess.spawn;let timer;
+fs.appendFileSync=function(path,data,...rest){if(String(data).includes('"event":"failure_diagnostic"'))throw new Error('Injected diagnostic write failure.');return append(path,data,...rest);};
+childProcess.spawn=function(...args){const child=spawn(...args);if(Array.isArray(args[1])&&args[1].includes('--worker')&&!timer)timer=setTimeout(()=>controller.abort(new DOMException('Deliberate interruption after spawn.','AbortError')),50);return child;};syncBuiltinESMExports();
+try{await roomSoak(roomSoakOptions(['--duration-ms','60000','--checkpoint-ms','1000']),controller.signal);}
+catch(error){process.stderr.write(error.message+'\\n');process.exitCode=error.status==='cancelled'?130:1;}
+finally{clearTimeout(timer);fs.appendFileSync=append;childProcess.spawn=spawn;syncBuiltinESMExports();}`;
+  let captured, root, verified = false;
+  try {
+    try { execFileSync(process.execPath, ['--input-type=module', '--eval', driver], {
+      cwd: repository, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 45000, maxBuffer: 512 * 1024,
+    }); assert.fail('Diagnostic write failure must fail the interrupted soak.'); } catch (error) { captured = error; }
+    assert.equal(captured.status, 1, captured.stderr);
+    const summary = events(captured.stdout).at(-1);
+    assert.equal(summary.status, 'failed'); assert.match(summary.error, /Deliberate interruption after spawn/); assert.match(summary.error, /Injected diagnostic write failure/);
+    assert.equal(summary.workersStarted, 2); assert.equal(summary.workersExited, 2); assert.equal(summary.fixtureRemoved, false);
+    root = realpathSync.native(summary.fixture); const parent = realpathSync.native(tmpdir());
+    assert.equal(dirname(root), parent); assert.ok(basename(root).startsWith('council-room-soak-'));
+    for (const name of readdirSync(root).filter(name => name.startsWith('fixture-'))) {
+      const database = new DatabaseSync(join(root, name, 'project', '.council', 'state.db'), { readOnly: true });
+      try {
+        for (const table of ['instances', 'slots', 'slot_waiters']) assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ' + table).get().count, 0);
+        assert.equal(database.prepare("SELECT COUNT(*) AS count FROM runs WHERE status IN ('queued','running')").get().count, 0);
+      } finally { database.close(); }
+    }
+    verified = true;
+  } finally { if (verified) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });

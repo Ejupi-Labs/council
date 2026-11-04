@@ -65,7 +65,7 @@ async function loadRuntime(expected) {
 }
 
 function options(arguments_) {
-  const values = { '--duration-ms': 10000, '--workers': 3 };
+  const values = { '--duration-ms': 10000, '--workers': 3, '--fixture-ms': 300000 };
   const seen = new Set();
   for (let index = 0; index < arguments_.length; index += 2) {
     const name = arguments_[index], value = arguments_[index + 1];
@@ -75,8 +75,9 @@ function options(arguments_) {
     seen.add(name); values[name] = Number(value);
   }
   if (!Number.isInteger(values['--duration-ms']) || values['--duration-ms'] < 1000 || values['--duration-ms'] > 3600000 ||
-      !Number.isInteger(values['--workers']) || values['--workers'] < 2 || values['--workers'] > 8) throw new Error('Use --duration-ms between 1000 and 3600000 and --workers between 2 and 8.');
-  return { duration: values['--duration-ms'], workerCount: values['--workers'] };
+      !Number.isInteger(values['--workers']) || values['--workers'] < 2 || values['--workers'] > 8 ||
+      !Number.isInteger(values['--fixture-ms']) || values['--fixture-ms'] < 1000 || values['--fixture-ms'] > 300000) throw new Error('Use --duration-ms between 1000 and 3600000, --workers between 2 and 8, and --fixture-ms between 1000 and 300000.');
+  return { duration: values['--duration-ms'], workerCount: values['--workers'], fixtureMs: values['--fixture-ms'] };
 }
 
 async function retry(operation, metrics, deadline = performance.now() + 10000) {
@@ -91,14 +92,15 @@ async function retry(operation, metrics, deadline = performance.now() + 10000) {
 }
 
 async function worker(directory, durationMs, ordinal, expected) {
+  // Rotation can request Stop while the runtime import is still pending.
+  let stopping = false;
+  process.on('message', message => { if (message?.stop) stopping = true; });
+  process.on('disconnect', () => { stopping = true; });
   const { CouncilStore, metadata } = await loadRuntime(expected);
   const store = new CouncilStore(directory);
   const instance = `storage-soak-${process.pid}-${ordinal}`;
   const until = performance.now() + durationMs;
   const metrics = { completed: 0, cancelled: 0, busyRetries: 0, leaseConflicts: 0, slotWaits: 0, maximumCycleMs: 0 };
-  let stopping = false;
-  process.on('message', message => { if (message?.stop) stopping = true; });
-  process.on('disconnect', () => { stopping = true; });
   await retry(() => store.registerInstance(instance, process.pid, 2), metrics);
   process.send?.({ kind: 'ready', instance, runtime: metadata });
   try {
@@ -161,9 +163,7 @@ async function worker(directory, durationMs, ordinal, expected) {
   } finally { store.close(); }
 }
 
-async function coordinator() {
-  const { duration, workerCount } = options(process.argv.slice(2));
-  const { CouncilStore, metadata } = await loadRuntime();
+async function runFixture({ duration, workerCount, fixtureMs }, { CouncilStore, metadata }, record) {
   const temporaryRoot = realpathSync.native(tmpdir());
   const directory = realpathSync.native(mkdtempSync(join(temporaryRoot, 'council-storage-soak-')));
   const identity = lstatSync(directory, { bigint: true });
@@ -173,19 +173,17 @@ async function coordinator() {
   let backupChecks = 0;
   let measuredBytes = 0;
   let peakObservedBytes = 0;
+  let rotationReason = 'duration';
   const retained = [];
   const removed = [];
   const started = performance.now();
   const reports = new Map();
   const ready = new Map();
+  const done = new Set();
   const errors = [];
   const ownMetrics = { busyRetries: 0 };
   const children = [];
   const completions = [];
-  const logDirectory = join(project, '.council', 'refinement');
-  mkdirSync(logDirectory, { recursive: true });
-  const log = join(logDirectory, `storage-soak-${new Date().toISOString().replaceAll(':', '-')}-${process.pid}.jsonl`);
-  const record = value => { const line = JSON.stringify({ at: new Date().toISOString(), ...value }); appendFileSync(log, line + '\n'); process.stdout.write(line + '\n'); };
   const verifyManagedDirectory = () => {
     const current = lstatSync(directory, { bigint: true });
     assert.ok(current.isDirectory() && !current.isSymbolicLink(), 'Refusing to operate on a replaced storage fixture.');
@@ -216,7 +214,7 @@ async function coordinator() {
     assert.equal(existsSync(value.path), false);
   };
   try {
-    record({ kind: 'start', durationMs: duration, workers: workerCount, directory, evidenceFile: log, runtime: metadata, fixtureBudgetBytes: FIXTURE_BUDGET_BYTES, retainedBackupLimit: RETAINED_BACKUP_LIMIT, checkpointIntervalMs: CHECKPOINT_INTERVAL_MS });
+    record({ kind: 'fixture-start', durationMs: duration, fixtureMs, workers: workerCount, directory, runtime: metadata, fixtureBudgetBytes: FIXTURE_BUDGET_BYTES, retainedBackupLimit: RETAINED_BACKUP_LIMIT, checkpointIntervalMs: CHECKPOINT_INTERVAL_MS });
     observer = new CouncilStore(directory);
     measure();
     record({ kind: 'state-ready', schemaVersion: observer.health().schemaVersion, ...storageEvidence() });
@@ -227,6 +225,7 @@ async function coordinator() {
       child.on('message', message => {
         if (message?.instance && message.metrics) reports.set(message.instance, message.metrics);
         if (message?.kind === 'ready') ready.set(message.instance, message.runtime);
+        if (message?.kind === 'done') done.add(message.instance);
       });
       children.push(child);
       completions.push(new Promise(resolveChild => {
@@ -234,7 +233,7 @@ async function coordinator() {
         child.once('close', code => { if (code !== 0) errors.push(`Worker ${index} exited ${code}: ${diagnostics}`); resolveChild(); });
       }));
     }
-    const until = performance.now() + duration;
+    const until = started + Math.min(duration, fixtureMs);
     let nextCheckpointAt = started + CHECKPOINT_INTERVAL_MS;
     while (performance.now() < until && errors.length === 0) {
       await delay(1000);
@@ -242,11 +241,16 @@ async function coordinator() {
       assert.ok(health.counts.slots <= 2, 'Workspace concurrency limit was exceeded.');
       for (const message of observer.inbox('observer')) await retry(() => observer.acknowledge(message.id, 'observer'), ownMetrics);
       measure();
+      // Rotate this disposable test state before a checkpoint needs a third database copy.
+      // Production message history is retained; only verified, drained test fixtures are removed.
+      if (measuredBytes + health.databaseBytes + health.walBytes > FIXTURE_BUDGET_BYTES) {
+        rotationReason = 'checkpoint-headroom';
+        break;
+      }
       if (performance.now() >= nextCheckpointAt) {
         nextCheckpointAt += CHECKPOINT_INTERVAL_MS;
         assertFrozen(metadata);
         // Main DB plus WAL bounds the next snapshot conservatively before adding a third copy.
-        assert.ok(measuredBytes + health.databaseBytes + health.walBytes <= FIXTURE_BUDGET_BYTES, 'The next checkpoint could exceed the storage fixture budget; preserve existing state.');
         const snapshot = join(directory, `checkpoint-${String(backupChecks + 1).padStart(6, '0')}.db`);
         await observer.backupTo(snapshot);
         const inspection = new DatabaseSync(snapshot);
@@ -267,6 +271,7 @@ async function coordinator() {
         record({ kind: 'checkpoint', elapsedMs: Math.round(performance.now() - started), health, workers: Object.fromEntries(reports), runtimeFrozen: true, checkpointFilesPresent: present, ...storageEvidence() });
       }
     }
+    if (rotationReason === 'duration' && performance.now() < started + duration) rotationReason = 'fixture-age';
     for (const child of children) if (child.connected) child.send({ stop: true }, () => { /* A worker may finish at its own monotonic deadline first. */ });
     const drainDeadline = performance.now() + 30000;
     while (children.some(child => child.exitCode === null && child.signalCode === null)) {
@@ -276,6 +281,8 @@ async function coordinator() {
     await Promise.all(completions);
     assert.deepEqual(errors, []);
     assert.equal(ready.size, workerCount, 'Every worker must verify the frozen runtime before admission.');
+    assert.equal(done.size, workerCount, 'Every worker must publish its final metrics before successful drain.');
+    assert.deepEqual([...done].sort(), [...ready.keys()].sort(), 'Final metrics must belong to the verified workers.');
     for (;;) {
       const messages = observer.inbox('observer');
       if (!messages.length) break;
@@ -290,6 +297,8 @@ async function coordinator() {
     assert.deepEqual(observer.checkIntegrity(), ['ok']);
     assertFrozen(metadata);
     finalHealth = observer.health();
+    const terminalRuns = [...reports.values()].reduce((sum, metrics) => sum + metrics.completed + metrics.cancelled, 0);
+    assert.equal(terminalRuns, finalHealth.counts.messages, 'Every completed fixture cycle must retain exactly one acknowledged message.');
     measure();
     record({ kind: 'fixture-verified', elapsedMs: Math.round(performance.now() - started), directory, checkpointFilesPresent: checkpointFiles(), ...storageEvidence() });
   } catch (error) {
@@ -307,9 +316,54 @@ async function coordinator() {
     if (failure) {
       try { record({ kind: 'failure', elapsedMs: Math.round(performance.now() - started), error: failure.message, directory, fixturePreserved: existsSync(directory), workers: Object.fromEntries(reports), workerErrors: errors, runtime: metadata, ...storageEvidence() }); }
       catch (error) { process.stderr.write(`Unable to write storage soak evidence: ${error.message}\n`); }
-      throw new Error(`Storage soak failed: ${failure.message} Fixture preserved at ${directory}. Evidence: ${log}`, { cause: failure });
+      throw new Error(`Storage soak failed: ${failure.message} Fixture preserved at ${directory}.`, { cause: failure });
     }
-    record({ kind: 'complete', elapsedMs: Math.round(performance.now() - started), health: finalHealth, workers: Object.fromEntries(reports), workerRuntimes: Object.fromEntries(ready), observer: ownMetrics, directory, fixtureRemoved: true, runtimeFrozen: true, runtime: metadata, ...storageEvidence() });
+    const result = { elapsedMs: Math.round(performance.now() - started), rotationReason, health: finalHealth, workers: Object.fromEntries(reports), workerRuntimes: Object.fromEntries(ready), observer: ownMetrics, directory, fixtureRemoved: true, runtimeFrozen: true, runtime: metadata, ...storageEvidence() };
+    record({ kind: 'fixture-complete', ...result });
+    return result;
+  }
+}
+
+async function coordinator() {
+  const configuration = options(process.argv.slice(2));
+  const runtime = await loadRuntime();
+  const started = performance.now();
+  const logDirectory = join(project, '.council', 'refinement');
+  mkdirSync(logDirectory, { recursive: true });
+  const log = join(logDirectory, `storage-soak-${new Date().toISOString().replaceAll(':', '-')}-${process.pid}.jsonl`);
+  const record = value => { const line = JSON.stringify({ at: new Date().toISOString(), ...value }); appendFileSync(log, line + '\n'); process.stdout.write(line + '\n'); };
+  const fixtures = [];
+  const totals = { completed: 0, cancelled: 0, busyRetries: 0, leaseConflicts: 0, slotWaits: 0, maximumCycleMs: 0 };
+  record({ kind: 'start', durationMs: configuration.duration, fixtureMs: configuration.fixtureMs, workers: configuration.workerCount, evidenceFile: log, runtime: runtime.metadata, fixtureBudgetBytes: FIXTURE_BUDGET_BYTES, retainedBackupLimit: RETAINED_BACKUP_LIMIT, checkpointIntervalMs: CHECKPOINT_INTERVAL_MS });
+  try {
+    do {
+      const fixture = fixtures.length + 1;
+      const remaining = Math.max(1, Math.ceil(configuration.duration - (performance.now() - started)));
+      const result = await runFixture({ ...configuration, duration: remaining }, runtime, value => record({ fixture, ...value }));
+      fixtures.push(result);
+      for (const metrics of Object.values(result.workers)) {
+        for (const key of ['completed', 'cancelled', 'busyRetries', 'leaseConflicts', 'slotWaits']) totals[key] += metrics[key];
+        totals.maximumCycleMs = Math.max(totals.maximumCycleMs, metrics.maximumCycleMs);
+      }
+    } while (performance.now() - started < configuration.duration);
+    assert.ok(totals.completed + totals.cancelled > 0, 'No storage workload cycles completed; this run cannot qualify endurance.');
+    assertFrozen(runtime.metadata);
+    record({
+      kind: 'complete', elapsedMs: Math.round(performance.now() - started), durationMs: configuration.duration,
+      fixtures: fixtures.length, workersStarted: fixtures.length * configuration.workerCount,
+      workersExited: fixtures.reduce((sum, fixture) => sum + Object.keys(fixture.workerRuntimes).length, 0),
+      totals, backupChecks: fixtures.reduce((sum, fixture) => sum + fixture.backupChecks, 0),
+      health: fixtures.at(-1).health, directory: fixtures.at(-1).directory,
+      directories: fixtures.map(fixture => fixture.directory), fixtureRemoved: fixtures.every(fixture => fixture.fixtureRemoved),
+      runtimeFrozen: true, runtime: runtime.metadata, fixtureBudgetBytes: FIXTURE_BUDGET_BYTES,
+      peakObservedLogicalFixtureBytes: Math.max(...fixtures.map(fixture => fixture.peakObservedLogicalFixtureBytes)),
+      fixtureSummaries: fixtures.map(fixture => ({ elapsedMs: fixture.elapsedMs, rotationReason: fixture.rotationReason, backupChecks: fixture.backupChecks, peakObservedLogicalFixtureBytes: fixture.peakObservedLogicalFixtureBytes, fixtureRemoved: fixture.fixtureRemoved })),
+    });
+  } catch (error) {
+    let failure = error;
+    try { record({ kind: 'failed', elapsedMs: Math.round(performance.now() - started), completedFixtures: fixtures.length, totals, error: error.message }); }
+    catch (evidenceError) { failure = new Error(error.message + '; failure evidence write failed: ' + evidenceError.message, { cause: error }); }
+    throw new Error(`${failure.message} Evidence: ${log}`, { cause: failure });
   }
 }
 
