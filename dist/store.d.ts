@@ -1,3 +1,4 @@
+import { type DispatchQuarantineAcknowledgmentResult, type DispatchQuarantinePage, type DispatchQuarantineReceipt, type ProcessCleanupIncident, type ProcessCleanupIncidentInput } from './dispatch-quarantine.js';
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord, WorkspaceArtifact } from './types.js';
 import { type EventPage, type PruneResult, type RunSummary } from './summary.js';
 export declare class RunEventsUnavailableError extends Error {
@@ -79,6 +80,22 @@ export declare class CouncilStore {
     updateArtifact(runId: string, artifact: WorkspaceArtifact): RunRecord;
     /** Caller holds the write transaction and has checked its narrow mutation authority. */
     private writeRun;
+    /** Persist an owned observation before releasing admission; never store runner diagnostics. */
+    reportProcessCleanupIncident(input: ProcessCleanupIncidentInput): ProcessCleanupIncident;
+    private cleanupIncidentByKey;
+    private quarantineReceipt;
+    /** One indexed check on the healthy path; operational refusal is distinct from persistence failure. */
+    assertDispatchUnblocked(): void;
+    /** Open incident metadata only, ordered by immutable report generation. */
+    dispatchQuarantinePage(options?: {
+        limit?: number;
+        cursor?: string;
+    }): DispatchQuarantinePage;
+    /** Explicit offline review clears only the dispatch block; it never retries or repairs workflows. */
+    acknowledgeDispatchQuarantine(input: {
+        expectedRevision: string;
+        reviewed: true;
+    }): DispatchQuarantineAcknowledgmentResult;
     /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
     acquireSlot(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
     releaseSlot(token: string, instanceId: string): void;
@@ -113,6 +130,7 @@ export declare class CouncilStore {
             context: number;
         };
         runStatuses: Record<string, number>;
+        dispatchQuarantine: DispatchQuarantineReceipt;
     };
     checkIntegrity(): string[];
     /** Online SQLite backup, published atomically without ever opening the requested destination for writing. */

@@ -4,11 +4,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { MODES } from './types.js';
 import type {
   AgentResult, AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkflowPlan,
-  WorkflowStep, Permission,
+  WorkflowStep, WorkspaceArtifact, Permission,
 } from './types.js';
 import { GitWorkspaces } from './workspaces.js';
 import { reasoningEffortError } from './runner.js';
 import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
+import { DispatchQuarantinedError, QUARANTINE_INSPECTION_REQUIRED, QUARANTINE_PERSISTENCE_WARNING,
+  type ProcessCleanupIncident, type ProcessCleanupIncidentInput, type ProcessCleanupStage } from './dispatch-quarantine.js';
 import { parseSchema } from './schema.js';
 import { assertUniqueObjectKeys } from './control-json.js';
 import { checkAgentJsonStructure } from './agent-json.js';
@@ -61,6 +63,8 @@ export interface WorkflowStore {
   cancelSlotWaiter?(instanceId: string, waiterId: string): void;
   releaseSlot?(token: string, instanceId: string): void;
   finalizeRun?(run: RunRecord): RunRecord;
+  reportProcessCleanupIncident?(input: ProcessCleanupIncidentInput): ProcessCleanupIncident;
+  assertDispatchUnblocked?(): void;
 }
 
 class Cancelled extends Error { constructor(message = 'Workflow cancelled') { super(message); } }
@@ -144,8 +148,10 @@ export class WorkflowEngine {
   private readonly semaphore: Semaphore;
   private readonly workspaces: GitWorkspaces;
   private processCleanupFailure?: Error;
+  private incidentPersistenceFailed = false;
+  private foreignQuarantine?: DispatchQuarantinedError;
 
-  constructor(private readonly config: CouncilConfig, private readonly runner: AgentRunner, private readonly store: WorkflowStore, private readonly options: { instanceId?: string; artifactTimeoutMs?: number; cancellationArtifactTimeoutMs?: number; onStateFailure?: (error: Error) => void; onProcessCleanupFailure?: (error: Error) => void; assertAgentDispatch?: (agent: string) => void; privateChats?: () => Pick<PrivateChatManager, 'create' | 'send' | 'page'> } = {}) {
+  constructor(private readonly config: CouncilConfig, private readonly runner: AgentRunner, private readonly store: WorkflowStore, private readonly options: { instanceId?: string; artifactTimeoutMs?: number; cancellationArtifactTimeoutMs?: number; onStateFailure?: (error: Error) => void; onProcessCleanupFailure?: (error: Error) => void; onIncidentPersistenceFailure?: (error: Error) => void; assertAgentDispatch?: (agent: string) => void; privateChats?: () => Pick<PrivateChatManager, 'create' | 'send' | 'page'> } = {}) {
     if (!Number.isInteger(config.maxConcurrency) || config.maxConcurrency < 1 || config.maxConcurrency > 32) throw new Error('maxConcurrency must be an integer from 1 to 32');
     if (!Number.isSafeInteger(config.maxCalls) || config.maxCalls < 1) throw new Error('maxCalls must be a positive safe integer');
     if (!Number.isSafeInteger(config.maxOutputBytes) || config.maxOutputBytes < 1) throw new Error('maxOutputBytes must be a positive safe integer');
@@ -162,9 +168,28 @@ export class WorkflowEngine {
     if (!this.processCleanupFailure) {
       // Fence this engine before notifying the host or releasing a call permit.
       this.processCleanupFailure = new Error(PROCESS_CLEANUP_ERROR);
-      try { this.options.onProcessCleanupFailure?.(this.processCleanupFailure); }
+      try { this.options.onProcessCleanupFailure?.(this.foreignQuarantine ?? this.processCleanupFailure); }
       catch { /* A notification failure must not lift the dispatch fence. */ }
     }
+  }
+
+  /** Fence from an existing workspace incident without reporting a new owned failure. */
+  fenceDispatchQuarantine(error: DispatchQuarantinedError): void {
+    this.foreignQuarantine ??= error;
+    this.fenceProcessCleanup();
+  }
+
+  /** Retain failed mandatory incident persistence without reporting another incident. */
+  noteIncidentPersistenceFailure(): void {
+    if (this.incidentPersistenceFailed) return;
+    this.incidentPersistenceFailed = true;
+    this.fenceProcessCleanup();
+    try { this.options.onIncidentPersistenceFailure?.(new Error(QUARANTINE_PERSISTENCE_WARNING)); }
+    catch { /* Notification is separate from the failed mandatory report. */ }
+  }
+
+  private cleanupFailureMessage(): string {
+    return [PROCESS_CLEANUP_ERROR, this.incidentPersistenceFailed ? QUARANTINE_PERSISTENCE_WARNING : undefined].filter(Boolean).join(' ');
   }
 
   plan(input: WorkflowInput, options: { resolvedSettings?: true } = {}): WorkflowPlan {
@@ -344,19 +369,49 @@ export class WorkflowEngine {
     const event = (type: string, data: unknown): void => {
       try { this.store.appendEvent(id, type, data); } catch (error) { evidenceFailure(error); }
     };
-    const check = (): void => { if (this.processCleanupFailure) throw this.processCleanupFailure; if (dispatchFailure) throw dispatchFailure; pollCancellation(true); if (signal.aborted) throw new Cancelled(); };
+    const reportCleanup = (stage: ProcessCleanupStage, reportKey: string): void => {
+      this.fenceProcessCleanup();
+      // Standalone memory stores have no shared-dispatch guarantee. A shared
+      // instance/store must explicitly retain failure to persist its own report.
+      if (!this.options.instanceId && !this.store.reportProcessCleanupIncident && !this.store.acquireSlot && !this.store.assertDispatchUnblocked) return;
+      try {
+        if (!this.options.instanceId || !this.store.reportProcessCleanupIncident) throw new Error('Shared cleanup reporting is unavailable.');
+        this.store.reportProcessCleanupIncident({ reportKey, instanceId: this.options.instanceId, runId: id, stage });
+      } catch { this.noteIncidentPersistenceFailure(); }
+    };
+    const observeQuarantine = (error: DispatchQuarantinedError): void => {
+      // Observation is not a new owned cleanup incident. Never report it back.
+      this.fenceDispatchQuarantine(error);
+      controller.abort(error);
+    };
+    const probeQuarantine = (): void => {
+      try { this.store.assertDispatchUnblocked?.(); }
+      catch (error) {
+        if (error instanceof DispatchQuarantinedError) { observeQuarantine(error); throw error; }
+        dispatchFailure ??= new Error('Cannot verify workspace dispatch quarantine; no further agent calls will be dispatched.');
+        controller.abort(dispatchFailure);
+        throw dispatchFailure;
+      }
+    };
+    const check = (): void => {
+      if (this.processCleanupFailure) throw this.foreignQuarantine ?? new Error(this.cleanupFailureMessage());
+      if (dispatchFailure) throw dispatchFailure;
+      probeQuarantine(); pollCancellation(true);
+      if (signal.aborted) throw new Cancelled();
+    };
     const getWorkspace = async (agent: string): Promise<string> => {
       if (input.permission === 'read') return resolve(this.config.workspaceRoot);
       const slot = input.mode === 'pipeline' ? 'pipeline' : agent;
       let handle = handles.get(slot);
       if (!handle) {
+        const reportKey = randomUUID();
         try {
           handle = await this.workspaces.create(id, agent, slot, signal, artifact => {
             run.workspaces!.push(artifact);
             save(); event('workspace.preparing', artifact);
           });
         } catch (error) {
-          if (error instanceof ProcessCleanupError) this.fenceProcessCleanup();
+          if (error instanceof ProcessCleanupError) reportCleanup('git_create', reportKey);
           throw error;
         }
         handles.set(slot, handle);
@@ -437,6 +492,11 @@ export class WorkflowEngine {
         }
       } catch (error) {
         releaseAll();
+        if (error instanceof DispatchQuarantinedError) {
+          observeQuarantine(error);
+          event('step.dispatch_blocked', { agent, error: error.message, code: error.code, receipt: error.receipt });
+          throw error;
+        }
         check();
         if (error && typeof error === 'object' && 'code' in error && error.code === 'COUNCIL_SLOT_QUEUE_FULL') throw error;
         evidenceFailure(error, 'coordinate shared workflow dispatch');
@@ -446,24 +506,38 @@ export class WorkflowEngine {
         error: errorMessage(error), ...(error && typeof error === 'object' && 'code' in error ? { code: error.code } : {}),
         ...(error && typeof error === 'object' && 'receipt' in error ? { receipt: error.receipt } : {}) });
       try { this.options.assertAgentDispatch?.(agent); }
-      catch (error) { releaseAll(); event('step.dispatch_blocked', blockedReceipt(error)); throw error; }
+      catch (error) { if (error instanceof DispatchQuarantinedError) observeQuarantine(error); releaseAll(); event('step.dispatch_blocked', blockedReceipt(error)); throw error; }
       const stepId = `${String(++calls).padStart(2, '0')}-${role.replace(/[^a-zA-Z0-9_-]/g, '-')}-${agent}`;
       if (calls > plan.estimatedCalls) { releaseAll(); throw new Error('Internal workflow call budget exceeded'); }
       let result: AgentResult;
       let releaseError: unknown;
       let protectionFailure: unknown;
       let cleanupDiagnostic: string | undefined;
+      let quarantineFailure: DispatchQuarantinedError | undefined;
+      let runnerPending = false;
+      const callReportKey = randomUUID();
       let privateOutput = Boolean(privateTurn);
       const callController = new AbortController();
       const callSignal = AbortSignal.any([signal, callController.signal]);
-      const guard = this.options.assertAgentDispatch ? setInterval(() => {
-        if (callController.signal.aborted || signal.aborted) return;
-        try { this.options.assertAgentDispatch!(agent); }
+      const guard = this.options.assertAgentDispatch || this.store.assertDispatchUnblocked ? setInterval(() => {
+        if (quarantineFailure || dispatchFailure) return;
+        try { probeQuarantine(); }
         catch (error) {
-          protectionFailure = error;
+          if (error instanceof DispatchQuarantinedError) quarantineFailure = error;
+          else protectionFailure = error;
           try { event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true }); }
           catch (failure) { protectionFailure = failure; }
-          callController.abort(protectionFailure);
+          callController.abort(error);
+          return;
+        }
+        if (callController.signal.aborted || signal.aborted) return;
+        try { this.options.assertAgentDispatch?.(agent); }
+        catch (error) {
+          if (error instanceof DispatchQuarantinedError) { quarantineFailure = error; observeQuarantine(error); }
+          else protectionFailure = error;
+          try { event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true }); }
+          catch (failure) { protectionFailure = failure; }
+          callController.abort(quarantineFailure ?? protectionFailure);
         }
       }, 250) : undefined;
       guard?.unref();
@@ -493,14 +567,16 @@ export class WorkflowEngine {
           const remaining = (chatPolicy.maxRequests ?? 1) - (privateChatUses.get(agent) ?? 0);
           brief += `\n\nCouncil private coordination protocol: permitted peers are ${JSON.stringify(chatPolicy.peers)}. You have ${remaining} requests remaining in this workflow. To coordinate an overlap privately, finish with ONLY {"council_private_chat_request":{"peer":"an-exact-permitted-alias","message":"your coordination question","context":"relevant private evidence"}}. Council records a pair chat, gives the peer a separate read-only reply turn, then resumes your task in this workspace. This does not inject messages into an already-running vendor session. Private raw turns stay outside shared peer transcripts. Do not request this recursively from an advisor or private reply turn; otherwise return your completed task normally.`;
         }
+        runnerPending = true;
         result = await this.runner.run({
           agent, prompt: prompt(agent, role, `${permission === 'read' ? 'Read-only task: do not modify files. ' : 'Make changes only in the provided isolated worktree. '}${brief}`, context, privateTurn?.chatId, allowAdvisor || Boolean(privateTurn)),
           cwd, permission, timeoutMs: this.config.timeoutMs, signal: callSignal, model, effort,
           ...(options.resolvedSettings ? { resolvedSettings: true as const } : {}),
         });
+        runnerPending = false;
         if (result.status === 'failed' && typeof result.error === 'string' && result.error.startsWith(PROCESS_CLEANUP_ERROR)) {
           cleanupDiagnostic = clip(result.error, MAX_ERROR_CHARS);
-          this.fenceProcessCleanup();
+          reportCleanup('agent_call', callReportKey);
         }
         const output = String(result.output ?? '');
         const oversizedOutput = result.status === 'completed' && Buffer.byteLength(output) > this.config.maxOutputBytes;
@@ -512,7 +588,8 @@ export class WorkflowEngine {
           ...(typeof result.stopReason === 'string' ? { stopReason: clip(result.stopReason, 512) } : {}),
         };
         if (!['completed', 'failed', 'cancelled', 'timeout'].includes(result.status)) result = { ...result, status: 'failed', error: 'Agent returned an invalid status' };
-        if (protectionFailure && !cleanupDiagnostic) result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
+        if (quarantineFailure && !cleanupDiagnostic) result = { ...result, status: 'failed', error: this.cleanupFailureMessage() };
+        else if (protectionFailure && !cleanupDiagnostic) result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
         else if (privateTurn && signal.aborted && !cleanupDiagnostic) result = { ...result, status: 'cancelled', error: 'Private coordination was cancelled before the reply settled.' };
         if (privateTurn) {
           let recursive = privateChatCandidate(output);
@@ -522,7 +599,7 @@ export class WorkflowEngine {
           if (!manager) throw new Error('Private chat persistence is unavailable.');
           const reply = manager.send({ chatId: privateTurn.chatId, from: privateTurn.peerActor, runId: id,
             body: JSON.stringify({ kind: 'reply', requestMessageId: privateTurn.requestMessageId, status: result.status, body: result.output,
-              ...(cleanupDiagnostic ? { error: PROCESS_CLEANUP_ERROR } : recursive ? { error: 'Advisor and private-chat recursion are disabled in a private reply turn.' } : result.error ? { error: result.error } : {}) }) });
+              ...(cleanupDiagnostic ? { error: this.cleanupFailureMessage() } : recursive ? { error: 'Advisor and private-chat recursion are disabled in a private reply turn.' } : result.error ? { error: result.error } : {}) }) });
           result = { agent, status: result.status, durationMs: result.durationMs,
             output: clipBytes(`[Private coordination reply retained in chat ${privateTurn.chatId}; message ${reply.id}.]`, this.config.maxOutputBytes),
             ...(result.status !== 'completed' ? { error: recursive ? 'Advisor and private-chat recursion are disabled in a private reply turn.' : 'Private coordination reply did not complete. Inspect its pair chat for retained evidence.' } : {}) };
@@ -541,10 +618,15 @@ export class WorkflowEngine {
           }
         }
       } catch (error) {
+        if (runnerPending && error instanceof ProcessCleanupError) {
+          cleanupDiagnostic = PROCESS_CLEANUP_ERROR;
+          reportCleanup('agent_call', callReportKey);
+        }
         result = { agent, status: signal?.aborted ? 'cancelled' : 'failed', output: '', durationMs: Math.max(0, Date.now() - start),
           error: privateTurn && !(error instanceof ContextBudgetExceeded) ? 'Private coordination reply could not be completed or retained; inspect the pair chat before retrying.' : clip(errorMessage(error), MAX_ERROR_CHARS) };
       } finally { if (guard) clearInterval(guard); try { releaseAll(); } catch (error) { releaseError = error; } }
-      if (cleanupDiagnostic) result = { ...result, status: 'failed', error: privateOutput ? PROCESS_CLEANUP_ERROR : cleanupDiagnostic };
+      if (cleanupDiagnostic) result = { ...result, status: 'failed', error: privateOutput ? this.cleanupFailureMessage() : clip([this.incidentPersistenceFailed ? this.cleanupFailureMessage() : undefined, cleanupDiagnostic].filter(Boolean).join(' '), MAX_ERROR_CHARS) };
+      else if (quarantineFailure) result = { ...result, status: 'failed', error: this.cleanupFailureMessage() };
       else if (protectionFailure) result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
       const step: WorkflowStep = { id: stepId, agent, role, result };
       run.steps.push(step);
@@ -686,7 +768,7 @@ export class WorkflowEngine {
       run.status = 'completed';
     } catch (error) {
       run.status = this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
-      run.error = this.processCleanupFailure?.message ?? persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
+      run.error = this.processCleanupFailure ? this.cleanupFailureMessage() : persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
       for (const artifact of run.workspaces ?? []) {
         if (![...handles.values()].some(handle => handle.path === artifact.path)) artifact.exportError = `Worktree preparation did not finish: ${run.error}`;
       }
@@ -704,16 +786,23 @@ export class WorkflowEngine {
       try {
         for (const handle of handles.values()) {
           if (this.processCleanupFailure) continue;
+          const reportKey = randomUUID();
           try {
-            const artifact = await this.workspaces.export(handle, exportController.signal);
+            probeQuarantine();
+            let artifact: WorkspaceArtifact;
+            try { artifact = await this.workspaces.export(handle, exportController.signal); }
+            catch (error) {
+              if (error instanceof ProcessCleanupError) reportCleanup('git_export', reportKey);
+              throw error;
+            }
             // Another workflow may have reported cleanup uncertainty while this
             // export was awaiting Git. Do not publish a ready patch afterward.
+            probeQuarantine();
             if (this.processCleanupFailure) continue;
             const index = run.workspaces!.findIndex(value => value.path === handle.path);
             run.workspaces![index] = artifact;
             event('workspace.exported', artifact);
           } catch (error) {
-            if (error instanceof ProcessCleanupError) this.fenceProcessCleanup();
             if (this.processCleanupFailure) continue;
             if (run.status !== 'cancelled') run.status = 'failed';
             const detail = `Could not export workspace patch: ${errorMessage(error)}`;
@@ -722,12 +811,15 @@ export class WorkflowEngine {
             if (artifact) { artifact.exportStatus = exportController.signal.aborted ? 'pending' : 'failed'; artifact.exportError = detail; }
           }
         }
+        // Probe even after cancellation: a shared incident may have committed
+        // while the owned call or Git operation was draining.
+        try { probeQuarantine(); } catch { /* The safe refusal/failure is retained above. */ }
         if (this.processCleanupFailure) for (const artifact of run.workspaces ?? []) {
-          artifact.exportStatus = 'pending';
-          artifact.exportError = `${PROCESS_CLEANUP_ERROR} Inspect the retained worktree before exporting its patch.`;
+          if (artifact.exportStatus !== 'failed') artifact.exportStatus = 'pending';
+          if (!artifact.exportError?.includes(QUARANTINE_INSPECTION_REQUIRED)) artifact.exportError = [artifact.exportError, QUARANTINE_INSPECTION_REQUIRED].filter(Boolean).join('; ');
         }
         pollCancellation();
-        if (this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure) { run.status = 'failed'; run.error = clip([this.processCleanupFailure?.message, monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS); }
+        if (this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure) { run.status = 'failed'; run.error = clip([this.processCleanupFailure ? this.cleanupFailureMessage() : undefined, monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS); }
         else if (signal.aborted) { run.status = 'cancelled'; run.error = ['Workflow cancelled', run.error].filter(Boolean).join('; '); }
         run.updatedAt = new Date().toISOString();
         try {

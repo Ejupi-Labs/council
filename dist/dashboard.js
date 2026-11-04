@@ -8,6 +8,7 @@ import { collaborationSkills } from './skills.js';
 import { RunEventsUnavailableError } from './store.js';
 import { DelegationRevisionConflict, DelegationReportConflict } from './delegation.js';
 import { PrivateChatConflict } from './private-chats.js';
+import { DispatchQuarantinedError } from './dispatch-quarantine.js';
 const BODY_LIMIT = 256 * 1024;
 const SSE_QUEUE_LIMIT = 256 * 1024;
 const SSE_CONNECTION_LIMIT = 16;
@@ -91,7 +92,8 @@ export async function serveDashboard(service, rooms, options = {}) {
     let closePromise;
     let roomToken = typeof rooms.changeToken === 'function' ? rooms.changeToken() : undefined;
     let snapshot = JSON.stringify(await rooms.list());
-    let delegateSnapshot = '';
+    let delegateSnapshot = '', quarantineSnapshot = '';
+    const dispatchStatus = () => typeof service.dispatchStatus === 'function' ? service.dispatchStatus() : undefined;
     const json = (response, status, value) => {
         response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify(value));
@@ -141,6 +143,18 @@ export async function serveDashboard(service, rooms, options = {}) {
                 throw new HttpError(401, 'Open the complete dashboard link to authorize this session.');
             if (request.method !== 'GET' && request.method !== 'POST')
                 throw new HttpError(405, 'Method not allowed.');
+            if (pathname === '/api/quarantine') {
+                if (request.method !== 'GET')
+                    throw new HttpError(405, 'Method not allowed.');
+                for (const key of url.searchParams.keys())
+                    if (!['limit', 'cursor'].includes(key) || url.searchParams.getAll(key).length !== 1)
+                        throw new HttpError(400, 'Use one quarantine page limit and generation cursor.');
+                const rawLimit = url.searchParams.get('limit');
+                if (rawLimit !== null && (!/^[1-9][0-9]*$/.test(rawLimit) || !Number.isSafeInteger(Number(rawLimit))))
+                    throw new HttpError(400, 'Quarantine page limits must be positive safe integers.');
+                json(response, 200, service.dispatchQuarantinePage({ ...(rawLimit !== null ? { limit: Number(rawLimit) } : {}), ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor') } : {}) }));
+                return;
+            }
             if (pathname === '/api/private-chats/page' || pathname === '/api/private-chats/actors/page') {
                 if (request.method !== 'GET')
                     throw new HttpError(405, 'Method not allowed.');
@@ -313,7 +327,7 @@ export async function serveDashboard(service, rooms, options = {}) {
             }
             if (pathname === '/api/bootstrap' && request.method === 'GET') {
                 const agents = Object.entries(service.config.agents).filter(([, settings]) => settings.enabled).map(([agent, settings]) => ({ agent, profile: settings.profile, model: settings.model ?? null, effort: settings.effort ?? null, authority: settings.authority ?? 1 }));
-                json(response, 200, { backend: service.config.backend, agents, rooms: await rooms.list(), defaults: { maxCalls: service.config.maxCalls, contextLimit: null }, limits: { requestBytes: BODY_LIMIT } });
+                json(response, 200, { backend: service.config.backend, agents, rooms: await rooms.list(), quarantine: dispatchStatus(), defaults: { maxCalls: service.config.maxCalls, contextLimit: null }, limits: { requestBytes: BODY_LIMIT } });
                 return;
             }
             if (pathname === '/api/events' && request.method === 'GET') {
@@ -324,8 +338,11 @@ export async function serveDashboard(service, rooms, options = {}) {
                 clients.add(response);
                 response.once('close', () => clients.delete(response));
                 writeEvent(response, ': connected\n\n');
-                if ('delegation' in service)
+                const status = dispatchStatus();
+                if ('delegation' in service && !status?.localFault)
                     writeEvent(response, `event: delegation\ndata: ${JSON.stringify(service.delegation.overview())}\n\n`);
+                if (status !== undefined)
+                    writeEvent(response, `event: quarantine\ndata: ${JSON.stringify(status)}\n\n`);
                 return;
             }
             if (pathname === '/api/rooms') {
@@ -392,7 +409,7 @@ export async function serveDashboard(service, rooms, options = {}) {
             }
             if (failure instanceof HttpError && [408, 413].includes(failure.status))
                 response.setHeader('Connection', 'close');
-            json(response, failure instanceof HttpError ? failure.status : failure instanceof RunEventsUnavailableError ? 404 : failure instanceof BillingRevisionConflict || failure instanceof DelegationRevisionConflict || failure instanceof DelegationReportConflict || failure instanceof PrivateChatConflict ? 409 : 400, { error: failure instanceof Error ? failure.message : 'The operation failed.',
+            json(response, failure instanceof HttpError ? failure.status : failure instanceof RunEventsUnavailableError ? 404 : failure instanceof BillingRevisionConflict || failure instanceof DelegationRevisionConflict || failure instanceof DelegationReportConflict || failure instanceof PrivateChatConflict || failure instanceof DispatchQuarantinedError ? 409 : 400, { error: failure instanceof Error ? failure.message : 'The operation failed.',
                 ...(failure && typeof failure === 'object' && 'code' in failure ? { code: failure.code } : {}) });
         });
     });
@@ -432,7 +449,13 @@ export async function serveDashboard(service, rooms, options = {}) {
                 for (const client of clients)
                     writeEvent(client, frame);
             }
-            if ('delegation' in service) {
+            const status = dispatchStatus(), nextQuarantine = status === undefined ? undefined : JSON.stringify(status);
+            if (nextQuarantine !== undefined && nextQuarantine !== quarantineSnapshot) {
+                quarantineSnapshot = nextQuarantine;
+                for (const client of clients)
+                    writeEvent(client, `event: quarantine\ndata: ${nextQuarantine}\n\n`);
+            }
+            if ('delegation' in service && !status?.localFault) {
                 const nextDelegate = JSON.stringify(service.delegation.overview());
                 if (nextDelegate !== delegateSnapshot) {
                     delegateSnapshot = nextDelegate;

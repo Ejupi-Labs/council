@@ -23,6 +23,8 @@ export declare class CouncilService {
     private readonly emergencyResults;
     private fault?;
     private faultEvent?;
+    private incidentPersistenceFailed;
+    private localStatusRevision;
     private lastHeartbeatAt;
     private lastHeartbeatElapsed;
     private heartbeatContentions;
@@ -91,6 +93,32 @@ export declare class CouncilService {
     }>;
     constructor(config: CouncilConfig, runner?: AgentRunner);
     private heartbeatTick;
+    /** Refuse dispatch before changing approvals or starting owned work. Reads remain available. */
+    assertDispatchAllowed(): void;
+    dispatchQuarantinePage(options?: {
+        limit?: number;
+        cursor?: string;
+    }): {
+        blocked: boolean;
+        currentRevision: string;
+        openCount: number;
+        incidents: import("./dispatch-quarantine.js").ProcessCleanupIncident[];
+        nextCursor: string | null;
+        hostId: `${string}-${string}-${string}-${string}-${string}`;
+        localRevision: string;
+        localFault?: string | undefined;
+        persistenceWarning?: string | undefined;
+    };
+    /** Compact shared state plus this host's in-memory refusal; no incident bodies. */
+    dispatchStatus(): {
+        blocked: boolean;
+        currentRevision: string;
+        openCount: number;
+        hostId: `${string}-${string}-${string}-${string}-${string}`;
+        localRevision: string;
+        localFault?: string | undefined;
+        persistenceWarning?: string | undefined;
+    };
     start(value: unknown, provenance?: {
         previousId?: string;
         routing?: unknown;
@@ -104,6 +132,8 @@ export declare class CouncilService {
     hasRun(id: string): boolean;
     private degrade;
     private fenceProcessCleanup;
+    private noteIncidentPersistenceFailure;
+    private reportMaintenanceCleanupIncident;
     private summary;
     waitSummary(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunSummary>;
     wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<RunRecord>;
@@ -187,9 +217,11 @@ export declare class CouncilService {
                 context: number;
             };
             runStatuses: Record<string, number>;
+            dispatchQuarantine: import("./dispatch-quarantine.js").DispatchQuarantineReceipt;
         } | undefined;
         integrity: string[] | undefined;
         databases: import("./state-snapshot.js").StateFileHealth[];
+        quarantine: import("./dispatch-quarantine.js").DispatchQuarantineReceipt | undefined;
         storageBytes: number;
         issues: string[];
     };

@@ -4,8 +4,9 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { backupDatabase } from './sqlite-backup.js';
 import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
+import { DispatchQuarantinedError, PROCESS_CLEANUP_STAGES, QUARANTINE_INSPECTION_REQUIRED } from './dispatch-quarantine.js';
 import { MAX_EVENT_PAGE_BYTES, summarizeEvent, summarizeRun } from './summary.js';
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUN_JSON_BYTES = 16 * 1024 * 1024;
 function text(value, label, maxBytes) {
@@ -73,6 +74,33 @@ function cutoffTimestamp(value) {
         throw new Error('Prune cutoff must be a valid ISO datetime with a timezone.');
     return date.toISOString();
 }
+function quarantineRevision(value, label) {
+    if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]{0,18})$/.test(value) || BigInt(value) > 9223372036854775807n) {
+        throw new Error(`${label} must be a canonical decimal SQLite generation.`);
+    }
+    return value;
+}
+function quarantineObject(value, allowed, label) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !allowed.includes(key))) {
+        throw new Error(`${label} must contain only its documented metadata fields.`);
+    }
+}
+function quarantineText(value, label, maximum) {
+    text(value, label, maximum);
+    if (Buffer.from(value, 'utf8').toString('utf8') !== value)
+        throw new Error(`${label} must be well-formed Unicode.`);
+}
+const CLEANUP_INCIDENT_COLUMNS = `incident.id, CAST(incident.generation AS TEXT) AS generation,
+  incident.report_key AS reportKey, incident.instance_id AS instanceId, incident.run_id AS runId, incident.reporting_pid AS reportingPid,
+  incident.reason, incident.stage, incident.observed_at AS observedAt,
+  incident.acknowledgment_id AS acknowledgmentId, audit.acknowledged_at AS acknowledgedAt`;
+function cleanupIncident(row) {
+    return { id: row.id, generation: row.generation, reportKey: row.reportKey, instanceId: row.instanceId,
+        ...(row.runId === null ? {} : { runId: row.runId }), reason: row.reason, stage: row.stage, observedAt: row.observedAt,
+        ...(row.reportingPid === null ? {} : { reportingPid: row.reportingPid }),
+        ...(row.acknowledgedAt === null ? {} : { acknowledgedAt: row.acknowledgedAt }),
+        ...(row.acknowledgmentId === null ? {} : { acknowledgmentId: row.acknowledgmentId }) };
+}
 export class RunEventsUnavailableError extends Error {
     status = 404;
     code = 'COUNCIL_RUN_EVENTS_UNAVAILABLE';
@@ -103,7 +131,8 @@ export class CouncilStore {
                 throw new Error(`Council state schema ${initial.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
             this.restrictDatabaseFiles();
             const journal = this.statement('PRAGMA journal_mode').get();
-            if (initial.user_version !== SCHEMA_VERSION || journal.journal_mode !== 'wal') {
+            const prototype = initial.user_version === SCHEMA_VERSION && !this.statement("SELECT 1 FROM pragma_table_info('process_cleanup_incidents') WHERE name = 'reporting_pid'").get();
+            if (initial.user_version !== SCHEMA_VERSION || journal.journal_mode !== 'wal' || prototype) {
                 // Initialization runs before vendor work; runtime writes retain their short contention bound.
                 const deadline = performance.now() + 5000;
                 this.retryStartup(() => this.db.exec('PRAGMA journal_mode = WAL;'), deadline);
@@ -112,12 +141,18 @@ export class CouncilStore {
                     const version = this.statement('PRAGMA user_version').get();
                     if (version.user_version > SCHEMA_VERSION)
                         throw new Error(`Council state schema ${version.user_version} is newer than supported schema ${SCHEMA_VERSION}`);
-                    if (version.user_version === SCHEMA_VERSION)
+                    const needsReporterPid = version.user_version === SCHEMA_VERSION && !this.statement("SELECT 1 FROM pragma_table_info('process_cleanup_incidents') WHERE name = 'reporting_pid'").get();
+                    if (version.user_version === SCHEMA_VERSION && !needsReporterPid)
                         return;
-                    if (version.user_version < SCHEMA_VERSION && this.statement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instances'").get()) {
+                    if ((version.user_version < SCHEMA_VERSION || needsReporterPid) && this.statement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instances'").get()) {
                         const owners = this.statement('SELECT pid FROM instances').all();
                         if (owners.some(owner => processAlive(owner.pid)))
                             throw new Error('Stop older Council hosts using this workspace before upgrading storage, then retry.');
+                    }
+                    if (needsReporterPid) {
+                        // Unpublished schema-six prototypes retain unknown historical PIDs, never a guess.
+                        this.db.exec('ALTER TABLE process_cleanup_incidents ADD COLUMN reporting_pid INTEGER CHECK(reporting_pid IS NULL OR (reporting_pid > 0 AND reporting_pid <= 9007199254740991));');
+                        return;
                     }
                     this.db.exec(`
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, document TEXT NOT NULL);
@@ -168,6 +203,21 @@ export class CouncilStore {
             UNIQUE(instance_id, waiter_id)
           );
           CREATE INDEX IF NOT EXISTS slot_waiters_run ON slot_waiters(run_id);
+          CREATE TABLE IF NOT EXISTS dispatch_quarantine_acknowledgments (
+            id TEXT PRIMARY KEY, revision INTEGER NOT NULL UNIQUE, acknowledged_at TEXT NOT NULL,
+            incident_count INTEGER NOT NULL, unowned_unfinished_runs INTEGER NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS process_cleanup_incidents (
+            generation INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT NOT NULL UNIQUE, report_key TEXT NOT NULL UNIQUE, instance_id TEXT NOT NULL, run_id TEXT,
+            reporting_pid INTEGER CHECK(reporting_pid IS NULL OR (reporting_pid > 0 AND reporting_pid <= 9007199254740991)),
+            reason TEXT NOT NULL CHECK(reason = 'process_cleanup_unverified'),
+            stage TEXT NOT NULL CHECK(stage IN ('agent_call', 'git_create', 'git_export', 'maintenance_export', 'maintenance_cleanup')),
+            observed_at TEXT NOT NULL,
+            acknowledgment_id TEXT REFERENCES dispatch_quarantine_acknowledgments(id)
+          );
+          CREATE INDEX IF NOT EXISTS process_cleanup_open_generation ON process_cleanup_incidents(generation) WHERE acknowledgment_id IS NULL;
+          CREATE INDEX IF NOT EXISTS process_cleanup_open_run ON process_cleanup_incidents(run_id) WHERE acknowledgment_id IS NULL AND run_id IS NOT NULL;
           PRAGMA user_version = ${SCHEMA_VERSION};
         `);
                     if (version.user_version < 3)
@@ -307,6 +357,7 @@ export class CouncilStore {
             const instance = this.assertInstance(instanceId);
             if (this.boundInstance !== instanceId)
                 throw new Error('The store connection is not bound to this Council instance.');
+            this.assertDispatchUnblocked();
             if (this.ownedRun(run.id))
                 throw new Error('A Council run with this ID already exists.');
             const active = this.statement("SELECT COUNT(*) AS value FROM runs WHERE status IN ('queued', 'running')").get();
@@ -648,6 +699,18 @@ export class CouncilStore {
             if (!['queued', 'running'].includes(row.status))
                 return this.getRun(run.id);
             const final = structuredClone(run);
+            if (this.quarantineReceipt().blocked) {
+                final.status = 'failed';
+                final.error = final.error?.includes(QUARANTINE_INSPECTION_REQUIRED) ? final.error
+                    : final.error ? `${final.error}\n${QUARANTINE_INSPECTION_REQUIRED}` : QUARANTINE_INSPECTION_REQUIRED;
+                for (const artifact of final.workspaces ?? []) {
+                    if (artifact.exportStatus !== 'failed')
+                        artifact.exportStatus = 'pending';
+                    if (!artifact.exportError?.includes(QUARANTINE_INSPECTION_REQUIRED))
+                        artifact.exportError = artifact.exportError
+                            ? `${artifact.exportError}\n${QUARANTINE_INSPECTION_REQUIRED}` : QUARANTINE_INSPECTION_REQUIRED;
+                }
+            }
             if (final.status === 'completed' && this.isCancellationRequested(run.id)) {
                 final.status = 'cancelled';
                 final.error = 'Cancellation was requested before workflow completion.';
@@ -672,6 +735,8 @@ export class CouncilStore {
                 throw new Error('Run not found.');
             if (['queued', 'running'].includes(row.status))
                 throw new Error('Cannot refresh artifacts while a run is active.');
+            if (artifact.exportStatus === 'ready')
+                this.assertDispatchUnblocked();
             const run = this.getRun(runId);
             if (run.status !== row.status)
                 throw new Error('Run metadata does not match its durable result.');
@@ -700,6 +765,100 @@ export class CouncilStore {
         if (!['queued', 'running'].includes(run.status))
             this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(run.id);
     }
+    /** Persist an owned observation before releasing admission; never store runner diagnostics. */
+    reportProcessCleanupIncident(input) {
+        quarantineObject(input, ['reportKey', 'instanceId', 'runId', 'stage'], 'Cleanup incident');
+        quarantineText(input.reportKey, 'Cleanup report key', 128);
+        quarantineText(input.instanceId, 'Reporting instance id', 128);
+        if (input.runId !== undefined)
+            quarantineText(input.runId, 'Cleanup workflow id', 256);
+        if (!PROCESS_CLEANUP_STAGES.includes(input.stage))
+            throw new Error('Cleanup incident stage is invalid.');
+        return this.transaction(() => {
+            const existing = this.cleanupIncidentByKey(input.reportKey);
+            if (existing) {
+                if (existing.instanceId !== input.instanceId || existing.runId !== input.runId || existing.stage !== input.stage) {
+                    throw Object.assign(new Error('The cleanup report key is already associated with different metadata.'), { code: 'COUNCIL_CLEANUP_REPORT_CONFLICT', status: 409 });
+                }
+                return existing;
+            }
+            const instance = this.assertInstance(input.instanceId);
+            if (this.boundInstance !== input.instanceId)
+                throw new Error('The store connection is not bound to the reporting Council instance.');
+            const insert = this.statement("INSERT INTO process_cleanup_incidents(id, report_key, instance_id, run_id, reporting_pid, reason, stage, observed_at) VALUES (?, ?, ?, ?, ?, 'process_cleanup_unverified', ?, ?)");
+            insert.setReadBigInts(true);
+            insert.run(randomUUID(), input.reportKey, input.instanceId, input.runId ?? null, instance.pid, input.stage, new Date().toISOString());
+            return this.cleanupIncidentByKey(input.reportKey);
+        });
+    }
+    cleanupIncidentByKey(reportKey) {
+        const row = this.statement(`SELECT ${CLEANUP_INCIDENT_COLUMNS} FROM process_cleanup_incidents AS incident
+      LEFT JOIN dispatch_quarantine_acknowledgments AS audit ON audit.id = incident.acknowledgment_id WHERE incident.report_key = ?`).get(reportKey);
+        return row ? cleanupIncident(row) : undefined;
+    }
+    quarantineReceipt() {
+        const row = this.statement(`SELECT CAST(COALESCE((SELECT MAX(generation) FROM process_cleanup_incidents), 0) AS TEXT) AS currentRevision,
+      (SELECT COUNT(*) FROM process_cleanup_incidents WHERE acknowledgment_id IS NULL) AS openCount`).get();
+        return { blocked: row.openCount > 0, currentRevision: row.currentRevision, openCount: row.openCount };
+    }
+    /** One indexed check on the healthy path; operational refusal is distinct from persistence failure. */
+    assertDispatchUnblocked() {
+        const row = this.statement(`SELECT CAST((SELECT MAX(generation) FROM process_cleanup_incidents) AS TEXT) AS currentRevision,
+      (SELECT COUNT(*) FROM process_cleanup_incidents WHERE acknowledgment_id IS NULL) AS openCount
+      FROM process_cleanup_incidents WHERE acknowledgment_id IS NULL ORDER BY generation LIMIT 1`).get();
+        if (row)
+            throw new DispatchQuarantinedError({ blocked: true, currentRevision: row.currentRevision, openCount: row.openCount });
+    }
+    /** Open incident metadata only, ordered by immutable report generation. */
+    dispatchQuarantinePage(options = {}) {
+        quarantineObject(options, ['limit', 'cursor'], 'Dispatch quarantine page');
+        const limit = options.limit === undefined ? 50 : options.limit;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+            throw new Error('Dispatch quarantine limit must be from 1 to 100.');
+        const cursor = options.cursor === undefined ? '0' : quarantineRevision(options.cursor, 'Dispatch quarantine cursor');
+        const inspect = () => {
+            const receipt = this.quarantineReceipt();
+            const rows = this.statement(`SELECT ${CLEANUP_INCIDENT_COLUMNS} FROM process_cleanup_incidents AS incident
+        LEFT JOIN dispatch_quarantine_acknowledgments AS audit ON audit.id = incident.acknowledgment_id
+        WHERE incident.acknowledgment_id IS NULL AND incident.generation > ? ORDER BY incident.generation LIMIT ?`).all(BigInt(cursor), limit + 1);
+            const incidents = rows.slice(0, limit).map(cleanupIncident);
+            return { ...receipt, incidents, nextCursor: rows.length > limit ? incidents.at(-1).generation : null };
+        };
+        return this.db.isTransaction ? inspect() : this.transaction(inspect, false);
+    }
+    /** Explicit offline review clears only the dispatch block; it never retries or repairs workflows. */
+    acknowledgeDispatchQuarantine(input) {
+        quarantineObject(input, ['expectedRevision', 'reviewed'], 'Dispatch quarantine acknowledgment');
+        const revision = quarantineRevision(input.expectedRevision, 'Expected dispatch quarantine revision');
+        if (input.reviewed !== true)
+            throw new Error('Dispatch quarantine acknowledgment requires explicit reviewed: true.');
+        if (this.boundInstance !== undefined)
+            throw Object.assign(new Error('Dispatch quarantine acknowledgment requires an unbound offline store; stop Council hosts first.'), { code: 'COUNCIL_QUARANTINE_OFFLINE_REQUIRED', status: 409 });
+        return this.transaction(() => {
+            this.recoverDeadOwners();
+            const receipt = this.quarantineReceipt();
+            if (receipt.currentRevision !== revision)
+                throw Object.assign(new Error('Dispatch quarantine changed after review; inspect the current revision before acknowledging.'), { code: 'COUNCIL_QUARANTINE_REVISION_CONFLICT', status: 409 });
+            const activity = this.statement(`SELECT
+        (SELECT COUNT(*) FROM instances) AS instances,
+        (SELECT COUNT(*) FROM slots) AS slots,
+        (SELECT COUNT(*) FROM slot_waiters) AS waiters,
+        (SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running') AND owner_instance IS NOT NULL) AS owned,
+        (SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running') AND owner_instance IS NULL) AS unowned`).get();
+            if (activity.instances || activity.slots || activity.waiters || activity.owned)
+                throw Object.assign(new Error('Stop all Council hosts and drain owned calls before acknowledging the reviewed dispatch quarantine.'), { code: 'COUNCIL_QUARANTINE_OFFLINE_REQUIRED', status: 409 });
+            let acknowledgment = this.statement(`SELECT id, CAST(revision AS TEXT) AS revision, acknowledged_at AS acknowledgedAt,
+        incident_count AS incidentCount, unowned_unfinished_runs AS unownedUnfinishedRuns FROM dispatch_quarantine_acknowledgments WHERE revision = ?`).get(BigInt(revision));
+            if (receipt.blocked) {
+                acknowledgment = { id: randomUUID(), revision, acknowledgedAt: new Date().toISOString(), incidentCount: receipt.openCount, unownedUnfinishedRuns: activity.unowned };
+                this.statement('INSERT INTO dispatch_quarantine_acknowledgments(id, revision, acknowledged_at, incident_count, unowned_unfinished_runs) VALUES (?, ?, ?, ?, ?)')
+                    .run(acknowledgment.id, BigInt(revision), acknowledgment.acknowledgedAt, acknowledgment.incidentCount, acknowledgment.unownedUnfinishedRuns);
+                this.statement('UPDATE process_cleanup_incidents SET acknowledgment_id = ? WHERE acknowledgment_id IS NULL').run(acknowledgment.id);
+            }
+            return { blocked: false, currentRevision: revision, openCount: 0, incidents: [], nextCursor: null,
+                unownedUnfinishedRuns: activity.unowned, ...(acknowledgment ? { acknowledgment: { ...acknowledgment } } : {}) };
+        });
+    }
     /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
     acquireSlot(instanceId, runId, limit, waiterId) {
         text(instanceId, 'Instance id', 128);
@@ -710,6 +869,7 @@ export class CouncilStore {
             text(waiterId, 'Slot waiter id', 128);
         return this.transaction(() => {
             this.assertInstance(instanceId);
+            this.assertDispatchUnblocked();
             const now = Date.now();
             if (now < this.lastRecoveryAt || now - this.lastRecoveryAt >= 500) {
                 this.recoverDeadOwners();
@@ -851,6 +1011,7 @@ export class CouncilStore {
                 databaseBytes: size(this.databasePath), walBytes: size(`${this.databasePath}-wal`),
                 preparedStatements: this.statements.size, workspaceActiveRunLimit: 100, counts,
                 runStatuses: Object.fromEntries(statuses.map(row => [row.status, row.count])),
+                dispatchQuarantine: this.quarantineReceipt(),
             };
         };
         return this.db.isTransaction ? inspect() : this.transaction(inspect, false);
@@ -877,7 +1038,7 @@ export class CouncilStore {
             throw new Error('dryRun must be a boolean.');
         return this.transaction(() => {
             const skipped = this.statement("SELECT COUNT(*) AS count FROM runs WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ? AND has_artifacts = 1 AND id NOT IN (SELECT id FROM runs ORDER BY updated_at DESC, id DESC LIMIT ?)").get(before, keep);
-            const candidates = this.statement("SELECT id FROM runs WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ? AND has_artifacts = 0 AND id NOT IN (SELECT id FROM runs ORDER BY updated_at DESC, id DESC LIMIT ?) ORDER BY updated_at, id LIMIT 1000").all(before, keep);
+            const candidates = this.statement("SELECT id FROM runs WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ? AND has_artifacts = 0 AND NOT EXISTS (SELECT 1 FROM process_cleanup_incidents WHERE run_id = runs.id AND acknowledgment_id IS NULL) AND id NOT IN (SELECT id FROM runs ORDER BY updated_at DESC, id DESC LIMIT ?) ORDER BY updated_at, id LIMIT 1000").all(before, keep);
             const result = { candidateIds: candidates.map(row => row.id), deletedRuns: 0, deletedEvents: 0, skippedArtifacts: skipped.count };
             if (options.dryRun !== false)
                 return result;

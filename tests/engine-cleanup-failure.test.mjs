@@ -9,6 +9,7 @@ import { CouncilService } from '../dist/service.js';
 import { loadConfig } from '../dist/config.js';
 import { GitWorkspaces } from '../dist/workspaces.js';
 import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from '../dist/process.js';
+import { QUARANTINE_INSPECTION_REQUIRED } from '../dist/dispatch-quarantine.js';
 
 const task = extra => ({ mode: 'delegate', task: 'Verify bounded offline cleanup failure handling.', agents: ['codex'], permission: 'read', ...extra });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -77,7 +78,7 @@ test('a service degrades, drains its queued run and retains failed cleanup after
     assert.equal(service.requestCancellation(first.id).requested, true); release.resolve();
     const runs = await Promise.all([service.completion(first.id), service.completion(second.id)]);
     assert.deepEqual(runs.map(run => run.status), ['failed', 'failed']); assert.equal(calls, 1);
-    assert.ok(runs.every(run => run.error === PROCESS_CLEANUP_ERROR));
+    assert.ok(runs.every(run => run.error.includes(PROCESS_CLEANUP_ERROR) && run.error.includes(QUARANTINE_INSPECTION_REQUIRED)));
     const health = service.health(); assert.equal(health.status, 'degraded'); assert.match(health.issues[0], /cleanup could not be verified/);
     assert.equal(health.state.counts.slots, 0); assert.equal(health.state.counts.slotWaiters, 0); assert.equal(health.state.counts.activeRuns, 0);
     assert.throws(() => service.start(task()), /cleanup could not be verified/);
@@ -108,7 +109,7 @@ for (const peerReply of [false, true]) {
     } });
     const privateChats = service.privateChats; // Retain read access for evidence after this host fences itself.
     const run = await service.run(task({ privateChats: { codex: { peers: ['claude'], maxRequests: 1 } } }));
-    assert.equal(run.status, 'failed'); assert.equal(run.error, PROCESS_CLEANUP_ERROR); assert.equal(calls, peerReply ? 2 : 1);
+    assert.equal(run.status, 'failed'); assert.ok(run.error.includes(PROCESS_CLEANUP_ERROR)); assert.ok(run.error.includes(QUARANTINE_INSPECTION_REQUIRED)); assert.equal(calls, peerReply ? 2 : 1);
     assert.equal(run.steps.at(-1).result.error, PROCESS_CLEANUP_ERROR);
     const publicEvidence = JSON.stringify({ run, events: service.store.events(run.id), health: service.health() });
     for (const marker of ['PRIVATE_QUESTION', 'PRIVATE_CONTEXT', 'PRIVATE_REPLY', 'PRIVATE_DIAGNOSTIC']) assert.equal(publicEvidence.includes(marker), false, marker);
@@ -134,7 +135,7 @@ test('cleanup uncertainty leaves the isolated worktree pending inspection withou
   const run = await engine.run(task({ permission: 'write' }), { signal: controller.signal });
   assert.equal(run.status, 'failed'); assert.equal(exported.mock.callCount(), 0); assert.equal(run.workspaces.length, 1);
   assert.equal(run.workspaces[0].path, path); assert.equal(run.workspaces[0].exportStatus, 'pending');
-  assert.match(run.workspaces[0].exportError, /Inspect the retained worktree/); assert.equal(existsSync(patchPath), false);
+  assert.ok(run.workspaces[0].exportError.includes(QUARANTINE_INSPECTION_REQUIRED)); assert.equal(existsSync(patchPath), false);
   assert.equal(readFileSync(join(path, 'retained.txt'), 'utf8'), 'Preserve work until process cleanup is inspected.');
 });
 
@@ -170,7 +171,7 @@ for (const phase of ['create', 'export']) for (const cancel of [false, true]) {
     assert.equal(notifications, 1); assert.equal(stateFailures, 0); assert.equal(calls, phase === 'create' ? 0 : 1);
     assert.equal(exported.mock.callCount(), phase === 'create' ? 0 : 1);
     assert.equal(run.workspaces[0].path, path); assert.equal(run.workspaces[0].exportStatus, 'pending');
-    assert.match(run.workspaces[0].exportError, /Inspect the retained worktree/); assert.equal(existsSync(patchPath), false);
+    assert.ok(run.workspaces[0].exportError.includes(QUARANTINE_INSPECTION_REQUIRED)); assert.equal(existsSync(patchPath), false);
     assert.equal(readFileSync(join(path, 'retained.txt'), 'utf8'), 'Keep helper preparation evidence.');
     assert.equal(persistence.log.some(event => event.type === 'workspace.exported'), false);
     assert.equal((await engine.run(task())).status, 'failed'); assert.equal(calls, phase === 'create' ? 0 : 1); assert.equal(notifications, 1);
@@ -210,7 +211,7 @@ test('a concurrent cleanup failure prevents an in-flight export from publishing 
     await exporting.promise; assert.equal((await engine.run(task({ task: 'SECOND_CLEANUP' }))).status, 'failed'); release.resolve();
     const run = await first; assert.equal(run.status, 'failed'); assert.equal(run.error, PROCESS_CLEANUP_ERROR);
     assert.equal(controller.signal.aborted, true); assert.equal(exported.mock.callCount(), 1); assert.equal(run.workspaces[0].path, path);
-    assert.equal(run.workspaces[0].exportStatus, 'pending'); assert.equal(run.workspaces[0].changed, false); assert.match(run.workspaces[0].exportError, /Inspect the retained worktree/);
+    assert.equal(run.workspaces[0].exportStatus, 'pending'); assert.equal(run.workspaces[0].changed, false); assert.ok(run.workspaces[0].exportError.includes(QUARANTINE_INSPECTION_REQUIRED));
     assert.equal(persistence.log.some(event => event.runId === run.id && event.type === 'workspace.exported'), false);
   } finally { release.resolve(); await first; }
 });

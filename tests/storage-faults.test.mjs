@@ -88,7 +88,7 @@ test('a SQLite FULL error during a v2 migration leaves the old schema and record
   assert.equal(JSON.parse(inspection.prepare('SELECT document FROM runs WHERE id = ?').get('legacy-0').document).output, payload);
   inspection.close();
   const upgraded = open();
-  assert.equal(upgraded.health().schemaVersion, 5);
+  assert.equal(upgraded.health().schemaVersion, 6);
   assert.equal(upgraded.listRunSummaries(20).length, 20);
   assert.equal(upgraded.getRun('legacy-0').output, payload);
   assert.deepEqual(upgraded.checkIntegrity(), ['ok']);

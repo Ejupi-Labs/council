@@ -213,7 +213,7 @@ test('schema version one migrates existing results without losing their data', t
   ownedRun(store, 'new-run', 'migrated-owner');
   assert.ok(store.acquireSlot('migrated-owner', 'new-run', 1));
   const check = new DatabaseSync(join(directory, 'state.db'));
-  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 6);
   check.close();
 });
 
@@ -446,7 +446,7 @@ test('health and integrity diagnostics expose counts without returning run paylo
   store.sendMessage({ from: 'codex', to: 'claude', subject: 'Review', body: 'A bounded note' });
   store.putContext('api', 'Small contract', 'codex');
   const health = store.health();
-  assert.equal(health.schemaVersion, 5);
+  assert.equal(health.schemaVersion, 6);
   assert.equal(health.sqliteVersion, process.versions.sqlite);
   assert.equal(health.journalMode, 'wal');
   assert.equal(health.counts.runs, 1);
@@ -585,7 +585,7 @@ test('a live version-two owner blocks migration before ALTER and migration succe
   inspection.close();
   const closed = once(child, 'close'); child.kill('SIGKILL'); await closed;
   const migrated = setup.open();
-  assert.equal(migrated.health().schemaVersion, 5);
+  assert.equal(migrated.health().schemaVersion, 6);
   assert.equal(migrated.getRunSummary('old-live-run').status, 'queued');
   assert.deepEqual(migrated.recoverOrphans().map(run => run.id), ['old-live-run']);
 });
@@ -791,7 +791,7 @@ test('schema version three upgrades queue metadata without rebuilding existing r
   assert.deepEqual(upgraded.getRun(run.id), run);
   assert.deepEqual(upgraded.getRunSummary(run.id), summary);
   assert.deepEqual(upgraded.leases(), [lease]);
-  assert.equal(upgraded.health().schemaVersion, 5);
+  assert.equal(upgraded.health().schemaVersion, 6);
   assert.equal(upgraded.health().counts.slotWaiters, 0);
 });
 
@@ -807,7 +807,7 @@ test('a live version three host prevents queue migration before any schema mutat
   assert.equal(raw.prepare("SELECT 1 FROM sqlite_master WHERE name = 'slot_waiters'").get(), undefined);
   raw.prepare('DELETE FROM instances WHERE id = ?').run('v3-live-host');
   raw.close();
-  assert.equal(open().health().schemaVersion, 5);
+  assert.equal(open().health().schemaVersion, 6);
 });
 
 test('independent process waiters receive the next slot before an incumbent can start another call', { timeout: 15000 }, async t => {

@@ -71,11 +71,11 @@ test('independent cold processes can initialize the same new workspace', { timeo
   const opened = workers.map(worker => worker.message('opened'));
   const exits = workers.map(worker => once(worker.child, 'close'));
   for (const worker of workers) worker.child.send({ type: 'start' });
-  for (const result of await Promise.all(opened)) { assert.equal(result.schemaVersion, 5); assert.equal(result.timeout, 250); }
+  for (const result of await Promise.all(opened)) { assert.equal(result.schemaVersion, 6); assert.equal(result.timeout, 250); }
   await Promise.all(exits);
   for (const worker of workers) assert.equal(worker.child.exitCode, 0, worker.diagnostics());
   const store = setup.open();
-  assert.equal(store.health().schemaVersion, 5);
+  assert.equal(store.health().schemaVersion, 6);
   assert.deepEqual(store.checkIntegrity(), ['ok']);
   assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 250);
 });
@@ -93,7 +93,7 @@ test('cold WAL startup retries immediate busy errors and restores the short runt
   let store;
   try { store = setup.open(); } finally { DatabaseSync.prototype.exec = nativeExec; }
   assert.equal(attempts, 3);
-  assert.equal(store.health().schemaVersion, 5);
+  assert.equal(store.health().schemaVersion, 6);
   assert.deepEqual(store.checkIntegrity(), ['ok']);
   assert.equal(store.db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
   assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 250);
@@ -111,7 +111,7 @@ test('cold WAL startup preserves non-contention failures without retrying', t =>
   try { assert.throws(() => setup.open(), error => error === failure); }
   finally { DatabaseSync.prototype.exec = nativeExec; }
   assert.equal(attempts, 1);
-  assert.equal(setup.open().health().schemaVersion, 5);
+  assert.equal(setup.open().health().schemaVersion, 6);
 });
 
 test('persistent cold WAL contention exhausts one five-second startup budget', { timeout: 10000 }, t => {

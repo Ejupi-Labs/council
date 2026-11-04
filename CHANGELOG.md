@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add schema 6 durable cleanup incidents, transactional admission and ready-artifact guards, failed finalization, bounded status pages and a read-only dashboard. Preserve incidents across recovery/restart/restore and retain an audited, exact-revision offline acknowledgement after operator inspection; never replay work or clear automatically.
+- Report each actual agent/Git cleanup uncertainty separately from local fence notifications and foreign refusal. Preserve private evidence, draining slots, pending artifacts and a fixed warning when durable incident persistence fails, including emergency finalization.
+
 - Reuse unchanged compact room observations in idle executive waits while preserving cross-host updates, emergency evidence, fresh mandates/reports and periodic owner recovery.
 - Reject explicit room-context budget overflow incrementally before reading later history pages, retaining exact complete context whenever it fits.
 - Classify lost supervisor startup evidence as unverified process cleanup while preserving verified no-start failures and existing kill order. Canonicalize the remaining Windows CI-helper fixture paths.

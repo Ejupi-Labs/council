@@ -8,6 +8,7 @@ import { WorkflowEngine, WorkflowPersistenceError } from './engine.js';
 import { CouncilStore } from './store.js';
 import { createRunner } from './runner.js';
 import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
+import { DispatchQuarantinedError, QUARANTINE_INSPECTION_REQUIRED, QUARANTINE_PERSISTENCE_WARNING, type ProcessCleanupIncidentInput } from './dispatch-quarantine.js';
 import { parseWorkflow } from './config.js';
 import { GitWorkspaces } from './workspaces.js';
 import { summarizeRun, type EventPage, type RunSummary } from './summary.js';
@@ -23,6 +24,8 @@ import { planRouting } from './routing.js';
 import { collaborationSkills } from './skills.js';
 import type { RoutingInput } from './routing-types.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
+
+type MaintenanceCleanupIncident = Omit<ProcessCleanupIncidentInput, 'instanceId'> & { attempted?: boolean; persistenceFailed?: boolean };
 
 const STATE_CONTENTION_GRACE_MS = 5000;
 function isStateContention(error: unknown): boolean {
@@ -56,6 +59,8 @@ export class CouncilService {
   private readonly emergencyResults = new Map<string, RunRecord>();
   private fault?: string;
   private faultEvent?: 'state.degraded' | 'process.degraded';
+  private incidentPersistenceFailed = false;
+  private localStatusRevision = 0n;
   private lastHeartbeatAt = Date.now();
   private lastHeartbeatElapsed = performance.now();
   private heartbeatContentions = 0;
@@ -150,7 +155,8 @@ export class CouncilService {
         },
         privateChats: () => this.privateChats,
         onStateFailure: () => this.degrade('Council state persistence failed. Inspect storage and restart this host before accepting new work.'),
-        onProcessCleanupFailure: () => this.degrade(`${PROCESS_CLEANUP_ERROR} Inspect remaining processes and retained worktrees, then restart this host before accepting new work.`, 'process.degraded'),
+        onProcessCleanupFailure: error => this.degrade(error instanceof DispatchQuarantinedError ? error.message : `${PROCESS_CLEANUP_ERROR} Inspect remaining processes and retained worktrees, then restart this host before accepting new work.`, 'process.degraded'),
+        onIncidentPersistenceFailure: () => this.noteIncidentPersistenceFailure(),
       });
       this.heartbeat = setInterval(() => this.heartbeatTick(), 1000);
       this.heartbeat.unref();
@@ -172,9 +178,27 @@ export class CouncilService {
     }
   }
 
-  start(value: unknown, provenance?: { previousId?: string; routing?: unknown; roomId?: string }): RunRecord {
+  /** Refuse dispatch before changing approvals or starting owned work. Reads remain available. */
+  assertDispatchAllowed(): void {
     if (this.closing) throw new Error('Council is shutting down.');
     if (this.fault) throw new Error(this.fault);
+    this.store.assertDispatchUnblocked();
+  }
+
+  dispatchQuarantinePage(options: { limit?: number; cursor?: string } = {}) {
+    return { ...this.store.dispatchQuarantinePage(options), hostId: this.instanceId, localRevision: String(this.localStatusRevision), ...(this.fault ? { localFault: this.fault } : {}),
+      ...(this.incidentPersistenceFailed ? { persistenceWarning: QUARANTINE_PERSISTENCE_WARNING } : {}) };
+  }
+
+  /** Compact shared state plus this host's in-memory refusal; no incident bodies. */
+  dispatchStatus() {
+    const { blocked, currentRevision, openCount } = this.store.dispatchQuarantinePage({ limit: 1 });
+    return { blocked, currentRevision, openCount, hostId: this.instanceId, localRevision: String(this.localStatusRevision), ...(this.fault ? { localFault: this.fault } : {}),
+      ...(this.incidentPersistenceFailed ? { persistenceWarning: QUARANTINE_PERSISTENCE_WARNING } : {}) };
+  }
+
+  start(value: unknown, provenance?: { previousId?: string; routing?: unknown; roomId?: string }): RunRecord {
+    this.assertDispatchAllowed();
     const depth = Number(process.env.COUNCIL_DEPTH ?? 0);
     if (!Number.isFinite(depth) || depth > 0) throw new Error('Nested Council delegation is disabled. Return your result to the parent agent.');
     if (this.jobs.size >= 20) throw new Error('This server already has 20 active runs. Wait for a result before starting more.');
@@ -220,10 +244,11 @@ export class CouncilService {
         let durable: RunRecord | undefined;
         try { durable = this.store.getRun(run.id); } catch { /* Preserve the queued brief if storage is unavailable. */ }
         const snapshot = error instanceof WorkflowPersistenceError && error.run.id === run.id ? error.run : durable ?? run;
-        const failed: RunRecord = { ...snapshot, status: !persistenceFailure && controller.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : 'Workflow failed.', updatedAt: new Date().toISOString() };
+        const warning = this.incidentPersistenceFailed || snapshot.error?.includes(QUARANTINE_PERSISTENCE_WARNING) ? QUARANTINE_PERSISTENCE_WARNING : undefined;
+        const failed: RunRecord = { ...snapshot, status: !persistenceFailure && controller.signal.aborted ? 'cancelled' : 'failed', error: [error instanceof Error ? error.message : 'Workflow failed.', warning].filter(Boolean).join('; '), updatedAt: new Date().toISOString() };
         try { return this.store.finalizeRun(failed); }
         catch {
-          failed.error = 'Run persistence failed. Last durable state may be incomplete; inspect local state before replacing this task.';
+          failed.error = ['Run persistence failed. Last durable state may be incomplete; inspect local state before replacing this task.', warning].filter(Boolean).join('; ');
           this.emergencyResults.set(run.id, failed);
           this.degrade(failed.error);
           return failed;
@@ -262,6 +287,7 @@ export class CouncilService {
     // Preserve process uncertainty over later storage faults. Ordinary state
     // failures may still refine their diagnosis, including failed finalization.
     if (this.faultEvent !== 'process.degraded') {
+      if (this.fault !== message || this.faultEvent !== event) this.localStatusRevision++;
       if (!this.fault || this.faultEvent !== event) process.stderr.write(`${JSON.stringify({ event, message })}\n`);
       this.fault = message;
       this.faultEvent = event;
@@ -273,6 +299,26 @@ export class CouncilService {
   private fenceProcessCleanup(): void {
     this.engine.fenceProcessCleanup();
     this.degrade(`${PROCESS_CLEANUP_ERROR} Inspect remaining processes and retained worktrees, then restart this host before accepting new work.`, 'process.degraded');
+  }
+
+  private noteIncidentPersistenceFailure(): void {
+    if (this.incidentPersistenceFailed) return;
+    this.incidentPersistenceFailed = true;
+    this.localStatusRevision++;
+  }
+
+  private reportMaintenanceCleanupIncident(incident: MaintenanceCleanupIncident): void {
+    this.fenceProcessCleanup();
+    if (incident.attempted) return;
+    incident.attempted = true;
+    try {
+      this.store.reportProcessCleanupIncident({ reportKey: incident.reportKey, instanceId: this.instanceId,
+        ...(incident.runId ? { runId: incident.runId } : {}), stage: incident.stage });
+    } catch {
+      incident.persistenceFailed = true;
+      this.noteIncidentPersistenceFailure();
+      this.engine.noteIncidentPersistenceFailure();
+    }
   }
 
   private summary(id: string): RunSummary {
@@ -368,10 +414,12 @@ export class CouncilService {
 
   health(checkIntegrity = false) {
     const issues = this.fault ? [this.fault] : [];
+    if (this.incidentPersistenceFailed) issues.push(QUARANTINE_PERSISTENCE_WARNING);
     let state: ReturnType<CouncilStore['health']> | undefined;
     let integrity: string[] | undefined;
     try {
       state = this.store.health();
+      if (state.dispatchQuarantine.blocked) issues.push(new DispatchQuarantinedError(state.dispatchQuarantine).message);
       if (checkIntegrity) {
         integrity = this.store.checkIntegrity();
         if (integrity.length !== 1 || integrity[0] !== 'ok') issues.push('SQLite integrity check did not return ok.');
@@ -388,7 +436,7 @@ export class CouncilService {
       activeLocalRuns: this.jobs.size, maintenanceOperations: this.maintenance.size,
       emergencyResults: this.emergencyResults.size, memory: process.memoryUsage(),
       limits: { concurrency: this.config.maxConcurrency, activeLocalRuns: 20, activeWorkspaceRuns: 100, callsPerRun: this.config.maxCalls, outputBytesPerCall: this.config.maxOutputBytes, heartbeatGraceMs: STATE_CONTENTION_GRACE_MS },
-      state, integrity, databases,
+      state, integrity, databases, quarantine: state?.dispatchQuarantine,
       storageBytes: databases.reduce((total, database) => total + database.databaseBytes + database.walBytes + database.shmBytes, 0),
       issues,
     };
@@ -416,9 +464,10 @@ export class CouncilService {
     return this.store.prune(options);
   }
 
-  private trackMaintenance<T>(work: Promise<T>, controller: AbortController): Promise<T> {
+  private trackMaintenance<T>(work: Promise<T>, controller: AbortController, incident?: MaintenanceCleanupIncident): Promise<T> {
     const guarded = work.catch(error => {
       if (error instanceof ProcessCleanupError) this.fenceProcessCleanup();
+      if (incident?.persistenceFailed && error instanceof Error && !error.message.includes(QUARANTINE_PERSISTENCE_WARNING)) error.message += ` ${QUARANTINE_PERSISTENCE_WARNING}`;
       throw error;
     });
     this.maintenance.add(guarded);
@@ -524,13 +573,13 @@ export class CouncilService {
   }
 
   exportArtifacts(id: string, signal?: AbortSignal): Promise<{ runId: string; artifacts: WorkspaceArtifact[] }> {
-    if (this.closing) return Promise.reject(new Error('Council is shutting down.'));
-    if (this.fault) return Promise.reject(new Error(this.fault));
+    try { this.assertDispatchAllowed(); } catch (error) { return Promise.reject(error); }
     const controller = new AbortController();
-    return this.trackMaintenance(this.exportArtifactsWork(id, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal), controller);
+    const incident: MaintenanceCleanupIncident = { reportKey: `maintenance-${randomUUID()}`, runId: id, stage: 'maintenance_export' };
+    return this.trackMaintenance(this.exportArtifactsWork(id, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, incident), controller, incident);
   }
 
-  private async exportArtifactsWork(id: string, signal: AbortSignal): Promise<{ runId: string; artifacts: WorkspaceArtifact[] }> {
+  private async exportArtifactsWork(id: string, signal: AbortSignal, incident: MaintenanceCleanupIncident): Promise<{ runId: string; artifacts: WorkspaceArtifact[] }> {
     signal.throwIfAborted();
     const run = this.store.getRun(id);
     if (!run) throw new Error('Run not found.');
@@ -547,18 +596,24 @@ export class CouncilService {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           throw new Error(`The retained worktree at ${artifact.path} does not exist. Preparation may be incomplete or cleanup may have removed it. Preserve the run record and inspect git worktree list before manual recovery; patch repair never creates a checkout.`);
         }
+        let helperCompleted = false;
         try {
+          this.store.assertDispatchUnblocked();
           const exported = await workspaces.export(artifact, signal);
+          helperCompleted = true;
+          this.store.assertDispatchUnblocked();
           if (this.faultEvent === 'process.degraded') throw new ProcessCleanupError();
           signal.throwIfAborted();
           this.store.updateArtifact(id, exported);
           artifacts.push(exported);
         } catch (error) {
-          if (error instanceof ProcessCleanupError || this.faultEvent === 'process.degraded') {
-            this.fenceProcessCleanup();
-            const failure = error instanceof ProcessCleanupError ? error : new ProcessCleanupError();
-            try { this.store.updateArtifact(id, { ...artifact, exportStatus: 'pending', exportError: `${PROCESS_CLEANUP_ERROR} Inspect the retained worktree before exporting its patch.` }); }
-            catch { failure.message = `${PROCESS_CLEANUP_ERROR} Pending artifact metadata could not be persisted; inspect local state.`; }
+          const foreign = error instanceof DispatchQuarantinedError;
+          if (foreign) this.engine.fenceDispatchQuarantine(error);
+          else if (error instanceof ProcessCleanupError && !helperCompleted) this.reportMaintenanceCleanupIncident(incident);
+          if (foreign || error instanceof ProcessCleanupError || this.faultEvent === 'process.degraded') {
+            const failure = foreign || error instanceof ProcessCleanupError ? error : new ProcessCleanupError();
+            try { this.store.updateArtifact(id, { ...artifact, exportStatus: 'pending', exportError: QUARANTINE_INSPECTION_REQUIRED }); }
+            catch { failure.message += ' Pending artifact metadata could not be persisted; inspect local state.'; }
             throw failure;
           }
           throw error;
@@ -569,13 +624,13 @@ export class CouncilService {
   }
 
   cleanup(id: string, options: { reviewed: true; discardChanges?: boolean }, signal?: AbortSignal): Promise<{ removed: string[]; alreadyRemoved: string[] }> {
-    if (this.closing) return Promise.reject(new Error('Council is shutting down.'));
-    if (this.fault) return Promise.reject(new Error(this.fault));
+    try { this.assertDispatchAllowed(); } catch (error) { return Promise.reject(error); }
     const controller = new AbortController();
-    return this.trackMaintenance(this.cleanupWork(id, options, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal), controller);
+    const incident: MaintenanceCleanupIncident = { reportKey: `maintenance-${randomUUID()}`, runId: id, stage: 'maintenance_cleanup' };
+    return this.trackMaintenance(this.cleanupWork(id, options, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, incident), controller, incident);
   }
 
-  private async cleanupWork(id: string, options: { reviewed: true; discardChanges?: boolean }, signal: AbortSignal): Promise<{ removed: string[]; alreadyRemoved: string[] }> {
+  private async cleanupWork(id: string, options: { reviewed: true; discardChanges?: boolean }, signal: AbortSignal, incident: MaintenanceCleanupIncident): Promise<{ removed: string[]; alreadyRemoved: string[] }> {
     const run = this.store.getRun(id);
     if (!run) throw new Error('Run not found.');
     if (['queued', 'running'].includes(run.status)) throw new Error('Cannot clean worktrees while a run is active.');
@@ -598,11 +653,20 @@ export class CouncilService {
       for (const artifact of run.workspaces ?? []) {
         if (cleaned.has(artifact.path)) { alreadyRemoved.push(artifact.path); continue; }
         signal.throwIfAborted();
-        try { await workspaces.cleanup(artifact, { ...options, signal }); }
-        catch (error) { if (error instanceof ProcessCleanupError) this.fenceProcessCleanup(); throw error; }
-        this.store.appendEvent(id, 'workspace.cleaned', { path: artifact.path, discardedChanges: options.discardChanges === true });
-        removed.push(artifact.path);
-        signal.throwIfAborted();
+        let helperCompleted = false;
+        try {
+          this.store.assertDispatchUnblocked();
+          await workspaces.cleanup(artifact, { ...options, signal });
+          helperCompleted = true;
+          this.store.appendEvent(id, 'workspace.cleaned', { path: artifact.path, discardedChanges: options.discardChanges === true });
+          removed.push(artifact.path);
+          this.store.assertDispatchUnblocked();
+          signal.throwIfAborted();
+        } catch (error) {
+          if (error instanceof DispatchQuarantinedError) this.engine.fenceDispatchQuarantine(error);
+          else if (error instanceof ProcessCleanupError && !helperCompleted) this.reportMaintenanceCleanupIncident(incident);
+          throw error;
+        }
       }
       return { removed, alreadyRemoved };
     } finally { this.store.release(owner); }

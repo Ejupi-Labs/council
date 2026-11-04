@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { initConfig, loadConfig, parseBackend, parseWorkflow, readJsonFile } from './config.js';
 import { serveMcp } from './mcp.js';
 import { CouncilService } from './service.js';
+import { CouncilStore } from './store.js';
 import { renderRun } from './report.js';
 import { VERSION } from './version.js';
 import type { RunRecord } from './types.js';
@@ -23,6 +24,8 @@ Commands:
   init           Create project settings without overwriting existing settings
   doctor         Inspect local runtimes; no model calls or login
   health         Inspect state sizes, limits and runtime health; optional --integrity
+  quarantine     Inspect open cleanup incidents with optional --limit and --cursor
+  quarantine-ack Clear the reviewed dispatch block offline with --revision and --reviewed
   backup         Back up workflow state only with --output <new-file>
   snapshot       Back up all collaboration databases with --output <new-directory>
   verify-snapshot <directory>  Check a completed all-store snapshot
@@ -128,7 +131,7 @@ async function main(): Promise<void> {
   if (values.version) { print({ name: 'council', version: VERSION }); return; }
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { process.stdout.write(HELP); return; }
-  const commands = ['init', 'doctor', 'health', 'backup', 'snapshot', 'verify-snapshot', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route', ...ROOM_COMMANDS];
+  const commands = ['init', 'doctor', 'health', 'quarantine', 'quarantine-ack', 'backup', 'snapshot', 'verify-snapshot', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route', ...ROOM_COMMANDS];
   if (!commands.includes(command)) throw new Error(`Unknown command: ${command}`);
   const roomCommand = (ROOM_COMMANDS as readonly string[]).includes(command);
   const takesId = ['continue', 'show', 'events', 'cancel', 'export', 'patches', 'cleanup', 'wait', ...ROOM_ID_COMMANDS].includes(command);
@@ -145,12 +148,24 @@ async function main(): Promise<void> {
   const workflowOptions = ['mode', 'agents', 'task', 'task-file', 'context-file', 'assignments-file', 'judge', 'rounds', 'max-calls', 'write', 'model', 'effort', 'advisor', 'skills'];
   const permitted = new Set([...common, ...(['plan', 'run', 'continue'].includes(command) ? workflowOptions : []), ...(command === 'events' ? ['after', 'limit', 'summary'] : []), ...(command === 'runs' ? ['limit', 'summary', 'cursor'] : []), ...(command === 'cancel' ? ['summary'] : []), ...(command === 'health' ? ['integrity'] : []), ...(command === 'prune' ? ['before', 'keep-latest', 'execute'] : []), ...(['export', 'backup', 'snapshot'].includes(command) ? ['output'] : []), ...(command === 'cleanup' ? ['reviewed', 'discard'] : [])]);
   for (const option of command === 'ui' ? ['port'] : command === 'wait' ? ['wait-ms'] : command === 'advise' ? ['advisor', 'requester', 'question', 'model', 'effort'] : []) permitted.add(option);
+  if (command === 'quarantine') for (const option of ['limit', 'cursor']) permitted.add(option);
+  if (command === 'quarantine-ack') for (const option of ['revision', 'reviewed']) permitted.add(option);
   if (command === 'billing') permitted.add('agent');
   if (['billing-set', 'billing-import'].includes(command)) for (const option of ['agent', 'input-file', 'revision']) permitted.add(option);
   const routeOptions = ['input-file', 'task', 'task-file', 'context-file', 'agents', 'model', 'effort', 'skills', 'task-class', 'strategy', 'collaboration', 'requires', 'participants', 'allow-escalation', 'rounds', 'max-calls', 'write'];
   if (['route', 'route-plan'].includes(command)) for (const option of routeOptions) permitted.add(option);
   if (roomCommand) for (const option of roomCommandOptions(command)) permitted.add(option);
   for (const option of Object.keys(values)) if (!permitted.has(option)) throw new Error(`--${option} is not supported by ${command}.`);
+  const generation = (value: string | undefined, label: string): string => {
+    if (value === undefined || !/^(?:0|[1-9][0-9]{0,18})$/.test(value) || BigInt(value) > 9223372036854775807n) throw new Error(`${label} must be a canonical decimal generation from 0 to 9223372036854775807.`);
+    return value;
+  };
+  if (command === 'quarantine' && values.cursor !== undefined) generation(values.cursor, '--cursor');
+  if (command === 'quarantine' && values.limit !== undefined && (!/^[1-9][0-9]*$/.test(values.limit) || !Number.isSafeInteger(Number(values.limit)) || Number(values.limit) > 100)) throw new Error('--limit must be an integer from 1 to 100.');
+  if (command === 'quarantine-ack') {
+    if (values.reviewed !== true) throw new Error('Stop every Council host, inspect OS processes and retained worktrees, then provide --reviewed to acknowledge the dispatch block.');
+    generation(values.revision, '--revision');
+  }
   if (command === 'backup' && !values.output) throw new Error('Backup requires --output with a new destination filename.');
   if (command === 'snapshot' && !values.output) throw new Error('Snapshot requires --output with a new destination directory.');
   if (roomCommand) validateRoomCommand(command, values);
@@ -172,6 +187,19 @@ async function main(): Promise<void> {
   const config = command === 'demo'
     ? loadConfig(mkdtempSync(join(tmpdir(), 'council-demo-')), { backend: 'mock' })
     : loadConfig(workspace, { ...(backend ? { backend } : {}), ...(process.env.COUNCIL_BACKEND && !backend ? { backend: parseBackend(process.env.COUNCIL_BACKEND) } : {}) });
+  if (command === 'quarantine' || command === 'quarantine-ack') {
+    if (!existsSync(join(config.stateDir, 'state.db'))) {
+      if (command === 'quarantine-ack') throw new Error('There is no Council state database to acknowledge. Inspect with quarantine first.');
+      print({ blocked: false, currentRevision: '0', openCount: 0, incidents: [], nextCursor: null }); return;
+    }
+    // Offline inspection/acknowledgement never registers a live Council host.
+    const store = new CouncilStore(config.stateDir);
+    try {
+      print(command === 'quarantine' ? store.dispatchQuarantinePage({ ...(values.limit !== undefined ? { limit: Number(values.limit) } : {}), ...(values.cursor !== undefined ? { cursor: values.cursor } : {}) })
+        : store.acknowledgeDispatchQuarantine({ expectedRevision: values.revision!, reviewed: true }));
+    } finally { store.close(); }
+    return;
+  }
   const service = await CouncilService.open(config);
   if (command === 'ui') {
     const port = values.port === undefined ? 0 : Number(values.port);

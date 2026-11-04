@@ -173,6 +173,7 @@ export class RoomManager {
 
   startDiscussion(id: string): RoomRecord {
     this.available();
+    this.service.assertDispatchAllowed();
     if (this.jobs.size >= 20) throw new Error('This room manager already owns 20 active jobs.');
     const initial = this.get(id);
     this.assertBackend(initial);
@@ -193,6 +194,7 @@ export class RoomManager {
 
   execute(id: string): RoomRecord {
     this.available();
+    this.service.assertDispatchAllowed();
     if (this.jobs.size >= 20) throw new Error('This room manager already owns 20 active jobs.');
     this.assertBackend(this.get(id));
     const room = this.change(id, value => {
@@ -222,6 +224,7 @@ export class RoomManager {
 
   resume(id: string): RoomRecord {
     this.available();
+    this.service.assertDispatchAllowed();
     const initial = this.get(id);
     this.assertBackend(initial);
     if (initial.status !== 'paused' || !initial.checkpoint) throw new Error('Only a durably paused room can resume.');

@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './config.js';
 export * from './runner.js';
 export * from './store.js';
+export * from './dispatch-quarantine.js';
 export * from './engine.js';
 export * from './service.js';
 export * from './mcp.js';

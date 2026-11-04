@@ -190,6 +190,7 @@ export class RoomManager {
     }
     startDiscussion(id) {
         this.available();
+        this.service.assertDispatchAllowed();
         if (this.jobs.size >= 20)
             throw new Error('This room manager already owns 20 active jobs.');
         const initial = this.get(id);
@@ -219,6 +220,7 @@ export class RoomManager {
     }
     execute(id) {
         this.available();
+        this.service.assertDispatchAllowed();
         if (this.jobs.size >= 20)
             throw new Error('This room manager already owns 20 active jobs.');
         this.assertBackend(this.get(id));
@@ -255,6 +257,7 @@ export class RoomManager {
     }
     resume(id) {
         this.available();
+        this.service.assertDispatchAllowed();
         const initial = this.get(id);
         this.assertBackend(initial);
         if (initial.status !== 'paused' || !initial.checkpoint)

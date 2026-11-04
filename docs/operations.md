@@ -14,11 +14,11 @@ Use native vendor account configuration. `doctor` inspects launch prerequisites 
 
 Read policy and retained Git worktrees are not a universal OS sandbox. The ACP file API checks project containment, size, metadata paths and static symlink/junction escapes. It is **not raceproof against a concurrent process with the same user privileges retargeting an ancestor symlink or junction** between checks and filesystem operations. Use a separately configured OS account, container or VM when the repository or another local process is untrusted. Council does not provide or certify that isolation.
 
-## Upgrade to schema 5
+## Upgrade to schema 6
 
 1. Stop every older Council MCP host and CLI process using the workspace. Let owned agent processes drain; inspect any remaining work before proceeding.
 2. Before opening the state with the new build, make an offline copy of the entire configured state directory, normally `.council`, to an unused backup directory. Older builds may not have the `backup` command. Preserve the matching repository and Git worktree metadata if retained artifacts matter.
-3. Install/build the same release for all hosts. The first state open migrates older supported schemas transactionally to schema 5. Do not run older hosts against the upgraded database. Schema 5 adds durable call waiters and instance ownership for internal maintenance leases; existing transcripts and ordinary user file leases remain intact.
+3. Install/build the same release for all hosts. The first state open migrates older supported schemas transactionally to schema 6. Do not run older hosts against the upgraded database; known live older hosts prevent migration. Schema 6 adds durable cleanup incidents and reviewed acknowledgement history while preserving transcripts, call waiters and maintenance ownership. Older already-running code cannot enforce a new dispatch protocol.
 4. Check the resulting schema and integrity before accepting new work:
 
 ```sh
@@ -34,7 +34,7 @@ Short SQLite BUSY/LOCKED heartbeat failures retry within five seconds, with `hea
 
 Current-schema WAL opens avoid migration write locks. Cold initialization and upgrades allow five-second SQLite lock waits before restoring the 250 ms runtime bound. The CLI uses `CouncilService.open`, an asynchronous factory that retries brief state initialization contention before any workflow is accepted; embedded integrations can use the same factory. Initialization retries never replay agent calls. Large migrations and OS filesystem delays remain separate from lock-wait budgets.
 
-Optional feature stores have their own schema versions. Delegation schema 3 adds durable author-scoped executive-report retry keys while preserving existing reports, replies and change revisions. Stop older hosts before upgrading a shared workspace and use the same build everywhere; a future schema is refused before journal or permission changes. Workflow schema 5 remains unchanged by that migration.
+Optional feature stores have their own schema versions. Delegation schema 3 adds durable author-scoped executive-report retry keys while preserving existing reports, replies and change revisions. Stop older hosts before upgrading a shared workspace and use the same build everywhere; a future schema is refused before journal or permission changes. Workflow schema 6 separately adds durable cleanup quarantine; the feature stores keep their independent versions.
 
 ## Observe, cancel and recover
 
@@ -135,7 +135,9 @@ Graceful SIGINT/SIGTERM, MCP input closure and cancellation requests stop bundle
 
 Windows tree cleanup allows five seconds for each native helper, coalesces overlapping attempts, and preserves a requested cooperative stop before ordered escalation. When OS helpers fail, stop/escalation can take up to 16 seconds. Unverified cleanup remains a failed workflow even if cancellation arrives later. That engine stops dispatching before releasing its call slots; its service records a `process.degraded` diagnostic, cancels other local work and refuses new runs until restarted. Retained worktrees stay pending instead of publishing an automatic patch while a descendant may still write.
 
-This fault is local to the affected host and is not a durable workspace-wide barrier. Stop other hosts sharing the workspace, inspect remaining processes and retained worktrees, and resolve the uncertain process ownership before restarting or requesting patch repair. A fresh health command cannot see another process's in-memory fault. A signal being sent alone is not proof that every descendant has stopped.
+Each distinct trusted cleanup failure also attempts to record a durable workspace incident before releasing its call slot. Committed incidents block later shared admissions and are observed by active hosts. New and cancelled work remains failed when the incident is visible during finalization; retained evidence stays available. Incidents survive restart, ordinary orphan recovery, pruning and snapshot/restore. The reporting host's in-memory fence remains permanent until restart.
+
+If incident persistence fails, Council retains the local refusal and explicitly warns that other hosts may be unaware; a shared block is not guaranteed. A committed record does not prove that a descendant survives, and sending a signal does not prove every descendant stopped. Read the [cleanup quarantine and offline acknowledgement guide](cleanup-quarantine.md) before inspecting or clearing a block. A fresh host can inspect persisted incidents but cannot reconstruct another process's unpersisted in-memory fault.
 
 Git create/export/cleanup operations have a 60-second operation deadline. Final patch exports share a 60-second budget, shortened to five seconds after run cancellation, followed by process cleanup. Maintenance is also aborted during service shutdown. Kernel or filesystem failures can still delay OS operations; these are bounded application policies, not universal OS guarantees.
 
