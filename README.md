@@ -340,7 +340,7 @@ Use a unique reservation owner for each independent task, and pass `runId` when 
 
 ## Production operations
 
-Council supports trusted, local development workspaces. Keep SQLite state on a local disk and use the same release for every host sharing that state. Before upgrading from 1.0 or 1.1, stop older Council hosts; schema v5 migration refuses live older owners and older binaries cannot reopen migrated state. No unfinished task is replayed.
+Council supports trusted, local development workspaces. Keep SQLite state on a local disk and use the same release for every host sharing that state. Before upgrading, stop older Council hosts; schema 6 migration refuses live older owners and older binaries cannot reopen migrated state. No unfinished task is replayed.
 
 ```sh
 council health --integrity
