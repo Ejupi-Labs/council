@@ -110,8 +110,10 @@ specs/001-workspace-foundation/
 
 ## Source replacement and packaging
 
-After design commit, optionally archive reference27822ba under ignored scratch. Remove only
-explicit tracked legacy source/tests/dist/schemas/manifests and obsolete implementation docs.
+After design commit, optionally archive reference27822ba under ignored scratch. Retire explicitly
+tracked legacy source/tests/dist/schemas/manifests and obsolete implementation docs by relocation
+to reference/legacy/. Bulk deletion was rejected by automatic review; preserve the reference
+instead. It is excluded from compilation and release allowlists.
 Preserve Git, all ignored state, requirements/Specify, notices and original release archives.
 Never recursively clean an unverified computed path. Replacement commands retain npm test/check.
 Compile UI before native build; commit embedded browser assets, ignore native build outputs.

@@ -4,7 +4,7 @@
 
 ## Phase 1 — Setup
 
-- [ ] T001 Preserve reference27822ba and remove only explicitly tracked obsolete application/test/plugin artifacts; retain all ignored state and new design tooling, recording exact scope in specs/001-workspace-foundation/replacement.md.
+- [ ] T001 Preserve reference27822ba and relocate explicitly tracked obsolete application/test/plugin artifacts to reference/legacy/; retain all ignored state and new design tooling, recording exact scope in specs/001-workspace-foundation/replacement.md.
 - [ ] T002 Initialize go.mod/go.sum, package.json/package-lock.json, ui/tsconfig.json, scripts/build.mjs and meaningful npm test/check wrappers for the selected pinned toolchains; update AGENTS.md stack rules and ignore rules without hiding embedded browser assets.
 - [ ] T003 [P] Copy only approved public brand artwork and selected MIT icons into ui/src/assets/, retaining exact hashes and notices in third-party/brand-assets.md and third-party/ejupilabs-icons/LICENSE.
 
