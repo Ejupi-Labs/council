@@ -62,6 +62,7 @@ export interface WorkflowStore {
   acquireSlot?(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
   cancelSlotWaiter?(instanceId: string, waiterId: string): void;
   releaseSlot?(token: string, instanceId: string): void;
+  releaseSlotWithRetry?(token: string, instanceId: string): void | Promise<void>;
   finalizeRun?(run: RunRecord): RunRecord;
   reportProcessCleanupIncident?(input: ProcessCleanupIncidentInput): ProcessCleanupIncident;
   assertDispatchUnblocked?(): void;
@@ -466,15 +467,18 @@ export class WorkflowEngine {
         try { this.store.cancelSlotWaiter?.(this.options.instanceId!, queued); }
         catch (error) { evidenceFailure(error, 'remove a shared workflow call waiter'); }
       };
-      const releaseDurable = (): void => {
+      const releaseDurable = async (): Promise<void> => {
         if (!slotToken) return;
         const token = slotToken;
         slotToken = undefined;
-        try { this.store.releaseSlot!(token, this.options.instanceId!); }
+        try {
+          if (this.store.releaseSlotWithRetry) await this.store.releaseSlotWithRetry(token, this.options.instanceId!);
+          else await this.store.releaseSlot!(token, this.options.instanceId!);
+        }
         catch (error) { evidenceFailure(error, 'release a shared workflow call slot'); }
       };
-      const releaseAll = (): void => {
-        try { releaseDurable(); }
+      const releaseAll = async (): Promise<void> => {
+        try { await releaseDurable(); }
         finally { try { clearWaiter(); } finally { release(); } }
       };
       try {
@@ -491,7 +495,7 @@ export class WorkflowEngine {
           check();
         }
       } catch (error) {
-        releaseAll();
+        await releaseAll();
         if (error instanceof DispatchQuarantinedError) {
           observeQuarantine(error);
           event('step.dispatch_blocked', { agent, error: error.message, code: error.code, receipt: error.receipt });
@@ -501,14 +505,14 @@ export class WorkflowEngine {
         if (error && typeof error === 'object' && 'code' in error && error.code === 'COUNCIL_SLOT_QUEUE_FULL') throw error;
         evidenceFailure(error, 'coordinate shared workflow dispatch');
       }
-      if (signal.aborted) { releaseAll(); return undefined; }
+      if (signal.aborted) { await releaseAll(); return undefined; }
       const blockedReceipt = (error: unknown): Record<string, unknown> => ({ agent,
         error: errorMessage(error), ...(error && typeof error === 'object' && 'code' in error ? { code: error.code } : {}),
         ...(error && typeof error === 'object' && 'receipt' in error ? { receipt: error.receipt } : {}) });
       try { this.options.assertAgentDispatch?.(agent); }
-      catch (error) { if (error instanceof DispatchQuarantinedError) observeQuarantine(error); releaseAll(); event('step.dispatch_blocked', blockedReceipt(error)); throw error; }
+      catch (error) { if (error instanceof DispatchQuarantinedError) observeQuarantine(error); await releaseAll(); event('step.dispatch_blocked', blockedReceipt(error)); throw error; }
       const stepId = `${String(++calls).padStart(2, '0')}-${role.replace(/[^a-zA-Z0-9_-]/g, '-')}-${agent}`;
-      if (calls > plan.estimatedCalls) { releaseAll(); throw new Error('Internal workflow call budget exceeded'); }
+      if (calls > plan.estimatedCalls) { await releaseAll(); throw new Error('Internal workflow call budget exceeded'); }
       let result: AgentResult;
       let releaseError: unknown;
       let protectionFailure: unknown;
@@ -624,7 +628,7 @@ export class WorkflowEngine {
         }
         result = { agent, status: signal?.aborted ? 'cancelled' : 'failed', output: '', durationMs: Math.max(0, Date.now() - start),
           error: privateTurn && !(error instanceof ContextBudgetExceeded) ? 'Private coordination reply could not be completed or retained; inspect the pair chat before retrying.' : clip(errorMessage(error), MAX_ERROR_CHARS) };
-      } finally { if (guard) clearInterval(guard); try { releaseAll(); } catch (error) { releaseError = error; } }
+      } finally { if (guard) clearInterval(guard); try { await releaseAll(); } catch (error) { releaseError = error; } }
       if (cleanupDiagnostic) result = { ...result, status: 'failed', error: privateOutput ? this.cleanupFailureMessage() : clip([this.incidentPersistenceFailed ? this.cleanupFailureMessage() : undefined, cleanupDiagnostic].filter(Boolean).join(' '), MAX_ERROR_CHARS) };
       else if (quarantineFailure) result = { ...result, status: 'failed', error: this.cleanupFailureMessage() };
       else if (protectionFailure) result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };

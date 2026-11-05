@@ -1,3 +1,4 @@
+import { type AdmissionConnection } from './admission-attempt.js';
 import { type DispatchQuarantineAcknowledgmentResult, type DispatchQuarantinePage, type DispatchQuarantineReceipt, type ProcessCleanupIncident, type ProcessCleanupIncidentInput } from './dispatch-quarantine.js';
 import type { ContextEntry, EventRecord, Lease, Message, RunRecord, WorkspaceArtifact } from './types.js';
 import { type EventPage, type PruneResult, type RunSummary } from './summary.js';
@@ -23,6 +24,7 @@ export declare class CouncilStore {
     /** Fixed SQL only, with a bounded cache rather than re-preparing every polling query. */
     private statement;
     private migrateMetadata;
+    admissionConnection(): AdmissionConnection;
     private transaction;
     saveRun(run: RunRecord): void;
     /** Creation, ownership and the queued event commit together, leaving no unowned crash window. */
@@ -98,6 +100,8 @@ export declare class CouncilStore {
     }): DispatchQuarantineAcknowledgmentResult;
     /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
     acquireSlot(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
+    /** Settle the exact owned token; never rerun an agent or skip cleanup on abort. */
+    releaseSlotWithRetry(token: string, instanceId: string): Promise<void>;
     releaseSlot(token: string, instanceId: string): void;
     /** Idempotent cleanup for a per-call wait that was aborted before admission. */
     cancelSlotWaiter(instanceId: string, waiterId: string): void;

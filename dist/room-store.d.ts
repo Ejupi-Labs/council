@@ -1,8 +1,10 @@
+import { type AdmissionConnection } from './admission-attempt.js';
 import type { RoomMessage, RoomObservation, RoomRecord, RoomSummary } from './rooms-types.js';
 /** Room state has its own database so optional UI features never migrate workflow storage. */
 export declare class RoomStore {
     private readonly db;
     constructor(stateDir: string);
+    admissionConnection(): AdmissionConnection;
     private transaction;
     private row;
     private append;

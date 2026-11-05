@@ -89,12 +89,15 @@ export function roomSoakDiagnostic(input) {
 }
 
 /** Capture only SQLite lock provenance; defer IPC until synchronous transactions unwind. */
-export function roomSoakTraceStorage(store, area, onError) {
+export function roomSoakTraceStorage(store, area, onError, refusalOrigin) {
   const seen = new WeakSet(), database = store.db, originalExec = database.exec, originalTransaction = store.transaction;
   const capture = (error, phase) => {
     if (!error || typeof error !== 'object' || !Number.isInteger(error.errcode) || ![5, 6].includes(error.errcode & 0xff) || seen.has(error)) return;
     seen.add(error);
     const frames = [...String(error.stack ?? '').matchAll(/\bat (?:async )?((?:CouncilStore|RoomStore|RoomManager|CouncilService)\.[A-Za-z_$][A-Za-z0-9_$]*)\b/g)].slice(0, 8).map(match => match[1]);
+    let origin;
+    try { origin = refusalOrigin?.(error); } catch { /* Diagnostics never replace the original failure. */ }
+    if (origin?.area === area && origin.phase === 'begin' && origin.code === error.errcode) phase = 'begin';
     const value = { area, phase, code: error.errcode, at: Date.now(), frames };
     queueMicrotask(() => onError(value));
   };
@@ -109,6 +112,14 @@ export function roomSoakTraceStorage(store, area, onError) {
     try { return originalTransaction.apply(this, args); }
     catch (error) { capture(error, 'operation'); throw error; }
   };
+  for (const name of ['releaseSlot', 'cancelSlotWaiter']) {
+    const operation = store[name];
+    if (typeof operation !== 'function') continue;
+    store[name] = function (...args) {
+      try { return operation.apply(this, args); }
+      catch (error) { capture(error, 'statement'); throw error; }
+    };
+  }
 }
 
 function failureDiagnostic(service, manager, workers, progress, error) {
@@ -127,6 +138,7 @@ function failureDiagnostic(service, manager, workers, progress, error) {
 
 async function workerMain(project, runtime) {
   const { CouncilService, loadConfig } = await import(pathToFileURL(join(runtime, 'dist', 'index.js')).href);
+  const { admissionRefusalOrigin } = await import(pathToFileURL(join(runtime, 'dist', 'admission-attempt.js')).href);
   const gates = new Map();
   let roomId, sequence = 0;
   const send = value => { if (process.connected) process.send(value); };
@@ -152,8 +164,8 @@ async function workerMain(project, runtime) {
   } };
   const service = await CouncilService.open(loadConfig(project, { backend: 'mock', maxCalls: 128, maxConcurrency: 2 }), runner);
   const storageError = value => send({ event: 'storage_error', value });
-  roomSoakTraceStorage(service.store, 'state', storageError);
-  roomSoakTraceStorage(service.rooms.store, 'rooms', storageError);
+  roomSoakTraceStorage(service.store, 'state', storageError, admissionRefusalOrigin);
+  roomSoakTraceStorage(service.rooms.store, 'rooms', storageError, admissionRefusalOrigin);
   process.on('disconnect', () => { void service.close().catch(error => { process.stderr.write(`${error.stack}\n`); process.exitCode = 1; }); });
   process.on('message', message => {
     if (message?.operation === 'release') { gates.get(message.gateId)?.({ status: message.status }); return; }
@@ -358,6 +370,7 @@ export async function roomSoak(options, signal) {
     runtimeHash = runtimeDigest(runtime); version = JSON.parse(packageBytes).version;
     emit('started', { options, runtimeDigest: runtimeHash, harnessDigest: harnessHash, version, liveProviderCalls: 0 });
     const api = await import(pathToFileURL(join(runtime, 'dist', 'index.js')).href);
+    const { admissionRefusalOrigin } = await import(pathToFileURL(join(runtime, 'dist', 'admission-attempt.js')).href);
     do {
       controller.signal.throwIfAborted();
       const fixture = realpathSync.native(mkdtempSync(join(temporary, 'fixture-'))), project = join(fixture, 'project');
@@ -368,8 +381,8 @@ export async function roomSoak(options, signal) {
         service = await api.CouncilService.open(api.loadConfig(project, { backend: 'mock', maxCalls: 128, maxConcurrency: 2 }), { doctor: async () => [], run: async () => { throw new Error('The observer must never dispatch an agent.'); } });
         manager = service.rooms;
         const storageError = value => { progress.storageErrorCount++; progress.storageErrors.push(value); if (progress.storageErrors.length > 8) progress.storageErrors.shift(); };
-        roomSoakTraceStorage(service.store, 'state', storageError);
-        roomSoakTraceStorage(manager.store, 'rooms', storageError);
+        roomSoakTraceStorage(service.store, 'state', storageError, admissionRefusalOrigin);
+        roomSoakTraceStorage(manager.store, 'rooms', storageError, admissionRefusalOrigin);
         workers = [spawnWorker(project, runtime, ledger, launcher), spawnWorker(project, runtime, ledger, launcher)]; workersStarted += workers.length;
         await Promise.all(workers.map(async worker => {
           let timer;

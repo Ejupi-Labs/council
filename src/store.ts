@@ -1,7 +1,9 @@
+import { admissionConnection, admissionTransaction, type AdmissionConnection } from './admission-attempt.js';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 import { backupDatabase } from './sqlite-backup.js';
 import { requireSafeSqliteRuntime } from './sqlite-runtime.js';
 import { DispatchQuarantinedError, PROCESS_CLEANUP_STAGES, QUARANTINE_INSPECTION_REQUIRED,
@@ -300,18 +302,9 @@ export class CouncilStore {
     }
   }
 
-  private transaction<T>(operation: () => T, write = true): T {
-    this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
-    try {
-      const result = operation();
-      this.db.exec('COMMIT');
-      return result;
-    } catch (error) {
-      // SQLite can auto-rollback after I/O/full errors. Preserve that original failure.
-      try { if (this.db.isTransaction) this.db.exec('ROLLBACK'); } catch { /* The original error remains the primary diagnostic. */ }
-      throw error;
-    }
-  }
+  admissionConnection(): AdmissionConnection { return admissionConnection(this.db, 'state'); }
+
+  private transaction<T>(operation: () => T, write = true): T { return admissionTransaction(this.db, operation, write); }
 
   saveRun(run: RunRecord): void {
     text(run.id, 'Run id', 256);
@@ -862,6 +855,33 @@ export class CouncilStore {
       if (waiterId !== undefined) this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').run(instanceId, waiterId);
       return token;
     });
+  }
+
+  /** Settle the exact owned token; never rerun an agent or skip cleanup on abort. */
+  async releaseSlotWithRetry(token: string, instanceId: string): Promise<void> {
+    let deadline: number | undefined, last: unknown;
+    for (;;) {
+      if (deadline !== undefined && performance.now() >= deadline) throw last;
+      let open: boolean;
+      try { open = this.db.isTransaction; } catch (error) { throw last ?? error; }
+      if (open) throw last ?? new Error('Shared-slot cleanup cannot run inside an open transaction.');
+      try { this.releaseSlot(token, instanceId); }
+      catch (error) {
+        try { open = this.db.isTransaction; } catch { throw error; }
+        const sqlite = error as Error & { code?: string; errcode?: number };
+        if (open || !(error instanceof Error) || sqlite.code !== 'ERR_SQLITE_ERROR'
+          || typeof sqlite.errcode !== 'number' || !Number.isInteger(sqlite.errcode)
+          || sqlite.errcode < 0 || sqlite.errcode > 0x7fffffff || ![5, 6].includes(sqlite.errcode & 0xff)) throw error;
+        deadline ??= performance.now() + 5000; last = error;
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) throw error;
+        await delay(Math.min(25, remaining));
+        continue;
+      }
+      try { open = this.db.isTransaction; } catch (error) { throw last ?? error; }
+      if (open) throw last ?? new Error('Shared-slot cleanup left an open transaction.');
+      return;
+    }
   }
 
   releaseSlot(token: string, instanceId: string): void {

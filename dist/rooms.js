@@ -1,3 +1,4 @@
+import { newAdmissionAttempt, runAdmissionAttempt, consumeAdmissionRefusal } from './admission-attempt.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RoomStore } from './room-store.js';
@@ -857,36 +858,68 @@ export class RoomManager {
             publication.unverified = true;
         }));
     }
-    async launch(id, job, input, taskId) {
+    async launch(id, job, input, taskId, assertAdmission) {
         this.check(id, job);
         const estimated = this.cost(input);
         let run;
         const publication = { runId: '', ...(taskId ? { taskId } : {}), estimated,
             dispatch: message('system', taskId ? 'task' : 'system', taskId ? `Dispatched ${taskId}.` : 'Discussion round dispatched.'),
             retained: message('system', 'system', 'Retained workflow evidence from an owned call whose room publication failed.') };
-        this.own(id, room => {
-            this.assertInstructions(room, job);
-            if (room.pauseRequested)
-                throw new PauseRequested();
-            if (estimated > room.maxCalls - job.callsUsed)
-                throw new Error('Room call budget exhausted before dispatch.');
-            this.check(id, job);
-            run = this.service.start(input, { roomId: id });
-            publication.runId = run.id;
-            publication.dispatch.runId = run.id;
-            publication.retained.runId = run.id;
-            // Admission is already real even if this separate room transaction rolls back.
-            job.runs.add(run.id);
-            job.publications.set(run.id, publication);
-            job.callsUsed += estimated;
-            room.callsUsed = job.callsUsed;
-            if (taskId) {
-                const task = room.tasks.find(value => value.id === taskId);
-                task.status = 'running';
-                task.runId = run.id;
+        let deadline;
+        const guard = () => {
+            if (run)
+                return;
+            job.controller.signal.throwIfAborted();
+            assertAdmission?.();
+            if (deadline !== undefined && performance.now() >= deadline)
+                throw new Error('Room workflow admission remained blocked by SQLite contention beyond its five-second retry window. No workflow was admitted for this launch.');
+        };
+        for (;;) {
+            guard();
+            const attempt = newAdmissionAttempt(this.store.admissionConnection(), this.service.store.admissionConnection(), guard);
+            try {
+                runAdmissionAttempt(attempt, () => this.own(id, room => {
+                    this.available();
+                    this.assertInstructions(room, job);
+                    if (room.pauseRequested)
+                        throw new PauseRequested();
+                    this.check(id, job);
+                    this.service.assertDispatchAllowed();
+                    guard();
+                    if (estimated > room.maxCalls - job.callsUsed)
+                        throw new Error('Room call budget exhausted before dispatch.');
+                    run = this.service.start(input, { roomId: id });
+                    publication.runId = run.id;
+                    publication.dispatch.runId = run.id;
+                    publication.retained.runId = run.id;
+                    job.runs.add(run.id);
+                    job.publications.set(run.id, publication);
+                    job.callsUsed += estimated;
+                    room.callsUsed = job.callsUsed;
+                    if (taskId) {
+                        const task = room.tasks.find(value => value.id === taskId);
+                        task.status = 'running';
+                        task.runId = run.id;
+                    }
+                    room.messages.push(publication.dispatch);
+                }));
+                break;
             }
-            room.messages.push(publication.dispatch);
-        });
+            catch (error) {
+                if (run || !consumeAdmissionRefusal(attempt, error))
+                    throw error;
+                deadline ??= performance.now() + 5000;
+                guard();
+                try {
+                    await delay(Math.min(25, Math.max(1, deadline - performance.now())), undefined, { signal: job.controller.signal });
+                }
+                catch (waitingError) {
+                    job.controller.signal.throwIfAborted();
+                    throw waitingError;
+                }
+                guard();
+            }
+        }
         try {
             const result = await this.service.completion(run.id);
             this.retainResult(job, publication, result);
@@ -1029,7 +1062,8 @@ export class RoomManager {
             const member = room.members.find(value => value.agent === task.assignee && value.role !== 'advisor');
             if (!member)
                 throw new Error('Approved task assignee is unavailable.');
-            const run = await this.launch(id, job, this.taskInput(room, task, member), task.id);
+            const run = await this.launch(id, job, this.taskInput(room, task, member), task.id, () => { if (stopped)
+                throw stopped.reason; });
             const publication = job.publications.get(run.id);
             this.own(id, current => { this.mergePublication(current, publication); });
             if (publication.conflict)
@@ -1054,7 +1088,7 @@ export class RoomManager {
                     const remaining = pending(room);
                     if (room.pauseRequested && remaining.length)
                         throw new PauseRequested();
-                    const ready = remaining.filter(task => (task.dependsOn ?? []).every(dependency => room.tasks.find(value => value.id === dependency)?.status === 'completed'))
+                    const ready = remaining.filter(task => !running.has(task.id) && (task.dependsOn ?? []).every(dependency => room.tasks.find(value => value.id === dependency)?.status === 'completed'))
                         .slice(0, Math.max(0, this.service.config.maxConcurrency - running.size));
                     if (remaining.length && !ready.length && !running.size)
                         throw new Error('Pending task dependencies cannot be satisfied; no further task was dispatched.');

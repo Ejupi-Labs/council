@@ -34,6 +34,10 @@ Short SQLite BUSY/LOCKED heartbeat failures retry within five seconds, with `hea
 
 Current-schema WAL opens avoid migration write locks. Cold initialization and upgrades allow five-second SQLite lock waits before restoring the 250 ms runtime bound. The CLI uses `CouncilService.open`, an asynchronous factory that retries brief state initialization contention before any workflow is accepted; embedded integrations can use the same factory. Initialization retries never replay agent calls. Large migrations and OS filesystem delays remain separate from lock-wait budgets.
 
+Room launches have a separate fixed five-second retry window for a verified state write-BEGIN refusal before that launch creates a workflow. Each attempt rechecks ownership, cancellation, project guidance, pause, quarantine and the remaining call budget. Admitted sibling work keeps draining, and a sibling failure stops pending admission. Existing workflow completion and result publication retain their normal failure handling.
+
+After an agent call finishes, shared-slot cleanup can retry transient SQLite contention within its own fixed five-second window. It repeats the exact token-and-owner deletion while retaining the agent result and local concurrency reservation. Cancellation and shutdown still wait for this cleanup. An exhausted window or uncertain transaction state reports a persistence failure with the available evidence retained. These windows bound issuing retries; an already issued SQLite or OS operation can finish later. SQLite's 250 ms runtime lock wait, WAL and durability settings remain unchanged.
+
 Optional feature stores have their own schema versions. Delegation schema 3 adds durable author-scoped executive-report retry keys while preserving existing reports, replies and change revisions. Stop older hosts before upgrading a shared workspace and use the same build everywhere; a future schema is refused before journal or permission changes. Workflow schema 6 separately adds durable cleanup quarantine; the feature stores keep their independent versions.
 
 ## Observe, cancel and recover

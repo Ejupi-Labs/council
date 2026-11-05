@@ -16,6 +16,7 @@ export interface WorkflowStore {
     acquireSlot?(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
     cancelSlotWaiter?(instanceId: string, waiterId: string): void;
     releaseSlot?(token: string, instanceId: string): void;
+    releaseSlotWithRetry?(token: string, instanceId: string): void | Promise<void>;
     finalizeRun?(run: RunRecord): RunRecord;
     reportProcessCleanupIncident?(input: ProcessCleanupIncidentInput): ProcessCleanupIncident;
     assertDispatchUnblocked?(): void;

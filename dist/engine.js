@@ -602,21 +602,24 @@ export class WorkflowEngine {
                     evidenceFailure(error, 'remove a shared workflow call waiter');
                 }
             };
-            const releaseDurable = () => {
+            const releaseDurable = async () => {
                 if (!slotToken)
                     return;
                 const token = slotToken;
                 slotToken = undefined;
                 try {
-                    this.store.releaseSlot(token, this.options.instanceId);
+                    if (this.store.releaseSlotWithRetry)
+                        await this.store.releaseSlotWithRetry(token, this.options.instanceId);
+                    else
+                        await this.store.releaseSlot(token, this.options.instanceId);
                 }
                 catch (error) {
                     evidenceFailure(error, 'release a shared workflow call slot');
                 }
             };
-            const releaseAll = () => {
+            const releaseAll = async () => {
                 try {
-                    releaseDurable();
+                    await releaseDurable();
                 }
                 finally {
                     try {
@@ -642,7 +645,7 @@ export class WorkflowEngine {
                 }
             }
             catch (error) {
-                releaseAll();
+                await releaseAll();
                 if (error instanceof DispatchQuarantinedError) {
                     observeQuarantine(error);
                     event('step.dispatch_blocked', { agent, error: error.message, code: error.code, receipt: error.receipt });
@@ -654,7 +657,7 @@ export class WorkflowEngine {
                 evidenceFailure(error, 'coordinate shared workflow dispatch');
             }
             if (signal.aborted) {
-                releaseAll();
+                await releaseAll();
                 return undefined;
             }
             const blockedReceipt = (error) => ({ agent,
@@ -666,13 +669,13 @@ export class WorkflowEngine {
             catch (error) {
                 if (error instanceof DispatchQuarantinedError)
                     observeQuarantine(error);
-                releaseAll();
+                await releaseAll();
                 event('step.dispatch_blocked', blockedReceipt(error));
                 throw error;
             }
             const stepId = `${String(++calls).padStart(2, '0')}-${role.replace(/[^a-zA-Z0-9_-]/g, '-')}-${agent}`;
             if (calls > plan.estimatedCalls) {
-                releaseAll();
+                await releaseAll();
                 throw new Error('Internal workflow call budget exceeded');
             }
             let result;
@@ -834,7 +837,7 @@ export class WorkflowEngine {
                 if (guard)
                     clearInterval(guard);
                 try {
-                    releaseAll();
+                    await releaseAll();
                 }
                 catch (error) {
                     releaseError = error;

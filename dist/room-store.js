@@ -1,3 +1,4 @@
+import { admissionConnection, admissionTransaction } from './admission-attempt.js';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -88,22 +89,8 @@ export class RoomStore {
             throw error;
         }
     }
-    transaction(action, write = true) {
-        this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
-        try {
-            const value = action();
-            this.db.exec('COMMIT');
-            return value;
-        }
-        catch (error) {
-            try {
-                if (this.db.isTransaction)
-                    this.db.exec('ROLLBACK');
-            }
-            catch { }
-            throw error;
-        }
-    }
+    admissionConnection() { return admissionConnection(this.db, 'rooms'); }
+    transaction(action, write = true) { return admissionTransaction(this.db, action, write); }
     row(id) {
         return this.db.prepare('SELECT document,owner,owner_pid,cancel_requested,revision FROM rooms WHERE id=?').get(id);
     }

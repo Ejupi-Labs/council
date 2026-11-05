@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retry verified state-BEGIN lock refusals for one room launch within a fixed five-second window, with fresh ownership, guidance, pause, quarantine and budget checks. Keep waiting task promises tracked, stop pending admission after a sibling failure and preserve already admitted work.
+- Await bounded, idempotent shared-slot cleanup after transient SQLite contention, including cancellation and shutdown, while retaining the original agent result and exact token ownership.
+
 - Refuse dirty tracked or untracked child evidence in unmerged gitlinks during patch export and cleanup; preserve the previous reviewed patch while retaining complete ordinary conflict-file bodies and clean commit references.
 
 - Retain admitted workflow identities, exact call accounting, terminal task results and real patch/worktree evidence through handled room-publication rollback and lost acknowledgements. Preserve failed-room inspection without replay and reconcile shutdown evidence without replacing newer guidance.

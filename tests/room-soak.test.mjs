@@ -5,8 +5,9 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { roomSoakDiagnostic, roomSoakEntryFailure, roomSoakTraceStorage } from '../scripts/room-soak.mjs';
+import { admissionRefusalOrigin as rootAdmissionRefusalOrigin } from '../dist/admission-attempt.js';
 
 const repository = realpathSync.native(fileURLToPath(new URL('../', import.meta.url))), script = realpathSync.native(fileURLToPath(new URL('../scripts/room-soak.mjs', import.meta.url)));
 const events = output => output.trim().split(/\r?\n/).filter(line => line.startsWith('{')).map(line => JSON.parse(line));
@@ -123,6 +124,46 @@ test('SQLite lock provenance is deferred until transaction unwind and excludes S
     assert.equal(JSON.stringify(captured).includes(secret), false);
     assert.equal(Object.hasOwn(captured[0], 'sql'), false); assert.equal(Object.hasOwn(captured[0], 'message'), false);
   }
+});
+
+test('real native admission and autocommit cleanup locks retain their phase after verified unwind', async t => {
+  const parent = realpathSync.native(tmpdir()), root = realpathSync.native(mkdtempSync(join(parent, 'council-room-trace-')));
+  const capturedHelper = join(root, 'admission-attempt.mjs');
+  writeFileSync(capturedHelper, readFileSync(join(repository, 'dist', 'admission-attempt.js')));
+  const { admissionConnection, admissionRefusalOrigin, admissionTransaction, consumeAdmissionRefusal, newAdmissionAttempt, runAdmissionAttempt } = await import(pathToFileURL(capturedHelper).href);
+  const state = new DatabaseSync(join(root, 'state.db')), rooms = new DatabaseSync(':memory:'), writer = new DatabaseSync(join(root, 'state.db'));
+  t.after(() => {
+    for (const db of [writer, state, rooms]) { if (db.isTransaction) db.exec('ROLLBACK'); db.close(); }
+    assert.equal(dirname(realpathSync.native(root)), parent); assert.ok(basename(root).startsWith('council-room-trace-'));
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  state.exec('PRAGMA busy_timeout=1; CREATE TABLE slots(token TEXT, instance_id TEXT)');
+  writer.exec('BEGIN IMMEDIATE');
+  class ProbeStore {
+    constructor(db) { this.db = db; }
+    transaction(action) { return admissionTransaction(this.db, action); }
+    releaseSlot(token, owner) { this.db.prepare('DELETE FROM slots WHERE token=? AND instance_id=?').run(token, owner); }
+  }
+  const stateStore = new ProbeStore(state), roomStore = new ProbeStore(rooms), captured = [];
+  const observe = value => { assert.equal(state.isTransaction, false); assert.equal(rooms.isTransaction, false); captured.push(value); };
+  roomSoakTraceStorage(stateStore, 'state', observe, admissionRefusalOrigin);
+  roomSoakTraceStorage(roomStore, 'rooms', observe, admissionRefusalOrigin);
+  const attempt = newAdmissionAttempt(admissionConnection(rooms, 'rooms'), admissionConnection(state, 'state'), () => {});
+  let refusal, entered = 0;
+  assert.throws(() => runAdmissionAttempt(attempt, () => roomStore.transaction(() => stateStore.transaction(() => { entered++; }))), error => {
+    refusal = error; return error.code === 'ERR_SQLITE_ERROR' && (error.errcode & 0xff) === 5;
+  });
+  assert.equal(entered, 0); assert.equal(captured.length, 0);
+  assert.equal(rootAdmissionRefusalOrigin(refusal), undefined, 'The root runtime must not supply provenance for a captured module instance.');
+  assert.equal(consumeAdmissionRefusal(attempt, refusal), true);
+  assert.equal(consumeAdmissionRefusal(attempt, refusal), false);
+  await Promise.resolve();
+  assert.deepEqual(captured.map(value => [value.area, value.phase, value.code & 0xff]), [['state', 'begin', 5], ['rooms', 'operation', 5]]);
+  assert.throws(() => stateStore.releaseSlot('owned-slot', 'owned-instance'), error => error.code === 'ERR_SQLITE_ERROR' && (error.errcode & 0xff) === 5);
+  assert.equal(captured.length, 2);
+  await Promise.resolve();
+  assert.deepEqual([captured[2].area, captured[2].phase, captured[2].code & 0xff], ['state', 'statement', 5]);
+  for (const value of captured) assert.deepEqual(Object.keys(value).sort(), ['area', 'at', 'code', 'frames', 'phase']);
 });
 
 test('entry failure detection preserves public terminal errors without misclassifying expected live states', () => {
