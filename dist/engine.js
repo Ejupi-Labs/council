@@ -443,7 +443,7 @@ export class WorkflowEngine {
                 visit(step);
             return expanded;
         };
-        let calls = 0;
+        let calls = 0, stepSequence = 0;
         const evidenceFailure = (error, operation = 'persist workflow evidence') => {
             if (!persistenceFailure) {
                 persistenceFailure = new Error(clip(`Could not ${operation}: ${errorMessage(error)}`, MAX_ERROR_CHARS));
@@ -455,22 +455,42 @@ export class WorkflowEngine {
             controller.abort(persistenceFailure);
             throw persistenceFailure;
         };
-        const save = () => {
-            run.updatedAt = new Date().toISOString();
-            try {
-                this.store.saveRun(run);
-            }
-            catch (error) {
-                evidenceFailure(error);
-            }
+        let evidenceTail = Promise.resolve();
+        const enqueueEvidence = (operation) => {
+            const pending = evidenceTail.then(async () => {
+                try {
+                    return await operation();
+                }
+                catch (error) {
+                    return evidenceFailure(error);
+                }
+            });
+            // Always observe rejections immediately; callers still await their exact barrier.
+            evidenceTail = pending.then(() => { }, () => { });
+            return pending;
         };
-        const event = (type, data) => {
+        const save = () => enqueueEvidence(async () => {
+            run.updatedAt = new Date().toISOString();
+            const snapshot = structuredClone(run);
+            if (this.store.saveRunWithRetry)
+                await this.store.saveRunWithRetry(snapshot);
+            else
+                await this.store.saveRun(snapshot);
+        });
+        const event = async (type, data) => {
+            let payload;
             try {
-                this.store.appendEvent(id, type, data);
+                payload = structuredClone(data);
             }
             catch (error) {
                 evidenceFailure(error);
             }
+            await enqueueEvidence(async () => {
+                if (this.store.appendEventWithRetry)
+                    await this.store.appendEventWithRetry(id, type, payload);
+                else
+                    await this.store.appendEvent(id, type, payload);
+            });
         };
         const reportCleanup = (stage, reportKey) => {
             this.fenceProcessCleanup();
@@ -507,6 +527,8 @@ export class WorkflowEngine {
             }
         };
         const check = () => {
+            if (persistenceFailure)
+                throw persistenceFailure;
             if (this.processCleanupFailure)
                 throw this.foreignQuarantine ?? new Error(this.cleanupFailureMessage());
             if (dispatchFailure)
@@ -523,12 +545,17 @@ export class WorkflowEngine {
             let handle = handles.get(slot);
             if (!handle) {
                 const reportKey = randomUUID();
+                let preparationBarrier;
                 try {
                     handle = await this.workspaces.create(id, agent, slot, signal, artifact => {
                         run.workspaces.push(artifact);
-                        save();
-                        event('workspace.preparing', artifact);
+                        preparationBarrier = (async () => { await save(); await event('workspace.preparing', artifact); })();
+                        // Observe immediately even when an older test/custom wrapper ignores
+                        // the callback result; actual Git creation also awaits this intent.
+                        void preparationBarrier.catch(() => { });
+                        return preparationBarrier;
                     });
+                    await preparationBarrier;
                 }
                 catch (error) {
                     if (error instanceof ProcessCleanupError)
@@ -536,8 +563,8 @@ export class WorkflowEngine {
                     throw error;
                 }
                 handles.set(slot, handle);
-                save();
-                event('workspace.created', { agent, path: handle.path });
+                await save();
+                await event('workspace.created', { agent, path: handle.path });
             }
             check();
             return handle.cwd;
@@ -654,7 +681,7 @@ export class WorkflowEngine {
                 await releaseAll();
                 if (error instanceof DispatchQuarantinedError) {
                     observeQuarantine(error);
-                    event('step.dispatch_blocked', { agent, error: error.message, code: error.code, receipt: error.receipt });
+                    await event('step.dispatch_blocked', { agent, error: error.message, code: error.code, receipt: error.receipt });
                     throw error;
                 }
                 check();
@@ -676,20 +703,16 @@ export class WorkflowEngine {
                 if (error instanceof DispatchQuarantinedError)
                     observeQuarantine(error);
                 await releaseAll();
-                event('step.dispatch_blocked', blockedReceipt(error));
+                await event('step.dispatch_blocked', blockedReceipt(error));
                 throw error;
             }
-            const stepId = `${String(++calls).padStart(2, '0')}-${role.replace(/[^a-zA-Z0-9_-]/g, '-')}-${agent}`;
-            if (calls > plan.estimatedCalls) {
-                await releaseAll();
-                throw new Error('Internal workflow call budget exceeded');
-            }
+            const stepId = `${String(++stepSequence).padStart(2, '0')}-${role.replace(/[^a-zA-Z0-9_-]/g, '-')}-${agent}`;
             let result;
             let releaseError;
             let protectionFailure;
             let cleanupDiagnostic;
             let quarantineFailure;
-            let runnerPending = false;
+            let runnerPending = false, runnerInvoked = false;
             const callReportKey = randomUUID();
             let privateOutput = Boolean(privateTurn);
             const callController = new AbortController();
@@ -705,12 +728,7 @@ export class WorkflowEngine {
                         quarantineFailure = error;
                     else
                         protectionFailure = error;
-                    try {
-                        event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true });
-                    }
-                    catch (failure) {
-                        protectionFailure = failure;
-                    }
+                    void event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true }).catch(failure => { protectionFailure = failure; callController.abort(failure); });
                     callController.abort(error);
                     return;
                 }
@@ -726,12 +744,7 @@ export class WorkflowEngine {
                     }
                     else
                         protectionFailure = error;
-                    try {
-                        event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true });
-                    }
-                    catch (failure) {
-                        protectionFailure = failure;
-                    }
+                    void event('step.dispatch_blocked', { ...blockedReceipt(error), stepId, active: true }).catch(failure => { protectionFailure = failure; callController.abort(failure); });
                     callController.abort(quarantineFailure ?? protectionFailure);
                 }
             }, 250) : undefined;
@@ -744,7 +757,7 @@ export class WorkflowEngine {
                 const settings = input.agentSettings?.[agent];
                 const model = options.resolvedSettings ? settings?.model : settings?.model ?? this.config.agents[agent]?.model;
                 const effort = options.resolvedSettings ? settings?.effort : settings?.effort ?? this.config.agents[agent]?.effort;
-                event('step.started', { id: stepId, agent, role, permission, cwd, model, effort });
+                await event('step.started', { id: stepId, agent, role, permission, cwd, model, effort });
                 const assignment = input.mode === 'parallel' && role === 'worker' ? input.assignments?.[agent] : undefined;
                 let brief = assignment
                     ? `${instruction}\n\nYour specific independent assignment:\n${assignment}\n\nFocus on this assignment within the global task. Other participants own their separate assignments.`
@@ -763,6 +776,23 @@ export class WorkflowEngine {
                     const remaining = (chatPolicy.maxRequests ?? 1) - (privateChatUses.get(agent) ?? 0);
                     brief += `\n\nCouncil private coordination protocol: permitted peers are ${JSON.stringify(chatPolicy.peers)}. You have ${remaining} requests remaining in this workflow. To coordinate an overlap privately, finish with ONLY {"council_private_chat_request":{"peer":"an-exact-permitted-alias","message":"your coordination question","context":"relevant private evidence"}}. Council records a pair chat, gives the peer a separate read-only reply turn, then resumes your task in this workspace. This does not inject messages into an already-running vendor session. Private raw turns stay outside shared peer transcripts. Do not request this recursively from an advisor or private reply turn; otherwise return your completed task normally.`;
                 }
+                await evidenceTail;
+                check();
+                if (callController.signal.aborted)
+                    throw quarantineFailure ?? protectionFailure ?? callController.signal.reason;
+                try {
+                    this.options.assertAgentDispatch?.(agent);
+                }
+                catch (error) {
+                    if (error instanceof DispatchQuarantinedError)
+                        observeQuarantine(error);
+                    await event('step.dispatch_blocked', blockedReceipt(error));
+                    throw error;
+                }
+                if (calls >= plan.estimatedCalls)
+                    throw new Error('Internal workflow call budget exceeded');
+                calls++;
+                runnerInvoked = true;
                 runnerPending = true;
                 result = await this.runner.run({
                     agent, prompt: prompt(agent, role, `${permission === 'read' ? 'Read-only task: do not modify files. ' : 'Make changes only in the provided isolated worktree. '}${brief}`, context, privateTurn?.chatId, allowAdvisor || Boolean(privateTurn)),
@@ -832,6 +862,10 @@ export class WorkflowEngine {
                 }
             }
             catch (error) {
+                if (!runnerInvoked) {
+                    await releaseAll();
+                    throw error;
+                }
                 if (runnerPending && error instanceof ProcessCleanupError) {
                     cleanupDiagnostic = PROCESS_CLEANUP_ERROR;
                     reportCleanup('agent_call', callReportKey);
@@ -842,12 +876,6 @@ export class WorkflowEngine {
             finally {
                 if (guard)
                     clearInterval(guard);
-                try {
-                    await releaseAll();
-                }
-                catch (error) {
-                    releaseError = error;
-                }
             }
             if (cleanupDiagnostic)
                 result = { ...result, status: 'failed', error: privateOutput ? this.cleanupFailureMessage() : clip([this.incidentPersistenceFailed ? this.cleanupFailureMessage() : undefined, cleanupDiagnostic].filter(Boolean).join(' '), MAX_ERROR_CHARS) };
@@ -857,8 +885,18 @@ export class WorkflowEngine {
                 result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
             const step = { id: stepId, agent, role, result };
             run.steps.push(step);
-            save();
-            event('step.finished', step);
+            try {
+                await save();
+                await event('step.finished', step);
+            }
+            finally {
+                try {
+                    await releaseAll();
+                }
+                catch (error) {
+                    releaseError = error;
+                }
+            }
             if (releaseError)
                 throw releaseError;
             return step;
@@ -904,14 +942,14 @@ export class WorkflowEngine {
                     privateThreads.set(chat.id, { participants: [agent, privateRequest.peer] });
                     const requestMessage = manager.send({ chatId: chat.id, from: requesterActor, runId: id,
                         body: JSON.stringify({ kind: 'request', message: privateRequest.message, context: privateRequest.context }) });
-                    event('private_chat.requested', { worker: agent, peer: privateRequest.peer, request: used + 1, chatId: chat.id,
+                    await event('private_chat.requested', { worker: agent, peer: privateRequest.peer, request: used + 1, chatId: chat.id,
                         participants: [requesterActor, peerActor], messageId: requestMessage.id, stepId: step.id });
                     // The original worker has released its slots. The separate read-only
                     // reply uses ordinary admission guards and never recursively delegates.
                     const answer = await invoke(privateRequest.peer, `private-peer-for-${agent}`, `Answer only the private coordination request from ${agent}, message ${requestMessage.id}, in the pair transcript. Coordinate the overlap, retain uncertainty and respect existing task ownership. This is a separate read-only reply turn; your other task or vendor session is not being resumed. Do not implement changes, request an advisor or start another private exchange. Return your reply directly.`, [], 'read', cwd, false, { chatId: chat.id, requester: agent, requesterActor, peerActor, requestMessageId: requestMessage.id });
                     if (!answer || answer.result.status !== 'completed')
                         return answer;
-                    event('private_chat.answered', { worker: agent, peer: privateRequest.peer, request: used + 1, chatId: chat.id, stepId: answer.id });
+                    await event('private_chat.answered', { worker: agent, peer: privateRequest.peer, request: used + 1, chatId: chat.id, stepId: answer.id });
                     check();
                     // Pair bodies are injected separately by prompt(), never into shared
                     // lineage that later workers, reviewers or a judge receive.
@@ -929,7 +967,7 @@ export class WorkflowEngine {
                 if (used >= (advisor.maxRequests ?? 1))
                     throw new Error(`${agent} exceeded its advisor request limit; the task is incomplete`);
                 advisorUses.set(agent, used + 1);
-                event('advisor.requested', { worker: agent, advisor: advisor.agent, request: used + 1, stepId: step.id });
+                await event('advisor.requested', { worker: agent, advisor: advisor.agent, request: used + 1, stepId: step.id });
                 const question = { ...step, result: { ...step.result, output: `Advisor question:\n${request.question}\n\nWorker context:\n${request.context}` } };
                 // invoke has already released both admission slots. The advisor acquires
                 // its own read-only call slot; worker resumption is a separate call.
@@ -938,7 +976,7 @@ export class WorkflowEngine {
                     return answer;
                 if (advisorRequest(answer.result.output))
                     throw new Error('Advisor recursion is disabled; an advisor must return its answer directly');
-                event('advisor.answered', { worker: agent, advisor: advisor.agent, request: used + 1, stepId: answer.id });
+                await event('advisor.answered', { worker: agent, advisor: advisor.agent, request: used + 1, stepId: answer.id });
                 history.push(step, answer);
                 check();
                 step = await invoke(agent, role, `${instruction}\n\nResume your task after receiving the advisor answer in the peer transcript. Assess the advice and complete the assigned work; preserve your own responsibility for the final result.`, history, permission, cwd);
@@ -963,8 +1001,8 @@ export class WorkflowEngine {
             return requireSuccess([await complete(agent, role, instruction, context, permission, cwd ?? (permission === 'write' ? await getWorkspace(agent) : resolve(this.config.workspaceRoot)))])[0];
         };
         try {
-            save();
-            event('run.started', { input: run.input, plan });
+            await save();
+            await event('run.started', { input: run.input, plan });
             check();
             let final;
             switch (input.mode) {
@@ -1055,7 +1093,7 @@ export class WorkflowEngine {
                             continue;
                         const index = run.workspaces.findIndex(value => value.path === handle.path);
                         run.workspaces[index] = artifact;
-                        event('workspace.exported', artifact);
+                        await event('workspace.exported', artifact);
                     }
                     catch (error) {
                         if (this.processCleanupFailure)
@@ -1084,6 +1122,7 @@ export class WorkflowEngine {
                         if (!artifact.exportError?.includes(QUARANTINE_INSPECTION_REQUIRED))
                             artifact.exportError = [artifact.exportError, QUARANTINE_INSPECTION_REQUIRED].filter(Boolean).join('; ');
                     }
+                await evidenceTail;
                 pollCancellation();
                 if (this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure) {
                     run.status = 'failed';
@@ -1094,14 +1133,31 @@ export class WorkflowEngine {
                     run.error = ['Workflow cancelled', run.error].filter(Boolean).join('; ');
                 }
                 run.updatedAt = new Date().toISOString();
+                let terminalCommitted = false;
                 try {
-                    if (this.store.finalizeRun)
-                        Object.assign(run, this.store.finalizeRun(run));
-                    else
-                        save();
-                    event(`run.${run.status}`, { status: run.status, error: run.error });
+                    const final = await enqueueEvidence(async () => {
+                        const snapshot = structuredClone(run);
+                        if (this.store.finalizeRunWithRetry)
+                            return await this.store.finalizeRunWithRetry(snapshot);
+                        if (this.store.finalizeRun)
+                            return await this.store.finalizeRun(snapshot);
+                        if (this.store.saveRunWithRetry)
+                            await this.store.saveRunWithRetry(snapshot);
+                        else
+                            await this.store.saveRun(snapshot);
+                        return snapshot;
+                    });
+                    Object.assign(run, final);
+                    terminalCommitted = true;
+                    await event(`run.${run.status}`, { status: run.status, error: run.error });
                 }
                 catch (error) {
+                    if (!terminalCommitted) {
+                        run.status = 'failed';
+                        run.error = this.processCleanupFailure ? this.cleanupFailureMessage()
+                            : clip([persistenceFailure?.message, run.error, errorMessage(error)]
+                                .filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
+                    }
                     throw new WorkflowPersistenceError(run, error);
                 }
             }

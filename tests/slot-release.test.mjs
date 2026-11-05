@@ -47,15 +47,25 @@ async function drainWriter(writer) {
   }
   assert.equal(result[0], 0, 'The owned SQLite writer must exit cleanly.');
 }
-function nativeFixtureService(t, onResult) {
+function nativeFixtureService(t, onResult, onRelease) {
   const owned = temporary(), writers = [], releases = [];
   const config = loadConfig(owned.root, { backend: 'native', agents: { codex: { profile: 'codex', command: process.execPath, args: [nativeFixture] } } });
   const native = new NativeRunner(config); let calls = 0, service;
   service = new CouncilService(config, { doctor: async () => [], run: async request => {
     calls++; const result = await native.run(request); assert.equal(result.status, 'completed');
-    await onResult({ service, config, writers, root: owned.root }); return result;
+    await onResult?.({ service, config, writers, root: owned.root }); return result;
   } });
   const originalRelease = service.store.releaseSlot, originalSettle = service.store.releaseSlotWithRetry;
+  if (onRelease) service.store.releaseSlotWithRetry = async (...args) => {
+    assert.equal(service.store.db.isTransaction, false);
+    const slot = service.store.db.prepare('SELECT run_id AS runId, instance_id AS instanceId FROM slots WHERE token=?').get(args[0]);
+    assert.equal(slot?.instanceId, args[1], 'The exact owned slot must still exist before release contention begins.');
+    const saved = service.store.getRun(slot.runId);
+    assert.equal(calls, 1); assert.equal(saved.steps.length, 1, 'Actual returned step evidence must commit before the release writer starts.');
+    assert.equal(service.store.events(slot.runId).filter(event => event.type === 'step.finished' && event.data.id === saved.steps[0].id).length, 1);
+    await onRelease({ service, config, writers, root: owned.root });
+    return await originalSettle.apply(service.store, args);
+  };
   t.after(async () => {
     const failures = [];
     try {
@@ -81,9 +91,10 @@ const task = { mode: 'delegate', agents: ['codex'], task: 'Return the offline fi
 
 for (const mode of ['normal', 'cancel', 'quarantine']) test(`native slot cleanup settles transient contention without replay during ${mode}`, { timeout: 20000 }, async t => {
   let runId, writer;
-  const wire = nativeFixtureService(t, async ({ service, config, writers, root }) => {
+  const wire = nativeFixtureService(t, ({ service }) => {
     if (mode === 'cancel') service.requestCancellation(runId);
     if (mode === 'quarantine') service.store.reportProcessCleanupIncident({ reportKey: 'owned-release-quarantine', instanceId: service.instanceId, runId, stage: 'agent_call' });
+  }, async ({ config, writers, root }) => {
     writer = await startWriter(t, join(config.stateDir, 'state.db'), join(root, 'unused-marker.json')); writers.push(writer);
   });
   const release = wire.service.store.releaseSlot.bind(wire.service.store);
@@ -107,7 +118,7 @@ for (const mode of ['normal', 'cancel', 'quarantine']) test(`native slot cleanup
 
 test('cancellation accepted during persistent slot contention cannot hide cleanup failure at the fixed deadline', { timeout: 25000 }, async t => {
   let runId, writer;
-  const wire = nativeFixtureService(t, async ({ config, writers, root }) => {
+  const wire = nativeFixtureService(t, undefined, async ({ config, writers, root }) => {
     writer = await startWriter(t, join(config.stateDir, 'state.db'), join(root, 'accepted.json')); writers.push(writer);
   });
   const release = wire.service.store.releaseSlot.bind(wire.service.store), settle = wire.service.store.releaseSlotWithRetry.bind(wire.service.store);

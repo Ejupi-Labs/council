@@ -1,6 +1,6 @@
 {
   "name": "council-ai-plugin",
-  "version": "1.3.0-dev.9",
+  "version": "1.3.0-dev.10",
   "description": "Dependency-free local collaboration for Codex, Claude Code, DeepSeek Harness, Junie and Antigravity.",
   "type": "module",
   "license": "MIT",

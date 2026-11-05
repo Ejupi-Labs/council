@@ -20,7 +20,7 @@ export declare class GitWorkspaces {
     private manifestPath;
     private atomicWrite;
     private git;
-    create(runId: string, agent: string, slot?: string, signal?: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void): Promise<WorkspaceHandle>;
+    create(runId: string, agent: string, slot?: string, signal?: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void | Promise<void>): Promise<WorkspaceHandle>;
     private createWorktree;
     private manifest;
     private registrations;

@@ -22,13 +22,13 @@ function memory(extra = {}) {
   return { runs, log, saveRun: run => runs.set(run.id, structuredClone(run)), getRun: id => runs.get(id), appendEvent: (runId, type, data) => log.push({ runId, type, data }), ...extra };
 }
 function shared(extra = {}) {
-  const reports = [], order = []; let blocked = false, slots = 0;
+  const reports = [], order = [], slotOwners = new Map(); let blocked = false, slots = 0;
   const store = memory({
     reports, order,
-    acquireSlot() { if (blocked) throw refusal(); return `slot-${++slots}`; },
-    releaseSlot(token) { order.push(['release', token]); }, cancelSlotWaiter() {},
+    acquireSlot(_instance, runId) { if (blocked) throw refusal(); const token = `slot-${++slots}`; slotOwners.set(token, runId); return token; },
+    releaseSlot(token) { order.push(['release', token, slotOwners.get(token)]); }, cancelSlotWaiter() {},
     assertDispatchUnblocked() { if (blocked) throw refusal(); },
-    reportProcessCleanupIncident(input) { reports.push(structuredClone(input)); order.push(['report', input.reportKey]); blocked = true;
+    reportProcessCleanupIncident(input) { reports.push(structuredClone(input)); order.push(['report', input.reportKey, input.runId]); blocked = true;
       return { ...input, id: `incident-${reports.length}`, generation: String(reports.length), reason: 'process_cleanup_unverified', observedAt: '2026-11-04T00:00:00.000Z' }; }, ...extra,
   });
   return store;
@@ -61,7 +61,11 @@ test('already active calls each report their own uncertainty after the once-only
     await entered.promise; release.resolve(); const runs = await Promise.all([first, second]);
     assert.ok(runs.every(run => run.status === 'failed')); assert.equal(calls, 2); assert.equal(notified, 1); assert.equal(store.reports.length, 2);
     assert.equal(new Set(store.reports.map(report => report.reportKey)).size, 2); assert.equal(new Set(store.reports.map(report => report.runId)).size, 2);
-    const operations = store.order.map(entry => entry[0]); assert.equal(operations[0], 'report'); assert.equal(operations[2], 'report');
+    const releases = store.order.filter(entry => entry[0] === 'release'); assert.equal(releases.length, 2);
+    for (const released of releases) {
+      const report = store.order.findIndex(entry => entry[0] === 'report' && entry[2] === released[2]);
+      assert.ok(report >= 0 && report < store.order.indexOf(released), 'Every owned cleanup report must precede its own slot release.');
+    }
   } finally { release.resolve(); await Promise.all([first, second]); }
 });
 

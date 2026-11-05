@@ -223,7 +223,7 @@ export class GitWorkspaces {
         await this.checked(patchPath, 'patches');
         const manifest = { agent, path, patchPath, cwd: join(path, base.suffix), baseHead: base.head };
         // Persist the database intent before the first managed filesystem side effect.
-        onPrepared?.({ agent, path, patchPath, baseCommit: base.head, changed: false, exportStatus: 'pending' });
+        await onPrepared?.({ agent, path, patchPath, baseCommit: base.head, changed: false, exportStatus: 'pending' });
         signal.throwIfAborted();
         await mkdir(dirname(path), { recursive: true });
         await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', true, signal);

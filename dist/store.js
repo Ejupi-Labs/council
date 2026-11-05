@@ -308,6 +308,42 @@ export class CouncilStore {
     }
     admissionConnection() { return admissionConnection(this.db, 'state'); }
     transaction(operation, write = true) { return admissionTransaction(this.db, operation, write); }
+    /** Only fixed evidence operations use this BEGIN-only retry authority. */
+    async retryEvidenceWrite(operation) {
+        let deadline;
+        const check = () => {
+            if (deadline !== undefined && performance.now() >= deadline)
+                throw new Error('SQLite write contention exceeded the five-second evidence persistence window.');
+        };
+        for (;;) {
+            if (this.db.isTransaction)
+                throw new Error('Evidence persistence cannot retry inside an open transaction.');
+            check();
+            const attempt = newStateAdmissionAttempt(this.admissionConnection(), check);
+            try {
+                return runAdmissionAttempt(attempt, operation);
+            }
+            catch (error) {
+                if (!consumeAdmissionRefusal(attempt, error))
+                    throw error;
+                deadline ??= performance.now() + 5000;
+                check();
+                await delay(Math.min(25, Math.max(1, deadline - performance.now())));
+            }
+        }
+    }
+    async saveRunWithRetry(run) {
+        const snapshot = structuredClone(run);
+        return this.retryEvidenceWrite(() => this.saveRun(snapshot));
+    }
+    async appendEventWithRetry(runId, type, data) {
+        const payload = structuredClone(data);
+        return this.retryEvidenceWrite(() => this.appendEvent(runId, type, payload));
+    }
+    async finalizeRunWithRetry(run) {
+        const snapshot = structuredClone(run);
+        return this.retryEvidenceWrite(() => this.finalizeRun(snapshot));
+    }
     saveRun(run) {
         text(run.id, 'Run id', 256);
         text(run.updatedAt, 'Run timestamp', 64);

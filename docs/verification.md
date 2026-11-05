@@ -1,8 +1,14 @@
 # Council verification record
 
+## Ordered workflow evidence — 5 November 2026, development candidate
+
+Complete local and hosted qualification of **1.3.0-dev.10** is pending. The shared candidate passed 35 focused evidence/quarantine checks on each of Node 24.18.1 and Node 26.13.0, with no skips or failures. These include genuine state write-BEGIN retries for saves, events and finalization; body/COMMIT/range failures without retry; ordered snapshots and frozen payloads; cancellation and allowance changes after a pending evidence barrier; queued sibling evidence after the first fault; awaited worktree intent; and unknown terminal acknowledgements distinguished from known committed outcomes.
+
+Evidence retries have one five-second window per operation and do not replay agent calls. Snapshots are taken when their queued save executes, and event payloads are copied at enqueue. The first persistence fault prevents further dispatch while queued evidence from admitted sibling calls still drains. Several serial operations can therefore make shutdown exceed five seconds. Fresh pre-call controls and persisted worktree intent remain prerequisites for their respective side effects.
+
 ## Exact SQLite metadata and call scheduling — 5 November 2026, development candidate
 
-The final **1.3.0-dev.9** local suite passed **1,198 tests: 1,191 passed, seven platform skips, zero failures**, in 383.6 seconds on Windows ARM64. The actual shared build also passed 22 write/quarantine checks and 40 scheduling/authority checks on each of Node 24.18.1 and Node 26.13.0, with no skips or failures. Full hosted qualification on both Node versions across Linux, Windows and macOS is pending.
+The final **1.3.0-dev.9** local suite passed **1,198 tests: 1,191 passed, seven platform skips, zero failures**, in 383.6 seconds on Windows ARM64. The actual shared build also passed 22 write/quarantine checks and 40 scheduling/authority checks on each of Node 24.18.1 and Node 26.13.0, with no skips or failures. All six hosted jobs passed in [Verify run 41958108762](https://github.com/Ejupi-Labs/council/actions/runs/41958108762), covering Node 24 and 26 on Linux, Windows and macOS.
 
 The added Node 26 job exposed a real write-result boundary: after a valid large incident insertion, an unrelated DELETE executed before Node threw while converting its unused last-insert metadata. Native proofs distinguish committed autocommit deletion from rollback inside an explicit transaction. Known write statements now use exact BigInt metadata across all five stores, including the new queue-generation deletion, while cached query types remain unchanged. Existing public number/boolean results stay numeric; an unsafe event cursor is rejected before its transaction commits. The original large-generation regression passes unchanged on both runtimes.
 
@@ -10,7 +16,11 @@ Call-slot acquisition retries only a proven native write-BEGIN refusal before it
 
 Queued cancellation snapshots one exact AUTOINCREMENT generation, then retries only deletion of that owner, waiter and generation. Actual shutdown with a brief separate writer remains cancelled with zero waiting-agent calls. Persistent contention remains failed. Lost acknowledgements followed by same-ID replacement, including replacement for the same run, preserve the newer row. Failed initial snapshots never recapture a different entry; ownership loss, quarantine and exact 64-bit generations are covered. Cleanup is awaited before releasing local capacity, including legacy asynchronous store implementations.
 
-The preceding dev8 Windows full-suite failure identifies shared call coordination, but its historical transaction phase remains unproved. Controlled native cases establish the new BEGIN-only boundary; bounded child diagnostics now retain future phase metadata. This remains a development checkpoint until the exact hosted and endurance results are recorded.
+The preceding dev8 Windows full-suite failure identifies shared call coordination, but its historical transaction phase remains unproved. Controlled native cases establish the new BEGIN-only boundary; bounded child diagnostics now retain future phase metadata.
+
+A separately frozen local dev9 Node 26 coordination capture completed one hour: 5,700 cycles, 74,100 fake agent calls, 61 checked snapshots and 1,452 writes during hot backups. It exercised rooms, private exchanges, advisors, protected dispatch and delegated reports without live provider calls. The Linux storage [run 41952489552](https://github.com/Ejupi-Labs/council/actions/runs/41952489552) completed 30 minutes with 151,862 terminal cycles (130,161 completed and 21,701 intentionally cancelled), 59 checked backups, six removed fixtures and all 18 workers exited.
+
+The dev9 Windows room endurance capture failed at a verified state write-BEGIN in `saveRun` before an agent call. Dev10 addresses that evidence-write boundary; controlled fake-runner service and room-discussion proofs recover the initial save with one call and no replay. The failed endurance result remains a failure, and a dev10 endurance rerun is not yet qualified here.
 
 ## SQLite contention without workflow replay — 5 November 2026, development candidate
 

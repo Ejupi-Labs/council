@@ -26,6 +26,11 @@ export declare class CouncilStore {
     private migrateMetadata;
     admissionConnection(): AdmissionConnection;
     private transaction;
+    /** Only fixed evidence operations use this BEGIN-only retry authority. */
+    private retryEvidenceWrite;
+    saveRunWithRetry(run: RunRecord): Promise<void>;
+    appendEventWithRetry(runId: string, type: string, data: unknown): Promise<EventRecord>;
+    finalizeRunWithRetry(run: RunRecord): Promise<RunRecord>;
     saveRun(run: RunRecord): void;
     /** Creation, ownership and the queued event commit together, leaving no unowned crash window. */
     createRun(run: RunRecord, instanceId: string, initialEvents?: Array<{

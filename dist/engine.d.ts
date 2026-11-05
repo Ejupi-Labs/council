@@ -6,6 +6,9 @@ export declare const MAX_TASK_CHARS = 32000;
 export declare const MAX_CONTEXT_CHARS = 64000;
 export interface WorkflowStore {
     saveRun(run: RunRecord): void;
+    saveRunWithRetry?(run: RunRecord): Promise<void>;
+    appendEventWithRetry?(runId: string, type: string, data: unknown): Promise<unknown>;
+    finalizeRunWithRetry?(run: RunRecord): Promise<RunRecord>;
     getRun?(runId: string): RunRecord | undefined;
     appendEvent(runId: string, type: string, data: unknown): unknown;
     events?(runId: string, after?: number): Array<{

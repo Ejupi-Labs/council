@@ -48,7 +48,7 @@ function fixture(t, { tasks = 1, concurrency = 1, write = false, taskRunner } = 
 
 function inject(wire, boundary, mode, { permanent = false, lateCancel = false, finalAck = false } = {}) {
   const { manager, mutate } = wire;
-  const state = { injected: false, finalInjected: false };
+  const state = { injected: false, finalInjected: false, dispatchedRunId: undefined };
   manager.store.mutate = function (id, change, options) {
     if (permanent && state.injected) throw new Error('Injected permanent room writer outage.');
     let hit = false;
@@ -59,6 +59,7 @@ function inject(wire, boundary, mode, { permanent = false, lateCancel = false, f
         ? room.tasks.some((task, index) => task.status === 'running' && task.runId && !before.tasks[index].runId)
         : boundary === 'accounting' ? before.tasks.some(task => task.status === 'running') && room.callsUsed < before.callsUsed
           : room.tasks.some((task, index) => task.status === 'completed' && before.tasks[index].status !== 'completed'));
+      if (hit && boundary === 'dispatch') state.dispatchedRunId = room.tasks.find((task, index) => task.status === 'running' && task.runId && !before.tasks[index].runId).runId;
       if (hit && mode === 'rollback') { state.injected = true; throw new Error(`Injected ${boundary} publication rollback.`); }
     };
     let result;
@@ -75,6 +76,33 @@ function inject(wire, boundary, mode, { permanent = false, lateCancel = false, f
     return result;
   };
   return state;
+}
+
+function assertCancelledBeforeCall(wire, result, expectedRunId) {
+  assert.equal(result.status, 'failed'); assert.equal(result.callsUsed, 1);
+  assert.equal(typeof expectedRunId, 'string'); assert.equal(result.tasks[0].runId, expectedRunId);
+  const task = result.tasks[0], run = wire.service.getRun(expectedRunId);
+  assert.equal(run.id, expectedRunId); assert.equal(run.status, 'cancelled'); assert.deepEqual(run.steps, []); assert.equal(run.output, undefined);
+  assert.equal(task.status, 'cancelled'); assert.equal(task.resultPreview, ''); assert.deepEqual(task.workspaces, []);
+  assert.equal(wire.calls.length, 1, 'Only the completed approval discussion ran; the failed dispatch never called the task runner.');
+  assert.match(wire.calls[0].prompt, /ROOM_BALLOT_DATA_BEGIN/);
+  const observer = wire.peer(), history = []; let cursor;
+  do { const page = observer.messagePage(result.id, 100, cursor); history.push(...page.messages); cursor = page.nextCursor; } while (cursor !== null);
+  const dispatch = history.filter(message => message.runId === expectedRunId && message.body === 'Dispatched task-1.');
+  const retained = history.filter(message => message.runId === expectedRunId && message.body === 'Retained workflow evidence from an owned call whose room publication failed.');
+  const terminal = history.filter(message => message.runId === expectedRunId && message.body === 'task-1: cancelled\n');
+  assert.equal(dispatch.length, 1); assert.equal(retained.length, 1); assert.equal(terminal.length, 1);
+  for (const entry of [dispatch[0], retained[0], terminal[0]]) assert.ok(result.messages.some(message => message.id === entry.id && message.runId === expectedRunId));
+  const events = wire.service.store.events(expectedRunId);
+  assert.equal(events.filter(event => event.type === 'cancel_requested').length, 1);
+  assert.equal(events.filter(event => event.type === 'run.cancelled').length, 1);
+  assert.equal(events.some(event => event.type === 'step.started' || event.type === 'step.finished'), false);
+  assert.equal(wire.service.store.isCancellationRequested(expectedRunId), true);
+  const peer = observer.get(result.id);
+  assert.equal(peer.status, 'failed'); assert.equal(peer.callsUsed, 1); assert.equal(peer.tasks[0].runId, expectedRunId); assert.equal(peer.tasks[0].status, 'cancelled');
+  const counts = wire.service.store.health().counts;
+  assert.equal(counts.activeRuns, 0); assert.equal(counts.slots, 0); assert.equal(counts.slotWaiters, 0);
+  return { runId: expectedRunId, dispatchId: dispatch[0].id, retainedId: retained[0].id, terminalId: terminal[0].id };
 }
 
 function assertRetained(wire, result, expectedCalls = 2) {
@@ -97,9 +125,14 @@ for (const boundary of ['dispatch', 'accounting', 'result']) for (const mode of 
     const wire = fixture(t); await wire.ready();
     const state = inject(wire, boundary, mode);
     wire.manager.execute(wire.room.id); const result = await wire.manager.wait(wire.room.id);
-    assert.equal(state.injected, true); assert.match(result.error, /Injected/); assertRetained(wire, result);
+    assert.equal(state.injected, true); assert.match(result.error, /Injected/);
+    if (boundary === 'dispatch') {
+      assert.equal(result.error, mode === 'rollback' ? 'Injected dispatch publication rollback.' : 'Injected dispatch lost commit acknowledgement.');
+      assertCancelledBeforeCall(wire, result, state.dispatchedRunId);
+      assert.throws(() => wire.manager.execute(result.id), /Only an approved ready room/);
+    } else assertRetained(wire, result);
     const peer = wire.peer().get(result.id);
-    assert.equal(peer.status, 'failed'); assert.equal(peer.callsUsed, 2); assert.equal(peer.tasks[0].runId, result.tasks[0].runId);
+    assert.equal(peer.status, 'failed'); assert.equal(peer.callsUsed, boundary === 'dispatch' ? 1 : 2); assert.equal(peer.tasks[0].runId, result.tasks[0].runId);
     assert.equal(wire.service.store.health().counts.slots, 0); assert.equal(wire.service.store.health().counts.slotWaiters, 0);
   });
 }
@@ -121,14 +154,22 @@ test('lost final failure acknowledgement repairs a released failed room without 
   const wire = fixture(t); await wire.ready(); const state = inject(wire, 'dispatch', 'rollback', { finalAck: true });
   wire.manager.execute(wire.room.id); const retained = await wire.manager.wait(wire.room.id);
   assert.equal(state.finalInjected, true); assert.equal(retained.status, 'failed');
-  assert.equal(retained.tasks[0].status, wire.service.getRun(retained.tasks[0].runId).status);
+  const evidence = assertCancelledBeforeCall(wire, retained, state.dispatchedRunId);
+  const originalCause = 'Injected dispatch publication rollback.';
+  assert.equal(wire.peer().messagePage(retained.id, 100).messages.filter(message => message.body === originalCause).length, 1);
   wire.manager.store.mutate = wire.mutate;
-  wire.peer().postMessage(retained.id, { author: 'PM', body: 'Preserve this newer guidance while repairing the failed room.' });
+  const guidance = wire.peer().postMessage(retained.id, { author: 'PM', body: 'Preserve this newer guidance while repairing the failed room.' });
+  const guidanceMessages = guidance.messages.filter(message => message.body === 'Preserve this newer guidance while repairing the failed room.');
+  assert.equal(guidanceMessages.length, 1);
   await wire.manager.close();
   const restored = wire.peer().get(retained.id);
-  assert.equal(restored.status, 'failed'); assert.equal(restored.callsUsed, 2); assert.equal(restored.tasks[0].runId, retained.tasks[0].runId);
-  assert.ok(restored.messages.some(message => message.body === 'Preserve this newer guidance while repairing the failed room.'));
-  assert.equal(wire.calls.length, 2);
+  assert.equal(restored.status, 'failed'); assert.equal(restored.callsUsed, 1); assert.equal(restored.tasks[0].runId, retained.tasks[0].runId);
+  assert.equal(restored.instructionRevision, guidance.instructionRevision);
+  assert.equal(restored.messages.filter(message => message.body === 'Preserve this newer guidance while repairing the failed room.').length, 1);
+  assert.equal(restored.messages.find(message => message.body === 'Preserve this newer guidance while repairing the failed room.').id, guidanceMessages[0].id);
+  assert.equal(wire.peer().messagePage(retained.id, 100).messages.filter(message => message.body === originalCause).length, 1);
+  assert.deepEqual(assertCancelledBeforeCall(wire, restored, state.dispatchedRunId), evidence);
+  assert.equal(wire.calls.length, 1);
 });
 
 test('a late accepted cancellation preserves the real publication failure and completed task result', { timeout: 15000 }, async t => {

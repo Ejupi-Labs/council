@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serialize workflow snapshots, events and finalization; retry only verified state write-BEGIN refusals within five seconds per operation. Drain queued sibling evidence after the first persistence fault without model replay, recheck controls before dispatch and await worktree preparation intent before filesystem changes.
+
 - Preserve exact 64-bit SQLite write metadata on Node 24 and 26 while retaining numeric query APIs. Reject unsafe event cursors inside a transaction so no partial event is committed.
 - Retry verified state-BEGIN refusals during call-slot acquisition before dispatching an agent, preserving the same queue identity, fresh controls and the separate capacity wait.
 - Pin cancelled queue entries to their exact generation during bounded cleanup; preserve newer entries even when a caller reuses the same waiter ID.

@@ -155,11 +155,11 @@ export class GitWorkspaces {
     });
   }
 
-  create(runId: string, agent: string, slot = agent, signal?: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void): Promise<WorkspaceHandle> {
+  create(runId: string, agent: string, slot = agent, signal?: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void | Promise<void>): Promise<WorkspaceHandle> {
     return this.operation(active => this.createWorktree(runId, agent, slot, active, onPrepared), signal);
   }
 
-  private async createWorktree(runId: string, agent: string, slot: string, signal: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void): Promise<WorkspaceHandle> {
+  private async createWorktree(runId: string, agent: string, slot: string, signal: AbortSignal, onPrepared?: (artifact: WorkspaceArtifact) => void | Promise<void>): Promise<WorkspaceHandle> {
     let base = this.runBases.get(runId);
     if (!base) {
       let metadata: string;
@@ -202,7 +202,7 @@ export class GitWorkspaces {
     await this.checked(patchPath, 'patches');
     const manifest: Manifest = { agent, path, patchPath, cwd: join(path, base.suffix), baseHead: base.head };
     // Persist the database intent before the first managed filesystem side effect.
-    onPrepared?.({ agent, path, patchPath, baseCommit: base.head, changed: false, exportStatus: 'pending' });
+    await onPrepared?.({ agent, path, patchPath, baseCommit: base.head, changed: false, exportStatus: 'pending' });
     signal.throwIfAborted();
     await mkdir(dirname(path), { recursive: true });
     await this.atomicWrite(this.manifestPath(path), JSON.stringify(manifest), 'workspace-manifests', true, signal);
