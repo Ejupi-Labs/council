@@ -6,6 +6,8 @@ Use project rooms to turn a discussion into an approved plan and execute tasks i
 
 Council has **zero production npm dependencies**. It requires Node.js 24.18.1 or newer with SQLite 3.51.3 or newer, speaks MCP over stdio, and coordinates native agent CLIs or ACP agents. It provides six collaboration modes, workspace-wide call limits, durable results, peer messages, project notes, file leases and isolated Git worktrees.
 
+The dashboard's **Model map** provides a dated, source-linked hierarchy for workers, reviewers and advisors across 11 task areas. Its 24 profiles cover OpenAI, Claude, Gemini, DeepSeek, Qwen, Kimi and GLM, with separate benchmark cohorts, effort/harness qualifications, model-specific strengths and limits. Inspect it through `council_model_map` or `council model-map --task repository-coding`. [Model-map documentation](docs/model-map.md) explains the research, exact identities and editable local evidence. Planning priorities do not change agent settings, decision weights or runtime context limits.
+
 ## Install and start
 
 The repository includes its compiled runtime. Development dependencies and a build step are not needed to run a release:
@@ -208,12 +210,16 @@ Routine economy routing prefers suitable configured small profiles. Task class c
 
 ## Collaboration skills
 
-The plugin ships four worker collaboration skills:
+The plugin ships eleven worker collaboration skills. Four cover general collaboration:
 
 - [Don't kill an ant with a bazooka](skills/dont-kill-an-ant-with-a-bazooka/SKILL.md): choose proportionate models, effort and collaboration, then wait without polling.
 - [Implementation and review](skills/council-implementation-review/SKILL.md): implementation, independent read-only review and revision.
 - [Independent perspectives](skills/council-independent-perspectives/SKILL.md): preserve independent analyses, evidence and material disagreement.
 - [Focused advisor](skills/council-advisor/SKILL.md): resolve a concrete uncertainty with read-only cross-model advice.
+
+Six additional skills provide an **Evidence researcher**, **Proposal advocate**, **Constructive skeptic**, **Constraint reviewer**, **User advocate** and **Clear explanations**. The host-only [Evidence-based debate](skills/council-evidence-debate/SKILL.md) skill chooses useful perspectives, preserves dissent and waits server-side. [Collaboration playbooks](docs/collaboration-playbooks.md) includes role assignments, a working input example and the dated research behind these original adaptations. Clear explanations keeps the user's language and exact technical evidence without extra rewriting calls or hard writing limits.
+
+[Lazy Genius](skills/council-lazy-genius/SKILL.md) adds a focused reviewer for unnecessary implementation complexity. It requests the simplest complete alternative, preserves the user's requirements and necessary protections, and distinguishes blocking review findings from optional polish. Read the [guide and examples](docs/lazy-genius.md).
 
 [Human delegate](skills/council-human-delegate/SKILL.md) is a separate host orchestration skill for delegated project management and reporting. It is not part of the worker skill catalog and is never injected into worker prompts.
 

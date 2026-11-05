@@ -1,0 +1,10 @@
+import { type JsonSchema } from './schema.js';
+export declare const modelMapRoleDefinition: JsonSchema;
+export declare const modelMapSourceDefinition: JsonSchema;
+export declare const modelMapObservationDefinition: JsonSchema;
+export declare const modelMapRecommendationDefinition: JsonSchema;
+export declare const modelMapProfileDefinition: JsonSchema;
+export declare const modelMapTaskDefinition: JsonSchema;
+export declare const modelMapDefinition: JsonSchema;
+export declare const modelMapOverlayDefinition: JsonSchema;
+export declare const modelMapQueryDefinition: JsonSchema;

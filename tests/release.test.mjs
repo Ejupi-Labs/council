@@ -94,7 +94,12 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   for (const file of ['dist/cli.js', 'plugin.json', 'mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/council/SKILL.md',
     'skills/dont-kill-an-ant-with-a-bazooka/SKILL.md', 'skills/council-implementation-review/SKILL.md',
     'skills/council-independent-perspectives/SKILL.md', 'skills/council-advisor/SKILL.md', 'schemas/billing.schema.json', 'schemas/routing.schema.json',
+    'skills/council-evidence-debate/SKILL.md', 'skills/council-evidence-researcher/SKILL.md', 'skills/council-proposal-advocate/SKILL.md',
+    'skills/council-constructive-skeptic/SKILL.md', 'skills/council-constraint-reviewer/SKILL.md', 'skills/council-user-advocate/SKILL.md',
+    'skills/council-clear-explanations/SKILL.md', 'docs/collaboration-playbooks.md', 'skills/council-lazy-genius/SKILL.md', 'docs/lazy-genius.md',
     'skills/council-human-delegate/SKILL.md', 'docs/delegation.md', 'schemas/delegation.schema.json', 'dist/delegation.js', 'dist/dashboard-delegate-ui.js',
+    'skills/council-model-map/SKILL.md', 'docs/model-map.md', 'dist/model-map.js', 'dist/model-map-data.js', 'dist/dashboard-model-map-ui.js',
+    'schemas/model-map.schema.json', 'schemas/model-map-override.schema.json', 'schemas/model-map-query.schema.json',
     'schemas/private-chat.schema.json', 'dist/private-chats.js', 'dist/private-chat-protocol.js', 'dist/dashboard-private-chats-ui.js', 'docs/private-chats.md',
     'schemas/state-snapshot.schema.json', 'dist/state-snapshot.js', 'dist/sqlite-backup.js', 'dist/cli-rooms.js', 'docs/rooms.md', 'examples/room-fix.json', 'dist/dispatch-quarantine.js', 'dist/dashboard-quarantine-ui.js', 'docs/cleanup-quarantine.md']) {
     assert.ok(packagedPaths.includes(file), `The release must contain ${file}.`);
@@ -124,6 +129,10 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   const cli = join(installedRoot, 'dist', 'cli.js');
   const version = JSON.parse((await runNode('version', [cli, '--version'])).stdout);
   assert.equal(version.version, releaseVersion);
+  const modelMap = JSON.parse((await runNode('model-map', [cli, 'model-map', '--workspace', workspace, '--task', 'routine-edits', '--role', 'economy'])).stdout);
+  assert.ok(modelMap.models.some(model => model.id === 'gpt-6-luna'));
+  assert.ok(modelMap.hierarchy.every(entry => entry.task === 'routine-edits' && entry.role === 'economy'));
+  assert.equal(existsSync(join(workspace, '.council')), false, 'Installed model evidence inspection must not initialize collaboration state.');
   const demo = JSON.parse((await runNode('mock-demo', [cli, 'demo'])).stdout);
   assert.equal(demo.backend, 'mock');
   assert.equal(demo.liveAgentCalls, 0);
@@ -150,7 +159,7 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   assert.equal(client.getServerVersion().version, releaseVersion);
   const available = (await client.listTools()).tools.map(tool => tool.name);
   for (const name of ['council_plan', 'council_run', 'council_status', 'council_cancel', 'council_health', 'council_run_page', 'council_backup', 'council_prune', 'council_patches',
-    'council_billing', 'council_billing_update', 'council_billing_import', 'council_route_plan', 'council_route_run', 'council_skills',
+    'council_billing', 'council_billing_update', 'council_billing_import', 'council_route_plan', 'council_route_run', 'council_skills', 'council_model_map',
     'council_delegate_status', 'council_delegate_configure', 'council_delegate_report', 'council_delegate_resolve', 'council_delegate_reports', 'council_delegate_changes', 'council_delegate_watch',
     'council_chat_create', 'council_chat_send', 'council_chat_list', 'council_chat_actors', 'council_chat_history', 'council_chat_watch']) assert.ok(available.includes(name));
   const call = async (name, input) => {

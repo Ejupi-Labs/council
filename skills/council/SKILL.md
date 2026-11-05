@@ -7,6 +7,12 @@ Use Council for a concrete collaboration task within the user's authorized scope
 
 Start with `council_agents` to inspect locally available agents. Availability does not prove authentication. Keep the user's chosen agents and models; do not silently substitute an unavailable one. If MCP tools are unavailable, use the packaged CLI: `node <plugin-root>/dist/cli.js`. `connection --workspace <project>` prints explicit MCP settings without editing host configuration.
 
+When model-specific task strengths or effort tradeoffs matter, use the [Model map](../council-model-map/SKILL.md) host skill. Its dated evidence and task priorities inform a proposal; they do not establish account access, alter configured agents or set voting weights.
+
+For a decision that benefits from opposing arguments, use [Evidence-based debate](../council-evidence-debate/SKILL.md). Assign useful research, proposal, skeptic, constraint or user-advocate lenses to actual participants; preserve dissent and choose only the perspectives needed. Use [Clear explanations](../council-clear-explanations/SKILL.md) when reporting to the human: lead with the usable result, explain necessary terms through a concrete example, and distinguish proposed, implemented, tested and published work. Exact machine-output contracts remain authoritative.
+
+Use [Lazy Genius](../council-lazy-genius/SKILL.md) for a focused review of unnecessary implementation complexity. Its simplest complete alternative must preserve the user's outcome, constraints and required verification. Resolve material findings before accepting the reviewed choice; a completed workflow is not itself reviewer approval.
+
 Choose the mode according to the work:
 
 | Mode | Use when | Behavior |

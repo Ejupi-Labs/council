@@ -108,6 +108,20 @@ export async function serveDashboard(service: CouncilService, rooms: RoomManager
       const authorization = Buffer.from(request.headers.authorization ?? '');
       if (authorization.length !== tokenBytes.length || !timingSafeEqual(authorization, tokenBytes)) throw new HttpError(401, 'Open the complete dashboard link to authorize this session.');
       if (request.method !== 'GET' && request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+      if (pathname === '/api/model-map') {
+        if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+        const query: Record<string, string> = {};
+        let includeFullCatalog: boolean | undefined;
+        for (const key of url.searchParams.keys()) {
+          if (!['task', 'model', 'role', 'harness', 'includeFullCatalog'].includes(key) || url.searchParams.getAll(key).length !== 1) throw new HttpError(400, 'Use one exact task, model, role, harness and includeFullCatalog option.');
+          const value = url.searchParams.get(key)!;
+          if (key === 'includeFullCatalog') {
+            if (value !== 'true' && value !== 'false') throw new HttpError(400, 'includeFullCatalog must be exactly true or false.');
+            includeFullCatalog = value === 'true';
+          } else query[key] = value;
+        }
+        json(response, 200, service.modelMap({ ...query, ...(includeFullCatalog !== undefined ? { includeFullCatalog } : {}) })); return;
+      }
       if (pathname === '/api/quarantine') {
         if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
         for (const key of url.searchParams.keys()) if (!['limit', 'cursor'].includes(key) || url.searchParams.getAll(key).length !== 1) throw new HttpError(400, 'Use one quarantine page limit and generation cursor.');

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add the assignable Lazy Genius reviewer skill for the smallest complete implementation. Require present justification for added machinery, concrete simpler alternatives and preserved requirements/verification; keep unusual high-impact cases and required interfaces. Use existing review findings and room protocols without adding scheduler vetoes, fixed complexity caps or automatic model calls.
+- Add evidence-research, proposal, skeptic, constraint-review and user-advocate worker skills, plus clear human explanations and a separate host debate playbook. Reuse existing profile, workflow and room settings; preserve exact JSON protocols, neutral synthesis, permissions and call bounds without fixed panels, writing caps or automatic rewriting calls.
+- Document dated GitHub/skills-directory adoption, exact source instructions and licensing for debate and clear-writing references. External skill collections are not installed or executed.
+- Refuse model-map overrides reached through case-distinct sibling directories on case-sensitive NTFS, including redirected state junctions. Preserve editable active harness filters when compatibility declarations disappear, give filters stable accessible names, and label derived catalog ranks separately from full source leaderboard positions.
+- Keep curated observation IDs stable across inserted/reordered results and score corrections, so a saved override continues to target its original model and effort. Early draft overrides using row-number IDs must be refreshed from the current reference.
+- Add a source-linked Model map with 24 hosted/checkpoint profiles across seven model families and 11 task areas. Distinguish task/role planning priorities from measured benchmark cohorts, retain native effort, harness, uncertainty and source dates, and keep unresolved model identities explicit.
+- Expose read-only model evidence in the English dashboard, MCP and offline CLI, with validated project-local overrides and a host skill for team/advisor selection. Preserve user settings, billing protection, decision weights and complete evidence without adding context or catalog-size caps.
 - Classify single-agent CLI billing from one captured quota record and evaluation time, including subscription protection. Concurrent account updates or an expiry boundary no longer produce mixed observations in one response.
 
 ## 1.3.0 — 5 November 2026

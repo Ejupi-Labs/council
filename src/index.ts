@@ -32,3 +32,6 @@ export * from './delegation.js';
 export * from './private-chats-types.js';
 export * from './private-chats-schema.js';
 export * from './private-chats.js';
+export * from './model-map-types.js';
+export * from './model-map-schema.js';
+export * from './model-map.js';

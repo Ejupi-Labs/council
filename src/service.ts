@@ -22,6 +22,8 @@ import { serveDashboard } from './dashboard.js';
 import { BillingManager } from './billing.js';
 import { planRouting } from './routing.js';
 import { collaborationSkills } from './skills.js';
+import { modelMapView } from './model-map.js';
+import type { ModelMapQuery, ModelMapView } from './model-map-types.js';
 import type { RoutingInput } from './routing-types.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
 
@@ -101,6 +103,12 @@ export class CouncilService {
     return { agents: records.map(record => ({ ...record,
       effectiveSkills: record.skills ?? this.config.agents[record.alias]?.skills ?? [],
       availability: this.billing.availabilityFor(record, now), subscriptionProtection: this.billing.subscriptionProtectionFor(record, now) })), skills: collaborationSkills() };
+  }
+
+  /** Read local model evidence without changing routing, votes or provider settings. */
+  modelMap(query: ModelMapQuery = {}): ModelMapView {
+    if (this.closing) throw new Error('Council is shutting down.');
+    return modelMapView(this.config, query);
   }
 
   routePlan(input: RoutingInput) {

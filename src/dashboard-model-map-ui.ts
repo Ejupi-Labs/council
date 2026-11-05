@@ -1,0 +1,102 @@
+/** Read-only, evidence-linked model planning reference for the dashboard. */
+export const dashboardModelMapStyles = String.raw`
+#modelMapDialog{width:min(1180px,96vw)}.model-map-help{font-size:12px;line-height:1.75;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}.model-map-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.model-map-toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:8px 0 16px}.model-map-toolbar .model-map-help{margin:0}.model-map-section{border-top:1px solid var(--line);margin-top:22px;padding-top:17px}.model-map-section h3{font-size:15px;margin:0 0 9px}.model-map-table-wrap{overflow:auto;margin:12px 0}.model-map-table{border-collapse:collapse;width:100%;font-size:11px;line-height:1.65}.model-map-table th,.model-map-table td{text-align:left;vertical-align:top;padding:9px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.model-map-table th{font-weight:600}.model-map-table td p{margin:0 0 5px;white-space:pre-wrap}.model-map-table a,.model-map-source a{color:var(--violet)}.model-map-table code{white-space:normal}.model-map-card{border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:10px 0}.model-map-card summary{cursor:pointer;font-size:12px;font-weight:600;overflow-wrap:anywhere}.model-map-card h4{font-size:12px;margin:14px 0 6px}.model-map-card ul,.model-map-warnings{font-size:12px;line-height:1.75;padding-left:20px;white-space:pre-wrap;overflow-wrap:anywhere}.model-map-warnings{background:var(--violet-soft);border-radius:8px;padding:12px 15px 12px 32px;margin:12px 0}.model-map-source{font-size:11px;line-height:1.8;margin:10px 0;overflow-wrap:anywhere}.model-map-source p{margin:2px 0}.model-map-meta{font-size:11px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}.model-map-badge{font-size:10px;font-weight:500;color:var(--muted);margin-left:8px}.model-map-empty{font-size:12px;color:var(--muted)}@media(max-width:750px){.model-map-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:430px){.model-map-filters{grid-template-columns:1fr}}
+`;
+
+export const dashboardModelMapMarkup = String.raw`
+<dialog id="modelMapDialog" aria-labelledby="modelMapTitle" aria-describedby="modelMapDescription"><div class="dialog-header"><div><h2 id="modelMapTitle">Model map</h2><p id="modelMapDescription">Plan by task, role and recorded evidence. Public model listings do not establish account access.</p></div><button type="button" class="quiet" id="modelMapCloseTop" aria-label="Close model map">×</button></div><div class="dialog-body"><form id="modelMapFilters"><div class="model-map-filters">
+<label class="field" for="modelMapTask"><span id="modelMapTaskLabel">Task</span><select id="modelMapTask" aria-labelledby="modelMapTaskLabel"><option value="">All tasks</option></select></label>
+<label class="field" for="modelMapModel"><span id="modelMapModelLabel">Exact model ID or alias</span><input id="modelMapModel" aria-labelledby="modelMapModelLabel" list="modelMapModels" autocomplete="off" placeholder="All models"></label>
+<label class="field" for="modelMapRole"><span id="modelMapRoleLabel">Role</span><select id="modelMapRole" aria-labelledby="modelMapRoleLabel"><option value="">All roles</option><option value="lead">Lead</option><option value="worker">Worker</option><option value="reviewer">Reviewer</option><option value="advisor">Advisor</option><option value="economy">Economy</option></select></label>
+<label class="field" for="modelMapHarness"><span id="modelMapHarnessLabel">Declared harness compatibility</span><input id="modelMapHarness" aria-labelledby="modelMapHarnessLabel" list="modelMapHarnesses" autocomplete="off" placeholder="Loading declarations" disabled></label>
+</div><datalist id="modelMapModels"></datalist><datalist id="modelMapHarnesses"></datalist><div class="model-map-toolbar"><button type="submit" class="primary" id="modelMapApply">Apply filters</button><button type="button" id="modelMapReset">Clear filters</button><button type="button" id="modelMapReload">Reload reference</button><span class="model-map-help" id="modelMapStatus" role="status" aria-live="polite"></span></div></form><div class="inline-error" id="modelMapError" role="alert" hidden></div><p class="model-map-meta" id="modelMapMetadata"></p><ul class="model-map-warnings" id="modelMapWarnings" aria-label="Evidence limitations" hidden></ul><div id="modelMapResults" aria-busy="false"></div></div><div class="dialog-actions"><button type="button" id="modelMapClose">Close</button></div></dialog>
+`;
+
+/** Requires the dashboard's $, api and token bindings. Installs no polling or provider calls. */
+export const dashboardModelMapScript = String.raw`
+var modelMapEpoch=0,modelMapGeneration=0,modelMapController;
+function modelMapNode(tag,cls,text){var node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=String(text);return node;}
+function modelMapCurrent(epoch,generation){return $('modelMapDialog').open&&epoch===modelMapEpoch&&generation===modelMapGeneration;}
+function modelMapInvalidate(){modelMapGeneration++;if(modelMapController)modelMapController.abort();modelMapController=undefined;}
+function modelMapClear(){
+  $('modelMapResults').replaceChildren();$('modelMapWarnings').replaceChildren();$('modelMapWarnings').hidden=true;
+  $('modelMapMetadata').textContent='';$('modelMapError').textContent='';$('modelMapError').hidden=true;
+  $('modelMapResults').setAttribute('aria-busy','false');$('modelMapApply').disabled=false;
+}
+function dismissModelMap(){modelMapInvalidate();modelMapEpoch++;$('modelMapDialog').close();}
+function modelMapEdited(){modelMapInvalidate();modelMapClear();$('modelMapStatus').textContent='Apply filters to load the matching reference.';}
+function modelMapLink(source){
+  var node=modelMapNode('span','',source.title),url;
+  try{url=new URL(source.url);}catch{return node;}
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return node;
+  node=modelMapNode('a','',source.title);node.href=url.href;node.target='_blank';node.rel='noopener noreferrer';return node;
+}
+function modelMapSource(parent,id,sources){
+  var source=sources.get(id);if(!source){parent.append(modelMapNode('span','','Missing source: '+id));return;}
+  var item=modelMapNode('div','model-map-source');item.append(modelMapLink(source));
+  item.append(modelMapNode('p','',source.publisher+' · '+source.type+' · retrieved '+source.retrievedAt+(source.publishedAt?' · published '+source.publishedAt:'')));
+  parent.append(item);
+}
+function modelMapList(parent,title,values){var section=modelMapNode('div');section.append(modelMapNode('h4','',title));var list=modelMapNode('ul');if(!values.length)list.append(modelMapNode('li','','Not recorded.'));values.forEach(function(value){list.append(modelMapNode('li','',value));});section.append(list);parent.append(section);}
+function modelMapSection(parent,title,help){var section=modelMapNode('section','model-map-section');section.append(modelMapNode('h3','',title));if(help)section.append(modelMapNode('p','model-map-help',help));parent.append(section);return section;}
+function modelMapTable(parent,headings){
+  var wrap=modelMapNode('div','model-map-table-wrap'),table=modelMapNode('table','model-map-table'),head=modelMapNode('thead'),row=modelMapNode('tr'),body=modelMapNode('tbody');
+  headings.forEach(function(label){var cell=modelMapNode('th','',label);cell.scope='col';row.append(cell);});head.append(row);table.append(head,body);wrap.append(table);parent.append(wrap);return body;
+}
+function modelMapCell(row,text){var cell=modelMapNode('td','',text);row.append(cell);return cell;}
+function modelMapOptions(view){
+  var task=$('modelMapTask'),selectedTask=task.value,values=new Set(['']);task.replaceChildren();var all=modelMapNode('option','','All tasks');all.value='';task.append(all);
+  view.catalog.tasks.forEach(function(item){var option=modelMapNode('option','',item.label);option.value=item.id;task.append(option);values.add(item.id);});
+  if(!values.has(selectedTask)){var unknown=modelMapNode('option','','Unknown exact task: '+selectedTask);unknown.value=selectedTask;task.append(unknown);}task.value=selectedTask;
+  $('modelMapModels').replaceChildren();view.catalog.models.forEach(function(model){[model.id].concat(model.aliases||[]).forEach(function(id){var option=modelMapNode('option','',model.name+' · '+model.provider);option.value=id;$('modelMapModels').append(option);});});
+  var harnesses=new Set();view.catalog.models.forEach(function(model){(model.harnesses||[]).forEach(function(value){harnesses.add(value);});});
+  var activeHarness=$('modelMapHarness').value!=='';$('modelMapHarness').disabled=!harnesses.size&&!activeHarness;$('modelMapHarness').placeholder=harnesses.size?'All declared harnesses':'No compatibility declarations';$('modelMapHarnessLabel').textContent=harnesses.size||activeHarness?'Declared harness compatibility':'No compatibility declarations';
+  $('modelMapHarnesses').replaceChildren();Array.from(harnesses).sort().forEach(function(value){var option=modelMapNode('option');option.value=value;$('modelMapHarnesses').append(option);});
+}
+function modelMapObservation(parent,observation,sources){
+  var item=modelMapNode('details','model-map-card');item.append(modelMapNode('summary','',observation.benchmark+' '+observation.version+' · '+observation.score+' '+observation.unit));
+  item.append(modelMapNode('p','model-map-help','Metric: '+observation.metric+' · '+observation.direction+' is better. Cohort: '+observation.cohort));
+  item.append(modelMapNode('p','model-map-help','Harness: '+observation.harness+' · Effort: '+(observation.effort===null?'Not reported':observation.effort)));
+  if(observation.uncertainty)item.append(modelMapNode('p','model-map-help','Uncertainty: '+observation.uncertainty));
+  if(observation.sampleSize!==undefined)item.append(modelMapNode('p','model-map-help','Sample size: '+observation.sampleSize));
+  if(observation.notes)item.append(modelMapNode('p','model-map-help',observation.notes));
+  modelMapSource(item,observation.sourceId,sources);parent.append(item);
+}
+function renderModelMap(view){
+  modelMapOptions(view);var result=$('modelMapResults');result.replaceChildren();
+  var sources=new Map(view.catalog.sources.map(function(item){return[item.id,item];})),observations=new Map(view.catalog.observations.map(function(item){return[item.id,item];})),models=new Map(view.catalog.models.map(function(item){return[item.id,item];})),tasks=new Map(view.catalog.tasks.map(function(item){return[item.id,item];}));
+  $('modelMapMetadata').textContent='Reference as of '+view.catalog.asOf+' · revision '+view.catalog.revision+' · '+(view.overrideApplied?'Local overrides applied: ':'Local override path: ')+view.overridePath;
+  $('modelMapWarnings').replaceChildren();view.warnings.forEach(function(warning){$('modelMapWarnings').append(modelMapNode('li','',warning));});$('modelMapWarnings').hidden=!view.warnings.length;
+  var planning=modelMapSection(result,'Task and role priorities','Planning guidance: lower priority numbers are preferred within one task and role. These ordinals are not measured intelligence scores or runtime authority.');
+  if(!view.hierarchy.length)planning.append(modelMapNode('p','model-map-empty','No verified planning recommendations match these exact filters.'));
+  else{var taskGroups=new Map();view.hierarchy.forEach(function(item){var entries=taskGroups.get(item.task)||[];entries.push(item);taskGroups.set(item.task,entries);});taskGroups.forEach(function(entries,taskId){var task=tasks.get(taskId)||{label:taskId},group=modelMapNode('details','model-map-card');group.open=view.query.task===taskId;group.append(modelMapNode('summary','',task.label+' · '+entries.length+' planning '+(entries.length===1?'entry':'entries')));if(task.description)group.append(modelMapNode('p','model-map-help',task.description));var planBody=modelMapTable(group,['Role','Priority / model','Basis / confidence','Reason and sources']);entries.forEach(function(item){var row=modelMapNode('tr');modelMapCell(row,item.role);var identity=modelMapCell(row,'Priority '+item.priority+(item.tied?' · tied':'')+' · '+item.modelName);identity.append(modelMapNode('p','',item.modelId+' · '+item.status));modelMapCell(row,item.basis+' · '+item.confidence+' confidence');var reason=modelMapCell(row,item.reason);item.sourceIds.forEach(function(id){modelMapSource(reason,id,sources);});planBody.append(row);});planning.append(group);});}
+  var measured=modelMapSection(result,'Measured benchmark cohorts','Ranks are computed from catalog observations within each cohort before filtering. They are not full source leaderboard positions or statistical significance. Compare only the stated benchmark version, metric, harness and effort; separate cohorts are not combined.');
+  if(!view.rankings.length)measured.append(modelMapNode('p','model-map-empty','No measured benchmark observations match these exact filters. Missing evidence remains unranked.'));
+  view.rankings.forEach(function(group){var cohort=modelMapNode('details','model-map-card'),summary=modelMapNode('summary','',group.benchmark+' '+group.version+' · '+group.metric);summary.append(modelMapNode('span','model-map-badge',group.cohort));cohort.append(summary);cohort.append(modelMapNode('p','model-map-help','Cohort: '+group.cohort+' · '+group.direction+' is better · unit: '+group.unit));var body=modelMapTable(cohort,['Catalog cohort rank','Model','Score / uncertainty','Harness / effort','Evidence']);group.entries.forEach(function(entry){var row=modelMapNode('tr'),observation=observations.get(entry.observationId);modelMapCell(row,entry.rank);var model=models.get(entry.modelId),identity=modelMapCell(row,model?model.name:entry.modelId);identity.append(modelMapNode('p','',entry.modelId));modelMapCell(row,entry.score+' '+group.unit+(observation&&observation.uncertainty?' · '+observation.uncertainty:''));modelMapCell(row,entry.harness+' · '+(entry.effort===null?'Effort not reported':entry.effort));var evidence=modelMapCell(row);if(observation){if(observation.notes)evidence.append(modelMapNode('p','',observation.notes));if(observation.sampleSize!==undefined)evidence.append(modelMapNode('p','','Sample size: '+observation.sampleSize));modelMapSource(evidence,observation.sourceId,sources);}else evidence.append(modelMapNode('span','','Observation not recorded.'));body.append(row);});measured.append(cohort);});
+  var profiles=modelMapSection(result,'Model profiles','Exact model identities, documented strengths and limits. A verified catalogue entry does not prove access through an installed harness. Legacy means previous generation; it does not mean unavailable.');
+  if(!view.models.length)profiles.append(modelMapNode('p','model-map-empty','No model profiles match these exact filters.'));
+  view.models.forEach(function(model){var card=modelMapNode('details','model-map-card');card.append(modelMapNode('summary','',model.name+' · '+model.provider+' · '+model.status));card.append(modelMapNode('p','model-map-meta','Exact ID: '+model.id+(model.aliases&&model.aliases.length?'\nExact aliases: '+model.aliases.join(', '):'')));modelMapList(card,'Strengths',model.strengths);modelMapList(card,'Limitations',model.limitations);if(model.effortNotes)card.append(modelMapNode('p','model-map-help','Effort: '+model.effortNotes));card.append(modelMapNode('p','model-map-help','Declared harnesses: '+(model.harnesses&&model.harnesses.length?model.harnesses.join(', '):'Not recorded')));if(model.referencePricing){var price=model.referencePricing;card.append(modelMapNode('h4','','Dated reference pricing'));card.append(modelMapNode('p','model-map-help',price.currency+' per million tokens: input '+price.inputPerMillion+' · output '+price.outputPerMillion+'. Reference only; account billing and spending are separate.'));modelMapSource(card,price.sourceId,sources);}var evidence=modelMapNode('div');evidence.append(modelMapNode('h4','','Recorded observations'));if(!model.evidenceIds.length)evidence.append(modelMapNode('p','model-map-empty','No benchmark observations recorded.'));model.evidenceIds.forEach(function(id){var observation=observations.get(id);if(observation)modelMapObservation(evidence,observation,sources);});card.append(evidence);profiles.append(card);});
+  var bindings=modelMapSection(result,'Configured agent bindings','Workspace configuration is shown for all aliases. Native defaults, unresolved IDs and public catalogue availability do not establish the account’s running model or entitlement.');
+  if(!view.bindings.length)bindings.append(modelMapNode('p','model-map-empty','No configured agent aliases.'));
+  else{var bindingBody=modelMapTable(bindings,['Alias / profile','Configured model','Catalogue match','Enabled']);view.bindings.forEach(function(binding){var row=modelMapNode('tr');modelMapCell(row,binding.alias+' · '+binding.profile);modelMapCell(row,binding.model===null?'Native default · unresolved':binding.model);modelMapCell(row,binding.match+(binding.catalogModelId?' · '+binding.catalogModelId:''));modelMapCell(row,binding.enabled?'Yes':'No');bindingBody.append(row);});}
+  var allSources=modelMapSection(result,'Source register','Publication and retrieval dates describe this reference snapshot. Recheck sources and the installed harness before relying on newer provider behavior.');var sourceList=modelMapNode('details','model-map-card');sourceList.append(modelMapNode('summary','',view.catalog.sources.length+' complete source records'));view.catalog.sources.forEach(function(source){modelMapSource(sourceList,source.id,sources);});allSources.append(sourceList);
+  var displayed=Object.entries(view.query).filter(function(entry){return['task','model','role','harness'].includes(entry[0]);}).map(function(entry){return entry[0]+'='+entry[1];}).join(' · ');$('modelMapStatus').textContent=view.models.length+' model profiles · '+view.hierarchy.length+' planning entries · '+view.rankings.length+' measured cohorts'+(displayed?' · '+displayed:' · All filters');
+}
+async function loadModelMap(){
+  if(!$('modelMapDialog').open)return;modelMapInvalidate();var epoch=modelMapEpoch,generation=modelMapGeneration,controller=new AbortController();modelMapController=controller;modelMapClear();$('modelMapApply').disabled=true;$('modelMapResults').setAttribute('aria-busy','true');$('modelMapStatus').textContent='Loading local model reference…';
+  var query=new URLSearchParams({includeFullCatalog:'true'});[['task','modelMapTask'],['model','modelMapModel'],['role','modelMapRole'],['harness','modelMapHarness']].forEach(function(pair){var value=$(pair[1]).value;if(value!=='')query.set(pair[0],value);});
+  try{var view=await api('/api/model-map'+(query.size?'?'+query.toString():''),undefined,controller.signal);if(!modelMapCurrent(epoch,generation))return;renderModelMap(view);}
+  catch(error){if(modelMapCurrent(epoch,generation)&&error.name!=='AbortError'){$('modelMapError').textContent=error.message;$('modelMapError').hidden=false;$('modelMapStatus').textContent='Reference failed to load. Reload to retry.';}}
+  finally{if(modelMapCurrent(epoch,generation)){$('modelMapApply').disabled=false;$('modelMapResults').setAttribute('aria-busy','false');if(modelMapController===controller)modelMapController=undefined;}}
+}
+async function openModelMap(){modelMapInvalidate();modelMapEpoch++;modelMapClear();if(!$('modelMapDialog').open)$('modelMapDialog').showModal();await loadModelMap();}
+function installModelMapUI(){
+  $('modelMapButton').disabled=!token;$('modelMapButton').addEventListener('click',openModelMap);
+  $('modelMapClose').addEventListener('click',dismissModelMap);$('modelMapCloseTop').addEventListener('click',dismissModelMap);
+  $('modelMapDialog').addEventListener('cancel',function(){modelMapInvalidate();modelMapEpoch++;});
+  $('modelMapDialog').addEventListener('close',function(){if(!$('modelMapDialog').open){modelMapInvalidate();modelMapEpoch++;}});
+  $('modelMapFilters').addEventListener('input',modelMapEdited);$('modelMapFilters').addEventListener('change',modelMapEdited);
+  $('modelMapFilters').addEventListener('submit',function(event){event.preventDefault();return loadModelMap();});$('modelMapReload').addEventListener('click',loadModelMap);
+  $('modelMapReset').addEventListener('click',function(){['modelMapTask','modelMapModel','modelMapRole','modelMapHarness'].forEach(function(id){$(id).value='';});return loadModelMap();});
+}
+`;

@@ -7,6 +7,8 @@ description: Obtain a focused Council advisory opinion across models or harnesse
 
 Choose an advisor for the uncertainty that matters, using configured capabilities, model preferences and current quota observations. Unknown billing data is not evidence of unlimited allowance. Use `council_advise` for independent read-only advice, or configure a worker's `advisors` mapping when it should yield and resume in the same workspace.
 
+The host can consult the [Model map](../council-model-map/SKILL.md) when an advisor's task-specific evidence matters. This host reference is not injected into worker guidance and does not permit recursive delegation.
+
 The worker yields only `{"council_advisor_request":{"question":"...","context":"..."}}` when that protocol is available. Include the complete relevant evidence. Council releases the worker's call slot, asks the advisor read-only and resumes the worker. Advisor requests and worker resumptions consume the configured call budget. Avoid repeated consultation without a new concrete uncertainty.
 
 <!-- council-agent-instructions -->

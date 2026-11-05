@@ -22,6 +22,7 @@ import { serveDashboard } from './dashboard.js';
 import { BillingManager } from './billing.js';
 import { planRouting } from './routing.js';
 import { collaborationSkills } from './skills.js';
+import { modelMapView } from './model-map.js';
 const STATE_CONTENTION_GRACE_MS = 5000;
 function isStateContention(error) {
     const code = error && typeof error === 'object' ? error.errcode : undefined;
@@ -102,6 +103,12 @@ export class CouncilService {
         return { agents: records.map(record => ({ ...record,
                 effectiveSkills: record.skills ?? this.config.agents[record.alias]?.skills ?? [],
                 availability: this.billing.availabilityFor(record, now), subscriptionProtection: this.billing.subscriptionProtectionFor(record, now) })), skills: collaborationSkills() };
+    }
+    /** Read local model evidence without changing routing, votes or provider settings. */
+    modelMap(query = {}) {
+        if (this.closing)
+            throw new Error('Council is shutting down.');
+        return modelMapView(this.config, query);
     }
     routePlan(input) {
         if (this.closing)

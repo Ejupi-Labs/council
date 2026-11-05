@@ -9,6 +9,7 @@ import { roomDefinition, roomTaskDefinition, effortDefinition } from './rooms-sc
 import { billingInputDefinition, billingImportDefinition } from './billing-schema.js';
 import { routingDefinition } from './routing-schema.js';
 import { collaborationSkills } from './skills.js';
+import { modelMapQueryDefinition } from './model-map-schema.js';
 import { delegationConfigureDefinition, delegationReportDefinition, delegationResolveDefinition, delegationWatchDefinition } from './delegation-schema.js';
 import { privateChatCreateDefinition, privateChatSendDefinition, privateChatPageDefinition, privateChatWatchDefinition, privateChatListDefinition, privateChatListPageDefinition, privateChatActorsPageDefinition } from './private-chats-schema.js';
 function compactRun(run) {
@@ -31,6 +32,7 @@ export function createMcpServer(service) {
     const tool = (name, description, schema, annotations, handler) => server.registerTool({ name, description, inputSchema: schema, annotations }, handler);
     tool('council_agents', 'Inspect configured native/ACP agents without model calls or login.', objectSchema({}), read, async () => ({ backend: service.config.backend, agents: await service.runner.doctor() }));
     tool('council_skills', 'List bundled collaboration skills that can be assigned per agent or per workflow. No model calls.', objectSchema({}), read, () => ({ skills: collaborationSkills() }));
+    tool('council_model_map', 'Read the dated model capability map, task/role priorities and source-linked benchmark cohorts. Use exact task, model, role and harness filters to retain relevant models with all their evidence; includeFullCatalog opts into the full reference. No model calls, account checks, routing changes, automatic model selection or voting-weight changes.', modelMapQueryDefinition, read, input => service.modelMap(input));
     tool('council_billing', 'Inspect local per-agent billing, shared-account limits, observation freshness and routing preferences. Unknown data is not unlimited. No credential reads or provider probes.', objectSchema({ agent: text(1, 64) }), read, input => {
         if (!input.agent)
             return service.billingView();

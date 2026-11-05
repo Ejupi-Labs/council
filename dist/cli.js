@@ -11,6 +11,7 @@ import { CouncilStore } from './store.js';
 import { renderRun } from './report.js';
 import { VERSION } from './version.js';
 import { collaborationSkills } from './skills.js';
+import { modelMapView } from './model-map.js';
 import { verifyStateSnapshot } from './state-snapshot.js';
 import { ROOM_COMMANDS, ROOM_ID_COMMANDS, roomCommandOptions, runRoomCommand, validateRoomCommand } from './cli-rooms.js';
 const HELP = `Council — collaboration for coding agents
@@ -57,6 +58,7 @@ Commands:
   wait <id>      Block inside Council until a run settles; no model-driven polling
   advise         Ask a configured advisor with --advisor and --question
   skills         List assignable collaboration skills; no model calls
+  model-map      Read model evidence and task priorities; optional --task/--model/--role/--harness
   billing        Read local billing and limits; optionally --agent <alias>
   billing-set    Save manual metadata with --agent and --input-file
   billing-import Import a reported observation with --agent and --input-file
@@ -69,11 +71,15 @@ Options:
   --backend <name>       native | acpx | mock
   --mode <name>          delegate | review | debate | parallel | pipeline | council
   --agents <names>       Comma-separated configured names
-  --task <text>          Task brief, or --task-file <path>
+  --task <text>          Task brief, or exact task category for model-map
+  --task-file <path>     Read a workflow task brief from a file
   --context-file <path>  Additional project context
   --assignments-file <p> JSON map of independent parallel tasks
   --judge <name>        Synthesis agent
-  --model <id>           Explicit model for a single participant, without saving settings
+  --model <id>           Explicit participant model, or exact model-map filter; no saved changes
+  --role <name>          Model-map role: lead | worker | reviewer | advisor | economy
+  --harness <name>       Exact model-map harness filter
+  --full-catalog         Include the full evidence catalog despite model-map filters
   --effort <level>       Explicit reasoning effort for one participant (harness support varies)
   --advisor <name>       Advisor alias for a single worker, or the advise command
   --question <text>      Question for the advise command
@@ -119,7 +125,7 @@ async function main() {
             workspace: { type: 'string' }, backend: { type: 'string' }, mode: { type: 'string' },
             agents: { type: 'string' }, task: { type: 'string' }, 'task-file': { type: 'string' },
             'context-file': { type: 'string' }, judge: { type: 'string' }, rounds: { type: 'string' },
-            'assignments-file': { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, advisor: { type: 'string' },
+            'assignments-file': { type: 'string' }, model: { type: 'string' }, role: { type: 'string' }, harness: { type: 'string' }, 'full-catalog': { type: 'boolean' }, effort: { type: 'string' }, advisor: { type: 'string' },
             question: { type: 'string' }, requester: { type: 'string' }, 'wait-ms': { type: 'string' }, port: { type: 'string' },
             'max-calls': { type: 'string' }, write: { type: 'boolean' }, json: { type: 'boolean' },
             agent: { type: 'string' }, 'input-file': { type: 'string' }, revision: { type: 'string' },
@@ -140,7 +146,7 @@ async function main() {
         process.stdout.write(HELP);
         return;
     }
-    const commands = ['init', 'doctor', 'health', 'quarantine', 'quarantine-ack', 'backup', 'snapshot', 'verify-snapshot', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route', ...ROOM_COMMANDS];
+    const commands = ['init', 'doctor', 'health', 'quarantine', 'quarantine-ack', 'backup', 'snapshot', 'verify-snapshot', 'prune', 'connection', 'plan', 'run', 'continue', 'runs', 'show', 'events', 'cancel', 'recover', 'export', 'patches', 'cleanup', 'mcp', 'demo', 'ui', 'wait', 'advise', 'skills', 'model-map', 'billing', 'billing-set', 'billing-import', 'route-plan', 'route', ...ROOM_COMMANDS];
     if (!commands.includes(command))
         throw new Error(`Unknown command: ${command}`);
     const roomCommand = ROOM_COMMANDS.includes(command);
@@ -172,6 +178,9 @@ async function main() {
             permitted.add(option);
     if (command === 'billing')
         permitted.add('agent');
+    if (command === 'model-map')
+        for (const option of ['task', 'model', 'role', 'harness', 'full-catalog'])
+            permitted.add(option);
     if (['billing-set', 'billing-import'].includes(command))
         for (const option of ['agent', 'input-file', 'revision'])
             permitted.add(option);
@@ -234,6 +243,12 @@ async function main() {
     const config = command === 'demo'
         ? loadConfig(mkdtempSync(join(tmpdir(), 'council-demo-')), { backend: 'mock' })
         : loadConfig(workspace, { ...(backend ? { backend } : {}), ...(process.env.COUNCIL_BACKEND && !backend ? { backend: parseBackend(process.env.COUNCIL_BACKEND) } : {}) });
+    if (command === 'model-map') {
+        print(modelMapView(config, { ...(values.task !== undefined ? { task: values.task } : {}),
+            ...(values.model !== undefined ? { model: values.model } : {}), ...(values.role !== undefined ? { role: values.role } : {}),
+            ...(values.harness !== undefined ? { harness: values.harness } : {}), ...(values['full-catalog'] !== undefined ? { includeFullCatalog: values['full-catalog'] } : {}) }));
+        return;
+    }
     if (command === 'quarantine' || command === 'quarantine-ack') {
         if (!existsSync(join(config.stateDir, 'state.db'))) {
             if (command === 'quarantine-ack')

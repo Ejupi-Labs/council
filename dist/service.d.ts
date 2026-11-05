@@ -5,6 +5,7 @@ import { RoomManager } from './rooms.js';
 import { DelegationManager } from './delegation.js';
 import { PrivateChatManager } from './private-chats.js';
 import { BillingManager } from './billing.js';
+import type { ModelMapQuery, ModelMapView } from './model-map-types.js';
 import type { RoutingInput } from './routing-types.js';
 import type { AgentRunner, CouncilConfig, RunRecord, WorkflowInput, WorkspaceArtifact } from './types.js';
 export declare class CouncilService {
@@ -81,8 +82,38 @@ export declare class CouncilService {
             id: "council-advisor";
             name: 'Focused advisor';
             description: 'Use a focused read-only consultation when a specific uncertainty warrants another model.';
+        } | {
+            id: "council-evidence-researcher";
+            name: 'Evidence researcher';
+            description: 'Investigate relevant sources, distinguish facts from assumptions and identify missing evidence.';
+        } | {
+            id: "council-proposal-advocate";
+            name: 'Proposal advocate';
+            description: 'Develop a defensible proposal, explain its tradeoffs and revise it when evidence changes.';
+        } | {
+            id: "council-constructive-skeptic";
+            name: 'Constructive skeptic';
+            description: 'Test consequential claims and assumptions without manufacturing opposition or blocking supported conclusions.';
+        } | {
+            id: "council-constraint-reviewer";
+            name: 'Constraint reviewer';
+            description: 'Check a proposal against the task’s explicit requirements, permissions and practical constraints.';
+        } | {
+            id: "council-user-advocate";
+            name: 'User advocate';
+            description: 'Examine a proposal from the intended user’s needs, comprehension and actual workflow.';
+        } | {
+            id: "council-clear-explanations";
+            name: 'Clear explanations';
+            description: 'Explain outcomes and decisions in the reader’s language while preserving exact technical evidence and required reply formats.';
+        } | {
+            id: "council-lazy-genius";
+            name: 'Lazy Genius';
+            description: 'Review unnecessary complexity and propose the simplest complete solution while preserving requirements, safeguards and verification.';
         })[];
     };
+    /** Read local model evidence without changing routing, votes or provider settings. */
+    modelMap(query?: ModelMapQuery): ModelMapView;
     routePlan(input: RoutingInput): import("./routing-types.js").RoutingPlan;
     routeRun(input: RoutingInput): {
         run: RunRecord;

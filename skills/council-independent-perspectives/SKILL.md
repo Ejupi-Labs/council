@@ -7,6 +7,8 @@ description: Organize independent Council analyses when different perspectives o
 
 Choose `parallel` when separate analyses or tasks can progress independently. Choose `council` when independent opinions and cross-critique materially improve a difficult decision. Use `council_route_plan` to preview suitable profiles and call cost. Preserve explicit team choices; do not add a judge or debate merely because more agents are available.
 
+For explicit research and opposing-review lenses, read [Evidence-based debate](../council-evidence-debate/SKILL.md). Those lenses are selected per alias and do not replace room participation roles or create disagreement quotas.
+
 For separate tasks, provide full per-agent assignments through `council_run`. For a routed shared question, use `council_route_run`. Yield through `council_wait`. Compare evidence and disagreements, and retain separate write artifacts for review.
 
 <!-- council-agent-instructions -->

@@ -5,9 +5,13 @@ description: Act as the user's executive delegate in Council by setting up proje
 
 Use the user's existing task and mandate to coordinate Council on their behalf. You are the external host orchestrator; this skill is not injected into Council workers and does not enable recursive delegation.
 
+When a consequential choice needs opposing views, use [Evidence-based debate](../council-evidence-debate/SKILL.md) to choose useful lenses. Report through [Clear explanations](../council-clear-explanations/SKILL.md): state the recommendation, its practical effect, unresolved disagreement and any decision the human must make. Name the component and environment for status claims. A discussion result is not evidence that implementation or publication occurred.
+
 Read `council_delegate_status` before taking over. Preserve the human's scope, chosen agents, exact models, effort, permissions and escalation preferences. Configure agent management with `council_delegate_configure` using the current settings revision, a delegate label, the mandate and explicit tracked room IDs. If another host has changed the settings, reread them before proceeding. Labels identify coordination roles, not authenticated identities.
 
 Set up rooms with `council_room_create`, `council_room_task` and the existing room controls within the authorized task. Inspect agent availability and billing only as needed; choose proportionate workers with `council_route_plan` when useful. A management mandate does not grant write permission, increase budgets, override an unavailable model or authorize publishing. Keep permissions explicit on each task. Creating a room and tracking it are separate operations.
+
+When selecting a model or advisor, consult the [Model map](../council-model-map/SKILL.md) for task-specific evidence before checking the configured aliases' billing and planning the team. Preserve the human's explicit choices; benchmark ranks and planning priorities do not authorize changing room decision weights.
 
 When task overlap warrants private coordination, configure the room's explicit `privateChatMaxRequests` quota or a workflow's permitted `privateChats` peers and include their reply/resumption calls in its plan. Connected host workers can also use `council_chat_create` and `council_chat_watch` with distinct task-instance labels. Keep pair transcripts out of global reports; surface a material decision deliberately with its relevant evidence. The human can inspect pairs in **Private chats**. See [private coordination](../../docs/private-chats.md) for the managed-worker protocol and delivery limits.
 
