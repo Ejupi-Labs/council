@@ -348,14 +348,20 @@ test('unmerged registered gitlinks preserve dirty child evidence and allow clean
     writeFileSync(join(source, 'file.txt'), `Child commit ${index}\n`); localGit(source, ['add', 'file.txt']); localGit(source, ['commit', '--quiet', '-m', `child ${index}`]);
     commits.push(localGit(source, ['rev-parse', 'HEAD']).toString().trim());
   }
-  git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', source, 'vendor');
+  git('-c', 'core.autocrlf=false', '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', source, 'vendor');
   localGit(join(root, 'vendor'), ['checkout', '--quiet', commits[0]]); git('add', 'vendor'); git('commit', '--quiet', '-m', 'register unmerged submodule fixture');
   git('config', 'submodule.vendor.ignore', 'all'); git('config', 'diff.ignoreSubmodules', 'all');
   const workspace = await manager.create('unmerged-submodule', 'codex');
-  localGit(workspace.path, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--quiet', '--', 'vendor']);
+  localGit(workspace.path, ['-c', 'core.autocrlf=false', '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--quiet', '--', 'vendor']);
   const child = join(workspace.path, 'vendor');
   assert.match(readFileSync(join(child, '.git'), 'utf8'), /^gitdir: /, 'The registered child uses Git-managed metadata rather than an embedded .git directory.');
   localGit(child, ['config', 'core.autocrlf', 'false']); localGit(child, ['config', 'core.fsmonitor', 'false']); localGit(child, ['config', 'core.untrackedCache', 'false']);
+  const initialChildStatus = localGit(child, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+  if (initialChildStatus.length) assert.fail('The fixture child must start clean: ' + JSON.stringify({
+    parentStatus: localGit(workspace.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none']).toString(),
+    childStatus: initialChildStatus.toString(), childLocalAutocrlf: localGit(child, ['config', '--local', '--get', 'core.autocrlf']).toString().trim(),
+    childFileBytes: readFileSync(join(child, 'file.txt')).toString('hex'), committedFileBytes: localGit(child, ['show', 'HEAD:file.txt']).toString('hex'),
+  }));
   writeFileSync(join(workspace.path, 'base.txt'), 'Reviewed parent conflict body.\n');
   const artifact = await manager.export(workspace), previous = readFileSync(artifact.patchPath);
   localGit(workspace.path, ['update-index', '--force-remove', 'vendor']);
