@@ -337,6 +337,55 @@ test('dirty submodule contents never publish a parent patch or pass legacy clean
   assert.ok(existsSync(join(workspace.path, 'vendor', 'untracked.txt'))); assert.ok(existsSync(join(root, 'vendor', 'file.txt')));
 });
 
+test('unmerged registered gitlinks preserve dirty child evidence and allow clean references with ordinary conflict bodies', { timeout: 60_000 }, async t => {
+  const { manager, root, dir, git } = fixture(t);
+  const source = join(dir, 'unmerged-source'); mkdirSync(source);
+  const localGit = (cwd, args, input) => execFileSync('git', ['-C', cwd, ...args], { input, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  localGit(source, ['init', '--quiet']); localGit(source, ['config', 'user.name', 'Offline Unmerged Test']); localGit(source, ['config', 'user.email', 'offline@example.invalid']);
+  localGit(source, ['config', 'core.autocrlf', 'false']); localGit(source, ['config', 'commit.gpgsign', 'false']);
+  const commits = [];
+  for (let index = 0; index < 3; index++) {
+    writeFileSync(join(source, 'file.txt'), `Child commit ${index}\n`); localGit(source, ['add', 'file.txt']); localGit(source, ['commit', '--quiet', '-m', `child ${index}`]);
+    commits.push(localGit(source, ['rev-parse', 'HEAD']).toString().trim());
+  }
+  git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', source, 'vendor');
+  localGit(join(root, 'vendor'), ['checkout', '--quiet', commits[0]]); git('add', 'vendor'); git('commit', '--quiet', '-m', 'register unmerged submodule fixture');
+  git('config', 'submodule.vendor.ignore', 'all'); git('config', 'diff.ignoreSubmodules', 'all');
+  const workspace = await manager.create('unmerged-submodule', 'codex');
+  localGit(workspace.path, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--quiet', '--', 'vendor']);
+  const child = join(workspace.path, 'vendor');
+  assert.match(readFileSync(join(child, '.git'), 'utf8'), /^gitdir: /, 'The registered child uses Git-managed metadata rather than an embedded .git directory.');
+  localGit(child, ['config', 'core.autocrlf', 'false']); localGit(child, ['config', 'core.fsmonitor', 'false']); localGit(child, ['config', 'core.untrackedCache', 'false']);
+  writeFileSync(join(workspace.path, 'base.txt'), 'Reviewed parent conflict body.\n');
+  const artifact = await manager.export(workspace), previous = readFileSync(artifact.patchPath);
+  localGit(workspace.path, ['update-index', '--force-remove', 'vendor']);
+  localGit(workspace.path, ['update-index', '-z', '--index-info'], Buffer.from(commits.map((sha, index) => `160000 ${sha} ${index + 1}\tvendor\0`).join('')));
+  for (const dirty of ['tracked', 'untracked']) await t.test(dirty, async () => {
+    const path = join(child, dirty === 'tracked' ? 'file.txt' : 'untracked.txt'), evidence = `Retained ${dirty} unmerged child evidence.\n`;
+    writeFileSync(path, evidence);
+    const status = localGit(workspace.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none']).toString().split('\0').find(entry => entry.startsWith('u '));
+    assert.match(status ?? '', dirty === 'tracked' ? /^u UU S[.C]M[.U] 160000 / : /^u UU S[.C][.M]U 160000 /);
+    await assert.rejects(manager.export(artifact), /Uncommitted submodule files cannot be preserved/);
+    assert.deepEqual(readFileSync(artifact.patchPath), previous, 'A failed unmerged-child export retains the previous complete patch.');
+    await assert.rejects(manager.cleanup(artifact, { reviewed: true }), /Uncommitted submodule files cannot be preserved/);
+    assert.equal(readFileSync(path, 'utf8'), evidence); assert.ok(existsSync(workspace.path));
+    if (dirty === 'tracked') localGit(child, ['reset', '--hard', commits[0]]); else rmSync(path);
+  });
+  await t.test('clean advanced reference and ordinary unmerged file', async () => {
+    localGit(child, ['checkout', '--quiet', commits[1]]);
+    const blob = localGit(workspace.path, ['rev-parse', `${workspace.baseHead}:base.txt`]).toString().trim();
+    localGit(workspace.path, ['update-index', '--force-remove', 'base.txt']);
+    localGit(workspace.path, ['update-index', '-z', '--index-info'], Buffer.from([1, 2, 3].map(stage => `100644 ${blob} ${stage}\tbase.txt\0`).join('')));
+    const status = localGit(workspace.path, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none']).toString();
+    assert.match(status, /u UU S[.C]\.\. 160000 /); assert.match(status, /u UU N\.\.\. 100644 /);
+    assert.equal(localGit(child, ['rev-parse', 'HEAD']).toString().trim(), commits[1]);
+    assert.equal(localGit(child, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=none']).length, 0);
+    const clean = await manager.export(artifact), patch = readFileSync(clean.patchPath, 'utf8');
+    assert.equal(clean.exportStatus, 'ready'); assert.ok(patch.includes(`+Subproject commit ${commits[1]}`)); assert.doesNotMatch(patch, /-dirty/);
+    assert.match(patch, /\+Reviewed parent conflict body\./); git('apply', '--cached', '--check', clean.patchPath);
+  });
+});
+
 test('a committed nested project retains its own cwd and an uncommitted directory fails before preparation effects', async t => {
   const { root, git, dir } = fixture(t);
   const nested = join(root, 'packages', 'selected'); mkdirSync(nested, { recursive: true });
@@ -646,15 +695,21 @@ async function embeddedRepository(t, stage) {
   const value = fixture(t);
   if (stage === 'regular' || stage === 'renamed' || stage === 'symlink') {
     const name = stage === 'renamed' ? 'original' : 'nested';
-    writeFileSync(join(value.root, name), 'Original tracked candidate contents.\n');
-    if (stage === 'symlink') {
+    if (stage === 'symlink' && process.platform !== 'win32') {
+      value.git('config', 'core.symlinks', 'true');
+      symlinkSync('original-tracked-target', join(value.root, name));
+      assert.equal((await fsPromises.lstat(join(value.root, name))).isSymbolicLink(), true);
+      value.git('add', '--', name);
+    } else if (stage === 'symlink') {
+      writeFileSync(join(value.root, name), 'Original tracked candidate contents.\n');
       value.git('config', 'core.symlinks', 'false');
       const hash = value.git('hash-object', '-w', '--', name).trim();
       value.git('update-index', '--add', '--cacheinfo', '120000,' + hash + ',' + name);
-    } else value.git('add', '--', name);
+    } else { writeFileSync(join(value.root, name), 'Original tracked candidate contents.\n'); value.git('add', '--', name); }
     value.git('commit', '--quiet', '-m', 'tracked candidate');
   }
   const workspace = await value.manager.create('embedded-' + stage, 'codex');
+  if (stage === 'symlink' && process.platform !== 'win32') assert.equal((await fsPromises.lstat(join(workspace.path, 'nested'))).isSymbolicLink(), true);
   writeFileSync(join(workspace.path, 'base.txt'), 'Prior complete patch.\n');
   const previous = await value.manager.export(workspace), patch = readFileSync(previous.patchPath);
   const nested = join(workspace.path, 'nested');
@@ -694,6 +749,12 @@ for (const stage of ['untracked', 'intent', 'regular', 'renamed', 'symlink']) {
     const head = childGit('rev-parse', 'HEAD').trim(), exported = await manager.export(previous), patch = readFileSync(exported.patchPath, 'utf8');
     assert.equal(exported.exportStatus, 'ready'); assert.ok(patch.includes('+Subproject commit ' + head));
     assert.equal(patch.includes(head + '-dirty'), false); git('apply', '--check', exported.patchPath);
+    if (stage === 'symlink') {
+      const native = execFileSync('git', ['-C', previous.path, 'diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv',
+        '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', '--ignore-submodules=none', '--submodule=short', previous.baseCommit, '--'], { windowsHide: true });
+      assert.deepEqual(readFileSync(exported.patchPath), native, 'Council retains the native Git patch bytes for this type transition.');
+      git('apply', '--index', '--check', exported.patchPath);
+    }
   });
 }
 

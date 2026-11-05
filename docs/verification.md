@@ -1,5 +1,13 @@
 # Council verification record
 
+## Unmerged gitlink evidence — 5 November 2026, development candidate
+
+The `1.3.0-dev.7` candidate extends the existing dirty-submodule refusal to porcelain type `u` during export and cleanup. An actual registered submodule with standard Gitfile metadata previously emitted a ready `<SHA>-dirty` gitlink patch while omitting dirty tracked or untracked child files; native patch checking and application accepted that incomplete artifact. The new checks refuse both cases before replacing the prior reviewed patch and preserve the child worktree. Clean advanced references and complete ordinary unmerged-file bodies remain exportable.
+
+Local parser/environment checks passed **12/12**, and the real unmerged fixture passed **4/4**. The strengthened clean symlink control passed plain and indexed application checks and matched native Git's patch bytes. Full local and hosted qualification of this candidate are pending.
+
+The preceding `376e75d` hosted jobs passed Windows and all but one test on Linux/macOS. Both Unix failures were the same positive fixture: its index recorded a symlink while `core.symlinks=false` left a regular physical file, which native `git apply --check` rejected as the wrong type. POSIX fixtures now use an actual physical symlink; Windows retains privilege-free index emulation. The application assertions remain and are strengthened with indexed checking. The new full magic-prefixed filename export/application passed in both preceding Unix jobs; Linux also passed raw-byte ordinary filename export and explicit unrepresentable nested-directory refusal. macOS reported its actual `EILSEQ` capability skips.
+
 ## Retained work and exact failure outcomes — 4 November 2026, 23:53 UTC
 
 The final `1.3.0-dev.6` local build passed **1,134 tests: 1,127 passed, seven platform skips, zero failures**, in 518.3 seconds on Windows ARM64. TypeScript, seven CI-helper checks, workflow lint, the skill validator and the unchanged runtime dependency audit passed. The exact current room suite passed **141/141**, including the offline process harness. Hosted qualification of this checkpoint is separate and pending.

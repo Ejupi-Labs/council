@@ -6,7 +6,7 @@ const hash = 'a'.repeat(40), zero = '0'.repeat(40), nul = Buffer.from([0]);
 const ordinary = (path, sub = 'N...') => Buffer.concat([Buffer.from(`1 .M ${sub} 100644 100644 100644 ${hash} ${hash} `), Buffer.from(path), nul]);
 const rename = (path, original, sub = 'N...', score = 'R100') => Buffer.concat([Buffer.from(`2 R. ${sub} 100644 100644 100644 ${hash} ${hash} ${score} `), Buffer.from(path), nul, Buffer.from(original), nul]);
 const untracked = path => Buffer.concat([Buffer.from('? '), Buffer.from(path), nul]);
-const unmerged = path => Buffer.from(`u UU N... 100644 100644 100644 100644 ${hash} ${hash} ${zero} ${path}\0`);
+const unmerged = (path, sub = 'N...', fileMode = '100644') => Buffer.from(`u UU ${sub} ${fileMode} ${fileMode} ${fileMode} ${fileMode} ${hash} ${hash} ${zero} ${path}\0`);
 
 test('status discovery copies exact raw pathname bytes and excludes tracked, ignored and header records', () => {
   const raw = Buffer.from([0xff, 0x80, 32, 9, 10, 34, 92]), literal = Buffer.from('nested new/雪-é.txt');
@@ -30,6 +30,18 @@ test('dirty submodule flags fail before returning paths while committed gitlink 
     }
   }
   assert.deepEqual(gitStatusUntrackedPaths(Buffer.concat([ordinary('vendor', 'SC..'), untracked('new')])), Buffer.from('new\0'));
+});
+
+test('unmerged gitlinks reject dirty child evidence while clean references and regular conflicts remain parseable', () => {
+  for (const sub of ['S.M.', 'S..U', 'SCM.', 'SC.U', 'SCMU']) {
+    const status = Buffer.concat([untracked('must-not-return'), unmerged('conflicted submodule', sub, '160000')]);
+    assert.throws(() => gitStatusDiscovery(status), /Uncommitted submodule files cannot be preserved/);
+  }
+  const clean = Buffer.concat([unmerged('clean reference', 'SC..', '160000'), unmerged('ordinary conflict'), untracked('actual')]);
+  assert.deepEqual(gitStatusDiscovery(clean), { untracked: Buffer.from('actual\0'), gitlinks: Buffer.alloc(0) });
+  for (const malformed of [unmerged('missing-nul').subarray(0, -1), Buffer.from(`u UU N... 100644 100644 100644 ${hash} ${hash} ${zero} broken\0`), unmerged('bad-mode', 'N...', '160008')]) {
+    assert.throws(() => gitStatusDiscovery(Buffer.concat([untracked('must-not-return'), malformed])), /Malformed or incomplete/);
+  }
 });
 
 test('independent component budgets accept combined output beyond either single limit without shortening data', () => {

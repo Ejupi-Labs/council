@@ -308,7 +308,7 @@ export class GitWorkspaces {
         const status = (await this.git(manifest.path, ['status', '--porcelain=v2', '-z', '--untracked-files=no', '--ignore-submodules=none'], undefined, signal)).toString('utf8').split('\0');
         for (let index = 0; index < status.length; index++) {
             const entry = status[index];
-            const submodule = /^[12] [^ ]+ (S[.C][.M][.U]) /.exec(entry)?.[1];
+            const submodule = /^[12u] [^ ]+ (S[.C][.M][.U]) /.exec(entry)?.[1];
             if (submodule && (submodule[2] === 'M' || submodule[3] === 'U')) {
                 throw new Error(DIRTY_SUBMODULE_ERROR);
             }

@@ -32,7 +32,7 @@ function trackedEntry(output: Buffer, start: number, end: number, kind: number):
   if (next - position !== 4 || !(submodule
     ? (output[position + 1] === 46 || output[position + 1] === 67) && (output[position + 2] === 46 || output[position + 2] === 77) && (output[position + 3] === 46 || output[position + 3] === 85)
     : output[position] === 78 && output[position + 1] === 46 && output[position + 2] === 46 && output[position + 3] === 46)) malformed();
-  if (kind !== 117 && submodule && (output[position + 2] === 77 || output[position + 3] === 85)) throw new Error(DIRTY_SUBMODULE_ERROR);
+  if (submodule && (output[position + 2] === 77 || output[position + 3] === 85)) throw new Error(DIRTY_SUBMODULE_ERROR);
   position = next + 1;
   for (let index = 0; index < (kind === 117 ? 4 : 3); index++) { next = tokenEnd(output, position, end); mode(output, position, next); position = next + 1; }
   for (let index = 0; index < (kind === 117 ? 3 : 2); index++) { next = tokenEnd(output, position, end); hash(output, position, next); position = next + 1; }

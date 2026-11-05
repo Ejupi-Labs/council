@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refuse dirty tracked or untracked child evidence in unmerged gitlinks during patch export and cleanup; preserve the previous reviewed patch while retaining complete ordinary conflict-file bodies and clean commit references.
+
 - Retain admitted workflow identities, exact call accounting, terminal task results and real patch/worktree evidence through handled room-publication rollback and lost acknowledgements. Preserve failed-room inspection without replay and reconcile shutdown evidence without replacing newer guidance.
 - Reject dirty embedded Git repositories before parent patch publication, including intent entries, regular/symlink replacements and rename targets. Refuse redirected child metadata and treat discovered filenames literally despite inherited pathspec selectors.
 - Show accurate completed, failed, cancelled and approval guidance, and distinguish initial full-history retries from newer-message checks while preserving drafts and loaded pages.
