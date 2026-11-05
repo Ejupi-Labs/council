@@ -1,8 +1,8 @@
 # Data model: Workspace foundation
 
-**Feature**: 001-workspace-foundation  
-**Branch**: `refactor`  
-**Contract version**: API 1; application `2.0.0-dev`  
+**Feature**: 001-workspace-foundation
+**Branch**: `refactor`
+**Contract version**: API 1; application `2.0.0-dev`
 **Status**: Design; not implementation or live-provider qualification evidence
 
 This model implements the preparation journey in [spec.md](spec.md). It introduces no task

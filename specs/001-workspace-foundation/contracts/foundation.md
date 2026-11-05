@@ -1,9 +1,9 @@
 # Foundation API and CLI contract
 
-**Feature**: 001-workspace-foundation  
-**Branch**: `refactor`  
-**API**: 1, rooted at `/api/v1`  
-**Application**: `2.0.0-dev`  
+**Feature**: 001-workspace-foundation
+**Branch**: `refactor`
+**API**: 1, rooted at `/api/v1`
+**Application**: `2.0.0-dev`
 **Status**: Implementable design; no implementation or live-agent qualification is claimed
 
 The local UI and CLI call the same application services and return the same durable facts and
