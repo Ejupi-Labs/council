@@ -246,7 +246,14 @@ async function main(): Promise<void> {
       print(outcome);
       if (outcome.status !== 'completed') process.exitCode = 1;
     }
-    else if (command === 'billing') print(values.agent ? { ...service.billing.get(values.agent), availability: service.billing.availability(values.agent) } : service.billingView());
+    else if (command === 'billing') {
+      if (!values.agent) print(service.billingView());
+      else {
+        const record = service.billing.get(values.agent), now = Date.now();
+        print({ ...record, availability: service.billing.availabilityFor(record, now),
+          subscriptionProtection: service.billing.subscriptionProtectionFor(record, now) });
+      }
+    }
     else if (command === 'billing-set' || command === 'billing-import') {
       if (!values.agent?.trim() || !values['input-file']) throw new Error(`${command} requires --agent and --input-file.`);
       const settings = readJsonFile(resolve(workspace, values['input-file']), Infinity) as any;

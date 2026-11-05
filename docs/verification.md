@@ -1,5 +1,25 @@
 # Council verification record
 
+## Remote update and local live qualification — 5 November 2026
+
+The Windows x64 checkout advanced from `0903738` to remote `28ad947` by fast-forward, incorporating 17 commits and Council **1.3.0**. No local source changes were present before the update. The pre-upgrade state had no active workflow or owned room and its registered older host was no longer running. An offline copy of all 142 state files (19,886,136 bytes) was verified before opening the newer stores. Workflow state upgraded from schema 5 to 6 and delegation from 2 to 3; retained rooms and billing remained compatible.
+
+This local qualification includes a subsequent CLI billing fix: the single-agent read previously combined its returned record with a second database read for availability and omitted the protection receipt. A real CLI child with an interleaved second SQLite writer reproduced a record showing five requests while classifying a newer zero balance. Three regressions now verify one captured observation, one evaluation time across expiry, and unknown/disabled-protection behavior. The final patched build passed **1,221 tests: 1,213 passed, eight platform skips, zero failures**, in 288.034 seconds on Node 24.22.1 with SQLite 3.53.4. Seven skips require POSIX semantics; one file-symlink case requires Windows Developer Mode or elevation. Build, type checking and whitespace checks passed.
+
+The user requested real tests with the installed local agents. All four allowed native defaults were preserved, and DSH was disabled in the live harness. Native Claude, Codex and Antigravity plus Junie's direct ACP transport all returned completed results in the version-file smoke task. Claude, Codex and Antigravity matched its exact response marker. Junie returned the marker with an additional preamble, so that one exact-format acceptance criterion **did not pass**. Its full text remains preserved; the parser was not weakened or changed to guess a final answer. Junie subsequently returned valid strict JSON in both advisor and room-ballot checks.
+
+| Live scenario | Actual provider calls | Observed result |
+| --- | --- | --- |
+| Individual version-file smoke tasks: Claude, Junie, Antigravity, Codex | 4 | All completed; three exact markers and the Junie formatting caveat above. |
+| Claude private request → Junie read-only reply → Claude resumption | 3 | Completed with the expected arithmetic marker. A worker-generated private canary was reproduced in the pair reply and absent from public workflow evidence. |
+| Junie advisor request → Codex opinion → Junie resumption | 3 | Completed with one exact advisor envelope, the actual peer answer and the expected final marker. |
+| Foreground `room-discuss`: Claude/Junie ballots → automatic task with private peer exchange | 5 | CLI exit zero; approved task completed with exactly five calls. Pair history retained the room ID and the private canary stayed out of shared room history. |
+| Claude → Antigravity pipeline | 2 | Completed; Antigravity reproduced a fresh nonce from Claude's actual transcript and acknowledged receipt. |
+
+These 17 calls were read-only integration tasks, not a live write-workflow or a claim of arbitrary task correctness. No vendor credentials were read or copied. Complete runs, private evidence, CLI results and the ignored qualification harness remain under `.council/live-qualification-2026-11-05*`; public evidence does not contain the private canaries.
+
+Final health checks found zero active runs, call slots or queued waiters, no open dispatch quarantine, and `ok` integrity for all five collaboration databases. A separate post-upgrade all-store snapshot passed hash, schema and integrity verification with no issues. It retains per-database consistency rather than claiming an atomic cross-store snapshot; the earlier offline backup also retains the surrounding state files.
+
 ## 1.3 release verification — 5 November 2026
 
 The exact stable commit `9834308` passed **1,218 local tests: 1,211 passed, seven platform skips, zero failures**, in 487.599 seconds. All six jobs succeeded in [Verify run 41961330657](https://github.com/Ejupi-Labs/council/actions/runs/41961330657), covering Node 24 and 26 on Windows, Linux and macOS.

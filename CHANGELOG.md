@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Classify single-agent CLI billing from one captured quota record and evaluation time, including subscription protection. Concurrent account updates or an expiry boundary no longer produce mixed observations in one response.
+
 ## 1.3.0 — 5 November 2026
 
 Council 1.3 brings project rooms, private peer exchanges, human delegation, model routing and read-only advisors into one local workflow. Rooms execute approved tasks in dependency order and retain evidence and isolated patches for review. Shared scheduling, persistence, backups and cleanup recovery have also been strengthened.
