@@ -17,6 +17,11 @@ async function boundedMessage(child) {
   try{return await Promise.race([once(child,'message'),once(child,'exit').then(([code])=>{throw new Error('Owned writer exited before admission setup: '+code);}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Owned writer did not confirm its lock within 3 seconds.')),3000);})]);}
   finally{clearTimeout(timer);}
 }
+async function boundedExit(promise) {
+  let timer;
+  try { return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Owned acquisition writer did not drain within 3 seconds.')),3000);})]); }
+  finally { clearTimeout(timer); }
+}
 function fixture(t) {
   const parent=realpathSync.native(tmpdir()), root=mkdtempSync(join(parent,'council-slot-acquisition-'));
   const store=new CouncilStore(join(root,'.council')); store.registerInstance('owner',process.pid); store.bindInstance('owner');
@@ -24,31 +29,51 @@ function fixture(t) {
   const children=[], failures=[], attempts=[], native=store.acquireSlot, transaction=store.transaction;
   const claim=id=>{const now=new Date().toISOString();store.saveRun({id,input,status:'queued',createdAt:now,updatedAt:now,steps:[]});store.claimRun(id,'owner');};claim('run');
   store.acquireSlot=function(...args){attempts.push(args);return native.apply(this,args);};
-  store.transaction=function(...args){try{return transaction.apply(this,args);}catch(error){if(admissionRefusalOrigin(error))failures.push(error);throw error;}};
-  t.after(async()=>{
-    for(const child of children)if(child.exitCode===null){child.kill();await once(child,'exit').catch(()=>{});}
-    store.acquireSlot=native;store.transaction=transaction;
-    if(store.db.isTransaction)store.db.exec('ROLLBACK');
-    for(const row of store.db.prepare("SELECT id FROM runs WHERE owner_instance='owner' AND status IN ('queued','running')").all()){
-      const run=store.getRun(row.id);store.finalizeRun({...run,status:'cancelled',error:'Inspected offline acquisition fixture; no task replay.',updatedAt:new Date().toISOString()});
+  store.transaction=function(...args){try{return transaction.apply(this,args);}catch(error){
+    if(admissionRefusalOrigin(error)){
+      failures.push(error);
+      for(const writer of children)if(writer.release&&!writer.releaseRequested){writer.releaseRequested=true;queueMicrotask(()=>{assert.equal(store.db.isTransaction,false);writer.release();});}
     }
-    for(const row of store.db.prepare("SELECT token FROM slots WHERE instance_id='owner'").all())store.releaseSlot(row.token,'owner');
-    store.unregisterInstance('owner');store.close();
+    throw error;
+  }};
+  t.after(async()=>{
+    const failures=[];
+    for(const writer of children){
+      try{
+        if(writer.child.exitCode===null&&writer.child.signalCode===null){if(writer.release)writer.release();else writer.child.kill();}
+        const [code,signal]=await boundedExit(writer.exited);assert.equal(code,0);assert.equal(signal,null);
+      }
+      catch(error){failures.push(error);writer.child.kill();try{await boundedExit(writer.exited);}catch(failure){failures.push(failure);}}
+    }
+    store.acquireSlot=native;store.transaction=transaction;
+    try{
+      if(store.db.isTransaction)store.db.exec('ROLLBACK');
+      for(const row of store.db.prepare("SELECT id FROM runs WHERE owner_instance='owner' AND status IN ('queued','running')").all()){
+        const run=store.getRun(row.id);store.finalizeRun({...run,status:'cancelled',error:'Inspected offline acquisition fixture; no task replay.',updatedAt:new Date().toISOString()});
+      }
+      for(const row of store.db.prepare("SELECT token FROM slots WHERE instance_id='owner'").all())store.releaseSlot(row.token,'owner');
+      store.unregisterInstance('owner');
+    }catch(error){failures.push(error);}finally{try{store.close();}catch(error){failures.push(error);}}
+    if(failures.length)throw new AggregateError(failures,'Owned acquisition fixture cleanup failed; inspect the retained fixture.');
     assert.equal(dirname(realpathSync.native(root)),parent);assert.ok(basename(root).startsWith('council-slot-acquisition-'));
     rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
   });
   return {root,store,input,claim,attempts,failures,native,transaction,
-    async quarantine(ms=750){
-      const filename=join(root,'incident-writer.mjs');
-      writeFileSync(filename,`import{CouncilStore}from${JSON.stringify(new URL('../dist/store.js',import.meta.url).href)};const store=new CouncilStore(process.argv[2]);store.registerInstance('reporter',process.pid);const transaction=store.transaction;store.transaction=function(operation,...args){return transaction.call(this,()=>{process.send('locked');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.argv[3]));return operation();},...args);};store.reportProcessCleanupIncident({reportKey:'synthetic-owned-observation',instanceId:'reporter',stage:'agent_call'});store.transaction=transaction;store.unregisterInstance('reporter');store.close();process.disconnect();`);
-      const child=fork(filename,[join(root,'.council'),String(ms)],{windowsHide:true,stdio:['ignore','ignore','pipe','ipc']});children.push(child);
-      const exited=once(child,'exit');assert.equal((await boundedMessage(child))[0],'locked');return {child,exited};
+    async quarantine(){
+      const releasePath=join(root,'incident-writer.release'),filename=new URL('./fixtures/admission-writer.mjs',import.meta.url);
+      const child=fork(filename,[join(root,'.council'),releasePath,'quarantine',new URL('../dist/store.js',import.meta.url).href],{windowsHide:true,stdio:['ignore','ignore','pipe','ipc']});
+      child.stderr.resume();
+      const exited=once(child,'close'),writer={child,exited,release:()=>writeFileSync(releasePath,'release')};children.push(writer);
+      assert.equal((await boundedMessage(child))[0],'locked');return writer;
     },
-    async lock(ms=750,releaseSql=''){
-      const filename=join(root,'writer-'+children.length+'.mjs');
-      writeFileSync(filename,`import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.argv[2]);db.exec('PRAGMA busy_timeout=250;BEGIN IMMEDIATE');process.send('locked');setTimeout(()=>{db.exec(${JSON.stringify(releaseSql)});db.exec('COMMIT');db.close();process.disconnect();},Number(process.argv[3]));`);
-      const child=fork(filename,[store.databasePath,String(ms)],{windowsHide:true,stdio:['ignore','ignore','pipe','ipc']});children.push(child);
-      const exited=once(child,'exit');assert.equal((await boundedMessage(child))[0],'locked');return {child,exited};
+    async lock(ms,releaseSql=''){
+      const releasePath=join(root,'writer-'+children.length+'.release');let filename,args;
+      if(ms===undefined){filename=new URL('./fixtures/admission-writer.mjs',import.meta.url);args=[store.databasePath,releasePath,releaseSql?'owner-loss':'plain'];}
+      else{filename=join(root,'writer-'+children.length+'.mjs');writeFileSync(filename,`import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.argv[2]);db.exec('PRAGMA busy_timeout=250;BEGIN IMMEDIATE');process.send('locked');setTimeout(()=>{db.exec(${JSON.stringify(releaseSql)});db.exec('COMMIT');db.close();process.disconnect();},Number(process.argv[3]));`);args=[store.databasePath,String(ms)];}
+      const child=fork(filename,args,{windowsHide:true,stdio:['ignore','ignore','pipe','ipc']});
+      child.stderr.resume();
+      const exited=once(child,'close'),writer={child,exited,...(ms===undefined?{release:()=>writeFileSync(releasePath,'release')}:{})};children.push(writer);
+      assert.equal((await boundedMessage(child))[0],'locked');return writer;
     },
     settings(overrides={}){return {version:1,workspaceRoot:root,stateDir:join(root,'.council'),backend:'mock',maxConcurrency:1,timeoutMs:2000,maxOutputBytes:4096,maxCalls:20,agents:{codex:{enabled:true,profile:'codex'}},...overrides};}
   };
@@ -93,7 +118,7 @@ test('abort after a genuine refusal retains the exact cancellation reason and pe
 });
 
 test('fresh owner metadata after lock release prevents slot admission',{timeout:10000},async t=>{
-  const wire=fixture(t), writer=await wire.lock(750,"UPDATE runs SET owner_instance=NULL, owner_pid=NULL WHERE id='run'");
+  const wire=fixture(t), writer=await wire.lock(undefined,"UPDATE runs SET owner_instance=NULL, owner_pid=NULL WHERE id='run'");
   await assert.rejects(wire.store.acquireSlotWithRetry('owner','run',1,'owner-check'),/does not own/);await writer.exited;
   assert.ok(wire.failures.length>0);assert.equal(wire.store.health().counts.slots,0);
 });
@@ -115,7 +140,7 @@ test('a blocking fresh check cannot extend the fixed contention deadline',{timeo
 test('opaque state-only proof cannot be consumed while an outer synchronous attempt remains active',{timeout:10000},async t=>{
   const wire=fixture(t), writer=await wire.lock(), outer=newStateAdmissionAttempt(wire.store.admissionConnection(),()=>{});let consumed, innerError;
   assert.throws(()=>runAdmissionAttempt(outer,()=>{const inner=newStateAdmissionAttempt(wire.store.admissionConnection(),()=>{});try{runAdmissionAttempt(inner,()=>admissionTransaction(wire.store.db,()=>{}));}catch(error){innerError=error;consumed=consumeAdmissionRefusal(inner,error);throw error;}}),error=>error===innerError);
-  assert.equal(consumed,false);await writer.exited;
+  assert.equal(consumed,false);assert.ok(admissionRefusalOrigin(innerError));assert.equal(wire.store.db.isTransaction,false);writer.release();await writer.exited;
 });
 
 test('engine retries proven pre-call contention once per attempt and dispatches only after durable acquisition',{timeout:15000},async t=>{

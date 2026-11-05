@@ -21,6 +21,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Probe native SQLite busy policy on macOS Node 24
+        if: matrix.os == 'macos-latest' && matrix.node == 24
+        run: node scripts/sqlite-busy-probe.mjs
       - run: npm test
       - run: npm run audit:runtime
       - run: node --test .github/scripts/endurance.test.mjs .github/scripts/check-generated.test.mjs

@@ -35,16 +35,38 @@ function fixture(t, { tasks = 2, maxConcurrency = 2, handler } = {}) {
   };
   service.store.transaction = function (...args) {
     try { return originals.transaction.apply(this, args); }
-    catch (error) { if (admissionRefusalOrigin(error)) refusals.push(error); throw error; }
+    catch (error) {
+      if (admissionRefusalOrigin(error)) {
+        refusals.push(error);
+        for (const writer of writers) if (writer.release && !writer.releaseRequested) {
+          writer.releaseRequested = true;
+          queueMicrotask(() => {
+            assert.equal(manager.store.db.isTransaction, false); assert.equal(service.store.db.isTransaction, false);
+            writer.release();
+          });
+        }
+      }
+      throw error;
+    }
   };
   t.after(async () => {
+    const failures = [];
     service.start = originals.start; service.store.createRun = originals.createRun; service.store.transaction = originals.transaction; service.assertDispatchAllowed = originals.allowed; manager.launch = originals.launch;
-    for (const writer of writers) if (writer.exitCode === null) { writer.kill(); await once(writer, 'exit').catch(() => {}); }
-    // Only the inspected synthetic unknown-commit fixture may need explicit settlement.
-    for (const summary of service.store.listRunSummaries(100)) if (summary.status === 'queued' && !service.jobs.has(summary.id)) {
-      const run = service.store.getRun(summary.id); service.store.finalizeRun({ ...run, status: 'failed', error: 'Inspected synthetic fixture orphan; no replay.', updatedAt: new Date().toISOString() });
+    for (const writer of writers) {
+      try {
+        if (writer.child.exitCode === null && writer.child.signalCode === null) { if (writer.release) writer.release(); else writer.child.kill(); }
+        const [code, signal] = await bounded(writer.exited, 'Owned admission writer drain'); assert.equal(code, 0); assert.equal(signal, null);
+      }
+      catch (error) { failures.push(error); writer.child.kill(); try { await bounded(writer.exited, 'Owned admission writer termination'); } catch (failure) { failures.push(failure); } }
     }
-    await manager.close(); for (const peer of peers) await peer.close(); await service.close();
+    // Only the inspected synthetic unknown-commit fixture may need explicit settlement.
+    try {
+      for (const summary of service.store.listRunSummaries(100)) if (summary.status === 'queued' && !service.jobs.has(summary.id)) {
+        const run = service.store.getRun(summary.id); service.store.finalizeRun({ ...run, status: 'failed', error: 'Inspected synthetic fixture orphan; no replay.', updatedAt: new Date().toISOString() });
+      }
+    } catch (error) { failures.push(error); }
+    for (const host of [manager, ...peers, service]) try { await host.close(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, 'Owned admission fixture cleanup failed; inspect the retained fixture.');
     assert.equal(dirname(realpathSync.native(root)), parent); assert.ok(basename(root).startsWith('council-admission-loop-'));
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
@@ -54,17 +76,27 @@ function fixture(t, { tasks = 2, maxConcurrency = 2, handler } = {}) {
     async ready() { manager.startDiscussion(room.id); assert.equal((await manager.wait(room.id, 10000)).status, 'ready'); },
     peer() { const peer = new RoomManager(service); peers.push(peer); return peer; },
     async lock(ms) {
-      const filename = join(root, 'writer-' + writers.length + '.mjs');
-      writeFileSync(filename, `import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync(process.argv[2]);db.exec('PRAGMA busy_timeout=250; BEGIN IMMEDIATE');process.send('locked');setTimeout(()=>{db.exec('ROLLBACK');db.close();process.send('released');process.disconnect();},Number(process.argv[3]));`);
-      const child = fork(filename, [join(service.config.stateDir, 'state.db'), String(ms)], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] }); writers.push(child);
-      const exited = once(child, 'exit'), locked = once(child, 'message');
-      assert.equal((await bounded(locked, 'Native writer acquisition'))[0], 'locked'); return { child, exited };
+      const releasePath = join(root, 'writer-' + writers.length + '.release');
+      let filename, args;
+      if (ms === undefined) {
+        filename = new URL('./fixtures/admission-writer.mjs', import.meta.url);
+        args = [join(service.config.stateDir, 'state.db'), releasePath, 'plain'];
+      } else {
+        filename = join(root, 'writer-' + writers.length + '.mjs');
+        writeFileSync(filename, `import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync(process.argv[2]);db.exec('PRAGMA busy_timeout=250; BEGIN IMMEDIATE');process.send('locked');setTimeout(()=>{db.exec('ROLLBACK');db.close();process.send('released');process.disconnect();},Number(process.argv[3]));`);
+        args = [join(service.config.stateDir, 'state.db'), String(ms)];
+      }
+      const child = fork(filename, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+      const exited = once(child, 'close'), locked = once(child, 'message');
+      child.stderr.resume();
+      const writer = { child, exited, ...(ms === undefined ? { release: () => writeFileSync(releasePath, 'release') } : {}) }; writers.push(writer);
+      assert.equal((await bounded(Promise.race([locked, exited.then(([code]) => { throw new Error('Owned admission writer exited before lock: ' + code); })]), 'Native writer acquisition'))[0], 'locked'); return writer;
     },
   };
 }
 
-test('real 750ms state BEGIN contention admits each sibling once and keeps assigned retry promises tracked', { timeout: 15000 }, async t => {
-  const wire = fixture(t); await wire.ready(); const writer = await wire.lock(750);
+test('real state BEGIN refusal admits each sibling once and keeps assigned retry promises tracked', { timeout: 15000 }, async t => {
+  const wire = fixture(t); await wire.ready(); const writer = await wire.lock();
   wire.manager.execute(wire.room.id); const result = await wire.manager.wait(wire.room.id, 10000); await writer.exited;
   assert.equal(result.status, 'completed'); assert.ok(wire.refusals.length > 0);
   assert.ok(wire.boards.some(tasks => tasks.includes('completed') && tasks.includes('assigned')), 'A sibling completes while another task remains assigned awaiting admission.');
@@ -76,7 +108,7 @@ test('real 750ms state BEGIN contention admits each sibling once and keeps assig
 
 for (const intervention of ['pause', 'cancel', 'guidance', 'quarantine']) {
   test(`fresh ${intervention} after a genuine refusal prevents another launch admission`, { timeout: 15000 }, async t => {
-    const wire = fixture(t, { tasks: 1 }); await wire.ready(); const writer = await wire.lock(750);
+    const wire = fixture(t, { tasks: 1 }); await wire.ready(); const writer = await wire.lock();
     const transaction = wire.service.store.transaction; let requested = false;
     wire.service.store.transaction = function (...args) {
       try { return transaction.apply(this, args); } catch (error) {
@@ -124,7 +156,7 @@ for (const reason of [new Error('Permanent sibling admission failure.'), undefin
       const start = wire.service.start;
       wire.service.start = function (input, provenance) { if (/Room task task-3:/.test(input.task)) throw reason; return start.call(this, input, provenance); };
       wire.manager.execute(wire.room.id); await bounded(entered.promise, 'Admitted sibling entry');
-      const writer = await wire.lock(750); allowAdmissions.resolve();
+      const writer = await wire.lock(); allowAdmissions.resolve();
       const refusalDeadline = performance.now() + 3000;
       while (!wire.refusals.length) { assert.ok(performance.now() < refusalDeadline, 'The real BEGIN refusal must be observed.'); await delay(5); }
       await delay(60); assert.equal(activeRequest.signal.aborted, false, 'Admission-only stop cannot cancel an already admitted sibling.');
@@ -139,7 +171,7 @@ for (const reason of [new Error('Permanent sibling admission failure.'), undefin
 }
 
 test('fixed deadline is rechecked after a successful fresh authority read before another admission', { timeout: 15000 }, async t => {
-  const wire = fixture(t, { tasks: 1 }); await wire.ready(); const writer = await wire.lock(750);
+  const wire = fixture(t, { tasks: 1 }); await wire.ready(); const writer = await wire.lock();
   const originalNow = Object.getOwnPropertyDescriptor(performance, 'now'), nativeNow = performance.now.bind(performance);
   let offset = 0, advanced = false;
   Object.defineProperty(performance, 'now', { configurable: true, value: () => nativeNow() + offset });
@@ -158,7 +190,7 @@ test('a resumed execution retains completed workflow identities while retrying o
   wire.manager.subscribe(room => { if (!requested && room.tasks[0].status === 'completed' && room.tasks[1].status === 'assigned') { requested = true; wire.manager.pause(room.id); } });
   wire.manager.execute(wire.room.id); const paused = await wire.manager.wait(wire.room.id, 10000);
   assert.equal(paused.status, 'paused'); const previous = paused.tasks[0].runId;
-  const writer = await wire.lock(750); wire.manager.resume(wire.room.id); const result = await wire.manager.wait(wire.room.id, 10000); await writer.exited;
+  const writer = await wire.lock(); wire.manager.resume(wire.room.id); const result = await wire.manager.wait(wire.room.id, 10000); await writer.exited;
   assert.equal(result.status, 'completed'); assert.equal(result.tasks[0].runId, previous); assert.equal(result.callsUsed, 3);
   assert.equal(wire.calls.length, 3); assert.equal(wire.admissions.length, 3); assert.ok(wire.refusals.length > 0);
   assert.equal(wire.admissions.filter(value => value.task === 'task-1').length, 1); assert.equal(wire.admissions.filter(value => value.task === 'task-2').length, 1);
