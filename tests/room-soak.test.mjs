@@ -170,6 +170,7 @@ test('entry failure detection preserves public terminal errors without misclassi
   assert.match(roomSoakEntryFailure({ status: 'failed', error: 'database is locked' }).message, /^Room failed before task entry: database is locked$/);
   assert.match(roomSoakEntryFailure({ status: 'cancelled', error: 'Cancellation was accepted.' }).message, /Cancellation was accepted/);
   assert.match(roomSoakEntryFailure({ status: 'failed', error: 'database is locked' }, 'discussion').message, /^Room failed before discussion entry: database is locked$/);
+  assert.match(roomSoakEntryFailure({ status: 'needs_attention', error: 'Discussion workflow failed; no tasks will execute.' }, 'discussion').message, /^Room needs_attention before discussion entry: Discussion workflow failed; no tasks will execute\.$/);
   for (const status of ['idle', 'ready', 'running', 'paused', 'completed', 'needs_attention']) assert.equal(roomSoakEntryFailure({ status }), undefined);
 });
 

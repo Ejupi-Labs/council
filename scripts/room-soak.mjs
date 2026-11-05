@@ -37,7 +37,7 @@ function diagnosticText(value, maximum = 256) {
 
 /** A durable terminal outcome is more useful than a later generic entry timeout. */
 export function roomSoakEntryFailure(room, phase = 'task') {
-  if (!room || !['failed', 'cancelled'].includes(room.status)) return undefined;
+  if (!room || !['failed', 'cancelled'].includes(room.status) && !(phase === 'discussion' && room.status === 'needs_attention')) return undefined;
   return new Error(`Room ${room.status} before ${phase === 'discussion' ? 'discussion' : 'task'} entry: ${diagnosticText(room.error, 2048) || 'No public room error was recorded.'}`);
 }
 

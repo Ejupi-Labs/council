@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,24 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const releaseVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
+function npmProgress(cache) {
+  const stages = new Set();
+  const directory = join(cache, '_logs');
+  if (!existsSync(directory)) return [];
+  // Only npm-created files inside this test's cache are inspected. Never expose
+  // raw logs, configuration, command arguments, paths or package/user text.
+  for (const name of readdirSync(directory).filter(name => name.endsWith('-debug-0.log')).sort().slice(-3)) {
+    const path = join(directory, name);
+    if (statSync(path).size > 1024 * 1024) continue;
+    const contents = readFileSync(path, 'utf8').slice(-32 * 1024);
+    for (const line of contents.split(/\r?\n/)) {
+      const match = /^\d+ (?:timing|silly|verbose) (idealTree|reify|tarball|extract|build|audit)(?:\b|:)/.exec(line);
+      if (match) stages.add(match[1]);
+    }
+  }
+  return [...stages];
+}
 
 function npmEntrypoint() {
   const candidates = [
@@ -46,11 +64,30 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
     removeTemporary(root);
   });
   const npm = npmEntrypoint();
-  const environment = { ...process.env, npm_config_cache: join(root, 'empty npm cache'), COUNCIL_DEPTH: '0', COUNCIL_BACKEND: 'mock' };
-  const runNode = async (args, cwd = consumer) => await execute(process.execPath, args, {
-    cwd, env: environment, windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
-  });
-  const packed = JSON.parse((await runNode([npm, 'pack', '--ignore-scripts', '--json', '--pack-destination', root], repository)).stdout);
+  const packCache = join(root, 'pack npm cache'), installCache = join(root, 'fresh install npm cache');
+  const userConfig = join(root, 'empty-user.npmrc'), globalConfig = join(root, 'empty-global.npmrc');
+  writeFileSync(userConfig, ''); writeFileSync(globalConfig, '');
+  const environment = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^npm_config_/i.test(name))), COUNCIL_DEPTH: '0', COUNCIL_BACKEND: 'mock' };
+  const runNode = async (phase, args, cwd = consumer, cache = installCache) => {
+    const start = performance.now();
+    const isNpm = args[0] === npm;
+    const isolated = isNpm ? [...args, '--cache', cache, '--userconfig', userConfig, '--globalconfig', globalConfig, '--timing', '--offline'] : args;
+    try {
+      const result = await execute(process.execPath, isolated, {
+        cwd, env: environment, windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024, signal: t.signal,
+      });
+      t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - start), status: 'completed' }));
+      return result;
+    } catch (error) {
+      let progress;
+      try { progress = isNpm ? npmProgress(cache) : undefined; } catch { progress = ['unavailable']; }
+      t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - start), timeoutMs: 30_000,
+        exitCode: typeof error.code === 'number' ? error.code : null, code: typeof error.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : undefined,
+        killed: error.killed === true, signal: error.signal ?? null, stdoutBytes: Buffer.byteLength(error.stdout ?? ''), stderrBytes: Buffer.byteLength(error.stderr ?? ''), progress }));
+      throw new Error(`Release acceptance phase ${phase} failed; see bounded process diagnostics.`);
+    }
+  };
+  const packed = JSON.parse((await runNode('pack', [npm, 'pack', '--ignore-scripts', '--json', '--pack-destination', root], repository, packCache)).stdout);
   assert.equal(packed.length, 1);
   assert.equal(packed[0].version, releaseVersion);
   const packagedPaths = packed[0].files.map(file => file.path.replaceAll('\\', '/'));
@@ -65,7 +102,8 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   assert.ok(packagedPaths.every(file => !/(^|\/)(?:\.council|\.serena|node_modules|tests)(?:\/|$)/.test(file)), 'Local state, dependencies and test fixtures must not enter the release.');
   const tarball = join(root, packed[0].filename);
   // An empty cache plus --offline proves installation cannot depend on a registry fetch.
-  await runNode([npm, 'install', '--prefix', consumer, '--global=false', '--ignore-scripts', '--omit=dev', '--offline', '--no-audit', '--no-fund', tarball]);
+  assert.equal(existsSync(installCache), false, 'Installation must start with its own genuinely empty cache.');
+  await runNode('offline-install', [npm, 'install', '--prefix', consumer, '--global=false', '--ignore-scripts', '--omit=dev', '--offline', '--no-audit', '--no-fund', tarball]);
   const installedRoot = join(consumer, 'node_modules', 'council-ai-plugin');
   const metadata = JSON.parse(readFileSync(join(installedRoot, 'package.json'), 'utf8'));
   assert.equal(metadata.version, releaseVersion);
@@ -79,14 +117,14 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
     const entrypoint = launch.args[0].replaceAll('${PLUGIN_ROOT}', installedRoot).replaceAll('${CLAUDE_PLUGIN_ROOT}', installedRoot);
     assert.ok(existsSync(entrypoint), `${manifest} must point to a packaged executable entrypoint.`);
   }
-  const dependencyTree = JSON.parse((await runNode([npm, 'ls', '--prefix', consumer, '--all', '--omit=dev', '--json', '--offline'])).stdout);
+  const dependencyTree = JSON.parse((await runNode('dependencies', [npm, 'ls', '--prefix', consumer, '--all', '--omit=dev', '--json', '--offline'])).stdout);
   assert.deepEqual(Object.keys(dependencyTree.dependencies ?? {}), ['council-ai-plugin']);
   assert.deepEqual(Object.keys(dependencyTree.dependencies['council-ai-plugin'].dependencies ?? {}), []);
 
   const cli = join(installedRoot, 'dist', 'cli.js');
-  const version = JSON.parse((await runNode([cli, '--version'])).stdout);
+  const version = JSON.parse((await runNode('version', [cli, '--version'])).stdout);
   assert.equal(version.version, releaseVersion);
-  const demo = JSON.parse((await runNode([cli, 'demo'])).stdout);
+  const demo = JSON.parse((await runNode('mock-demo', [cli, 'demo'])).stdout);
   assert.equal(demo.backend, 'mock');
   assert.equal(demo.liveAgentCalls, 0);
   assert.equal(demo.results.length, 6);
@@ -97,7 +135,7 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   }
   assert.equal(existsSync(join(consumer, '.council')), false, 'The offline demo must keep state outside the consumer project.');
 
-  const connection = JSON.parse((await runNode([cli, 'connection', '--workspace', workspace, '--backend', 'mock'])).stdout).mcpServers.council;
+  const connection = JSON.parse((await runNode('connection', [cli, 'connection', '--workspace', workspace, '--backend', 'mock'])).stdout).mcpServers.council;
   assert.equal(connection.command, process.execPath);
   assert.ok(connection.args.includes(cli));
   assert.ok(connection.args.includes(workspace));
@@ -131,6 +169,6 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   const modes = await client.readResource({ uri: 'council://modes' });
   assert.equal(JSON.parse(modes.contents[0].text).modes.length, 6);
   await close();
-  const persisted = JSON.parse((await runNode([cli, 'show', queued.id, '--workspace', workspace, '--backend', 'mock'])).stdout);
+  const persisted = JSON.parse((await runNode('persisted-run', [cli, 'show', queued.id, '--workspace', workspace, '--backend', 'mock'])).stdout);
   assert.equal(persisted.status, 'completed');
 });

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, constants } from 'node:sqlite';
 import { once } from 'node:events';
 import { CouncilStore } from '../dist/store.js';
 
@@ -535,17 +535,49 @@ test('manual pruning batches are bounded even when a large terminal history is e
   assert.equal(store.health().counts.runs, 5);
 });
 
-test('a contended write fails promptly instead of blocking the event loop for five seconds', t => {
+test('a contended write retains the short native timeout without adding application retries or waits', t => {
   const { directory, open } = fixture(t);
   const store = open();
+  const db = store.db;
+  assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout, 250);
+  const initialEvents = db.prepare('SELECT COUNT(*) AS value FROM events').get().value;
   const blocker = new DatabaseSync(join(directory, 'state.db'));
   blocker.exec('BEGIN IMMEDIATE');
+  const originalExec = db.exec;
+  let beginCalls = 0, nativeBeginMs = 0, writes = 0;
+  // This standalone appendEvent has no admission scope. Measure its exact native
+  // BEGIN call rather than treating SQLite's requested sleep budget as a wall deadline.
+  db.exec = function (sql) {
+    if (sql !== 'BEGIN IMMEDIATE') return originalExec.call(this, sql);
+    beginCalls++;
+    const start = performance.now();
+    try { return originalExec.call(this, sql); }
+    finally { nativeBeginMs += performance.now() - start; }
+  };
+  db.setAuthorizer(action => {
+    if ([constants.SQLITE_INSERT, constants.SQLITE_UPDATE, constants.SQLITE_DELETE].includes(action)) writes++;
+    return constants.SQLITE_OK;
+  });
   try {
     const start = performance.now();
-    assert.throws(() => store.appendEvent('blocked', 'evidence', {}), /locked|busy/i);
-    assert.ok(performance.now() - start < 1000, 'SQLite contention must be bounded below one second.');
-  } finally { blocker.exec('ROLLBACK'); blocker.close(); }
+    assert.throws(() => store.appendEvent('blocked', 'evidence', {}), error => error.code === 'ERR_SQLITE_ERROR' && (error.errcode & 0xff) === 5);
+    const elapsedMs = performance.now() - start;
+    const overheadMs = Math.max(0, elapsedMs - nativeBeginMs);
+    assert.equal(beginCalls, 1, 'A standalone write must not replay its native BEGIN.');
+    assert.ok(nativeBeginMs > 0);
+    assert.ok(overheadMs < 1000, 'Council must not add a five-second application wait around native SQLite.');
+    assert.equal(writes, 0, 'The write body must not start after the refused BEGIN.');
+    assert.equal(db.isTransaction, false);
+    assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout, 250);
+    assert.equal(db.prepare('SELECT COUNT(*) AS value FROM events').get().value, initialEvents);
+    t.diagnostic(JSON.stringify({ configuredTimeoutMs: 250, nativeBeginMs, elapsedMs, overheadMs, beginCalls }));
+  } finally {
+    db.exec = originalExec;
+    db.setAuthorizer(null);
+    blocker.exec('ROLLBACK'); blocker.close();
+  }
   assert.ok(store.appendEvent('blocked', 'recovered', {}));
+  assert.equal(db.prepare('SELECT COUNT(*) AS value FROM events').get().value, initialEvents + 1);
 });
 
 test('an automatically rolled-back transaction preserves its original failure diagnostic', t => {
