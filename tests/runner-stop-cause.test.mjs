@@ -35,7 +35,7 @@ function budget(t) {
 }
 
 const rejections = [
-  ['antigravity', 'denied-error-step', /tool execution failed or was denied/],
+  ['antigravity', 'denied-error-step-wait', /tool execution failed or was denied/],
   ['claude', 'forbidden-tool', /read-mode allowlist/],
   ['junie', 'permission', /permission was denied by read mode.*Reported ACP tool kind: read/],
 ];
@@ -51,7 +51,7 @@ for (const [profile, prompt, pattern] of rejections) for (const later of ['cance
     });
     const result = await local.runner.run(local.request(prompt, controller.signal));
     assert.ok(stopped > 0); assert.equal(result.status, 'failed'); assert.match(result.error, pattern);
-    assert.equal(trustedRunnerFailure(result), 'failed');
+    assert.equal(trustedRunnerFailure(result), 'failed', result.error);
     assert.equal(trustedRunnerFailure({ ...result }), undefined);
     assert.equal(result.error.startsWith(PROCESS_CLEANUP_ERROR), false);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TOOL_TITLE|PROVIDER_SPOOFED_CAUSE/);
@@ -145,4 +145,26 @@ test('provider-controlled cause fields and copied/custom result objects never cr
   assert.equal(result.status, 'completed'); assert.equal(trustedRunnerFailure(result), undefined);
   assert.equal(trustedRunnerFailure({ agent: 'peer', status: 'failed', error: 'trusted', durationMs: 0,
     output: '', trustedRunnerFailure: 'failed' }), undefined);
+});
+
+test('cleanup uncertainty preserves an earlier denial after late cancellation', { timeout: 30000 }, async t => {
+  const local = setup('antigravity'), controller = new AbortController();
+  const kill = ManagedProcess.prototype.kill;
+  let stopped = 0;
+  t.mock.method(ManagedProcess.prototype, 'kill', function (...args) {
+    if (!stopped++) this.emit('error', new ProcessCleanupError());
+    const value = kill.apply(this, args);
+    controller.abort();
+    return value;
+  });
+  const result = await local.runner.run(local.request('denied-error-step-wait', controller.signal));
+  assert.ok(stopped > 0);
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(result.status, 'failed');
+  assert.ok(result.error.startsWith(PROCESS_CLEANUP_ERROR));
+  assert.match(result.error, /Earlier failure: .*tool execution failed or was denied/);
+  assert.equal(trustedRunnerFailure(result), undefined);
+  assert.equal(trustedRunnerFailure({ ...result }), undefined);
+  assert.ok(result.error.length <= 4096);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET_ACCESS_TOKEN|PRIVATE_TOOL_TITLE|PROVIDER_SPOOFED_CAUSE/);
 });

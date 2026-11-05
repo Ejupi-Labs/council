@@ -9,13 +9,19 @@ const output = prompt === 'args' ? JSON.stringify(process.argv.slice(2)) : `Nati
 send({ event: 'init', conversation_id, init: { cwd: process.cwd(), tools: [], permission_mode: 'request-review' } });
 send({ event: 'step_update', step_update: { conversation_id, step_index: 0, state: 'DONE', step_type: 'user_input' } });
 if (prompt === 'native-permission-diagnostic') process.stderr.write('SECRET_ACCESS_TOKEN required a permission that headless mode cannot prompt for, so it was auto-denied. SECRET_ACCESS_TOKEN\n');
-if (prompt === 'denied-error-step') {
+if (prompt === 'denied-error-step' || prompt === 'denied-error-step-wait') {
   send({ event: 'step_update', step_update: { conversation_id, step_index: 6, state: 'ACTIVE', step_type: 'tool',
     tool_name: 'read_file', tool_info: { name: 'read_file', parameters: { Path: 'SECRET_ACCESS_TOKEN' } } } });
   send({ event: 'step_update', step_update: { conversation_id, step_index: 6, state: 'ERROR', step_type: 'tool',
     tool_name: 'read_file', tool_info: { name: 'read_file', parameters: { Path: 'SECRET_ACCESS_TOKEN' },
       error: { type: 'permission_denied', message: 'SECRET_ACCESS_TOKEN' } } } });
   send({ event: 'result', result: { conversation_id, status: 'SUCCESS', response: '' } });
+  if (prompt === 'denied-error-step-wait') {
+    // Keep the causal-stop fixture alive until Council stops its owned tree.
+    // Spontaneous-exit coverage continues to use denied-error-step.
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
   process.exit(0);
 }
 if (prompt === 'invalid-step') send({ event: 'step_update', step_update: { conversation_id, step_index: 1, state: 'SECRET_ACCESS_TOKEN', step_type: 'agent_response',
