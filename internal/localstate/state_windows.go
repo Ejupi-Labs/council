@@ -6,6 +6,7 @@ import (
 	"errors"
 	"golang.org/x/sys/windows"
 	"os"
+	"runtime"
 	"unsafe"
 )
 
@@ -26,8 +27,28 @@ func securePrivate(path string, dir bool) error {
 		return err
 	}
 	owner, _, err := existing.Owner()
-	if err != nil || owner == nil || !owner.Equals(sid) {
+	if err != nil || owner == nil {
 		return errors.New("Private state belongs to another Windows user.")
+	}
+	securityInfo := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	var normalizedOwner *windows.SID
+	if !owner.Equals(sid) {
+		token := windows.GetCurrentProcessToken()
+		defaultOwner, err := tokenDefaultOwner(token)
+		if err != nil {
+			return err
+		}
+		groups, err := token.GetTokenGroups()
+		if err != nil {
+			return err
+		}
+		if !admissibleOwner(owner, sid, defaultOwner, groups.AllGroups()) {
+			return errors.New("Private state belongs to another Windows user.")
+		}
+		// Elevated tokens can create objects owned by their default owner group.
+		// Normalize only that exact eligible owner before database or token writes.
+		securityInfo |= windows.OWNER_SECURITY_INFORMATION
+		normalizedOwner = sid
 	}
 	flags := ""
 	if dir {
@@ -41,7 +62,7 @@ func securePrivate(path string, dir bool) error {
 	if err != nil {
 		return err
 	}
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, securityInfo, normalizedOwner, nil, acl, nil); err != nil {
 		return err
 	}
 	return verifyPrivate(path, dir)
@@ -124,3 +145,43 @@ func atomicReplace(from, to string) error {
 	return windows.MoveFileEx(a, b, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
 func syncDirectory(string) error { return nil } // MoveFileEx WRITE_THROUGH flushes publication on Windows.
+
+func tokenDefaultOwner(token windows.Token) (*windows.SID, error) {
+	var size uint32
+	err := windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &size)
+	if !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) || size < uint32(unsafe.Sizeof(uintptr(0))) || size > 64*1024 {
+		return nil, errors.New("Cannot establish the Windows token's default owner.")
+	}
+	buffer := make([]byte, size)
+	if err := windows.GetTokenInformation(token, windows.TokenOwner, &buffer[0], uint32(len(buffer)), &size); err != nil {
+		return nil, err
+	}
+	owner := *(**windows.SID)(unsafe.Pointer(&buffer[0]))
+	if owner == nil || !owner.IsValid() {
+		return nil, errors.New("The Windows token default owner is invalid.")
+	}
+	copied, err := owner.Copy()
+	runtime.KeepAlive(buffer)
+	return copied, err
+}
+
+// Default owner admission is an exact token fact, never an Administrators membership fallback.
+func admissibleOwner(owner, user, defaultOwner *windows.SID, groups []windows.SIDAndAttributes) bool {
+	if owner == nil || user == nil {
+		return false
+	}
+	if owner.Equals(user) {
+		return true
+	}
+	if defaultOwner == nil || defaultOwner.IsWellKnown(windows.WinLocalSystemSid) || !owner.Equals(defaultOwner) {
+		return false
+	}
+	for _, group := range groups {
+		if group.Sid != nil && group.Sid.Equals(defaultOwner) &&
+			group.Attributes&windows.SE_GROUP_OWNER != 0 &&
+			group.Attributes&windows.SE_GROUP_USE_FOR_DENY_ONLY == 0 {
+			return true
+		}
+	}
+	return false
+}

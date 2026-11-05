@@ -92,7 +92,7 @@ An extracted executable runs version, initializes private policy state and serve
 another working directory with an empty PATH: no Node, Go, Git or development packages available.
 Project inspection normally requires Git. Build/release generation is development-only.
 Latest local archive: council-2.0.0-dev-windows-arm64.zip, SHA256
-43896262208827f05525e839e6f3ce9b83b2faac261cfdd600e78ae70105222d.
+65a30fdff02d46d5f1ac0b661db2d09afea3f3a03628643b1822d1d87356af91.
 This unreleased preview is not an npm publication or the completed product release.
 
 ## Requirement evidence
@@ -121,6 +121,13 @@ fix and passes after it; invalid physical-path Unicode is rejected rather than r
 The corrected complete npm test/check suite and extracted-package journey pass on Windows ARM64.
 Six affected target test binaries compile. Corrected runtime CI remains pending and is not counted
 as qualification here. See review.md for independent diff inspection and the bounded correction.
+
+Run42113529269 subsequently passed both macOS and both Linux native jobs plus Linux race
+coverage. Its Windows ARM64 runner exposed the elevated-token default-owner group case. The
+follow-up recognizes only the exact current-token owner-eligible default group and normalizes
+ownership to the current user before private writes, alongside the protected DACL. Foreign-user,
+SYSTEM and unrelated/deny-only group ownership remain rejected. Native/policy tests and complete
+local npm test/check pass; corrected elevated-host CI is separately pending.
 
 The same correction includes UI/server Unicode White_Space parity. Actual browser acceptance
 saves U+FEFF-only text and retrieves it exactly through the CLI.

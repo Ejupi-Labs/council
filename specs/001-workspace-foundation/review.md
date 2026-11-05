@@ -48,6 +48,15 @@ descriptor parity/cleanup and untouched redirected-file sentinels. Root independ
 the production diff and platform fixture helpers; native author reran uncached Windows ARM64
 tests/vet and six-target compilation. Runtime CI of the correction remains separately reported.
 
+A subsequent Windows hosted run exposed objects created with the elevated token's default owner
+group. The reviewed correction accepts only the exact token-default SID when it is owner-eligible
+and not deny-only, then sets final owner to the current user with the protected DACL in one native
+security update. It never uses general Administrators membership as a fallback, and final private
+verification remains strict. Root read the production diff and its policy/native fixtures;
+uncached Windows ARM64 tests/vet, six-target compilation and the complete local npm suite pass.
+The local token defaults to the current user, so actual elevated group normalization is left to
+hosted CI rather than claimed as locally exercised.
+
 The root also aligned UI text admission with Unicode White_Space, preserving U+FEFF-only valid
 content consistently with the server. The native author independently reviewed that narrow change;
 the actual browser regression saves it and verifies exact CLI retrieval.

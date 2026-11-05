@@ -196,7 +196,10 @@ redirected v2 leaf or private state file; aliases never grant a second ownership
 that the selected ordinary leaf and canonical leaf are the same physical directory before use.
 Create/verify private directory permissions before opening the database or writing a bearer
 token: Unix mode 0700 with 0600 files, and a Windows DACL restricted to the current owner, SYSTEM
-and Administrators. Do not place the new store under the selected repository or read legacy
+and Administrators. Windows objects initially owned by the current token's exact owner-eligible
+default group are normalized to the current user before private writes; generic group membership
+never authorizes ownership takeover. Final private-state verification requires the current user.
+Do not place the new store under the selected repository or read legacy
 `.council/` data.
 
 The chosen native Go core uses modernc.org/sqlite with one serialized writer. An OS-held lifetime
