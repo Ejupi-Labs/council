@@ -18,9 +18,20 @@ test('ACP guidance describes client file capability without promising a terminal
   for (const agent of [{ profile: 'junie' }, { profile: 'claude', transport: 'acp' }]) {
     const guidance = taskPermissionGuidance(config(agent), 'peer', 'read');
     assert.match(guidance, /ACP client exposes scoped text-file reads and no terminal service/);
-    assert.match(guidance, /unverified host-executed check/);
+    assert.match(guidance, /unverified host-executed checks/);
+    assert.match(guidance, /inside the provided working directory/);
     assert.doesNotMatch(guidance, /Available tools.*Read, Glob, Grep/);
   }
+});
+
+test('native Antigravity read guidance keeps inspection in the sandbox workspace without widening approvals', () => {
+  const guidance = taskPermissionGuidance(config({ profile: 'antigravity', transport: 'native' }), 'peer', 'read');
+  assert.match(guidance, /plan mode in its sandbox/);
+  assert.match(guidance, /inside the provided working directory/);
+  assert.match(guidance, /Do not follow references into other checkouts or request broader approvals/);
+  assert.match(guidance, /blocked external evidence or checks as unverified/);
+  assert.equal(taskPermissionGuidance(config({ profile: 'antigravity', transport: 'native' }), 'peer', 'write'),
+    'Make changes only in the provided isolated worktree.');
 });
 
 test('write and other backends retain their actual permissions without native Claude restrictions', () => {

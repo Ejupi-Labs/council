@@ -66,6 +66,34 @@ test('assignment-file readers can explicitly preserve JSON larger than the confi
   assert.throws(() => readJsonFile(filename, 0), /positive integer/);
 });
 
+test('JSON files reject malformed UTF-8 without replacing evidence and preserve BOM-prefixed Unicode', t => {
+  const root = workspace(t), filename = join(root, 'input.json');
+  writeFileSync(filename, Buffer.concat([Buffer.from('{"task":"private-evidence-'), Buffer.from([0xff]), Buffer.from('"}')]));
+  assert.throws(() => readJsonFile(filename, Infinity), error => {
+    assert.match(error.message, /valid UTF-8/);
+    assert.equal(error.message.includes('private-evidence'), false);
+    return true;
+  });
+  const task = 'Caffè 東京 🐜 \uFFFD remains intentional. Interior \uFEFF remains evidence.';
+  writeFileSync(filename, '\uFEFF' + JSON.stringify({ task }));
+  assert.deepEqual(readJsonFile(filename, Infinity), { task });
+});
+
+test('JSON files reject duplicate and escaped-equivalent control fields instead of selecting the last value', t => {
+  const root = workspace(t), filename = join(root, 'input.json');
+  for (const document of [
+    '{"permission":"read","permission":"write"}',
+    '{"task":"first","t\\u0061sk":"second"}',
+    '{"agents":{"codex":{"profile":"codex","profile":"claude"}}}',
+  ]) {
+    writeFileSync(filename, document);
+    assert.throws(() => readJsonFile(filename, Infinity), /duplicate JSON object keys/);
+  }
+  writeFileSync(join(root, 'council.config.json'), '{"backend":"mock","backend":"native"}');
+  assert.throws(() => loadConfig(root), /duplicate JSON object keys/);
+  assert.equal(existsSync(join(root, '.council')), false);
+});
+
 test('configuration canonicalizes selected directory aliases and existing contained state ancestors without creating state', t => {
   const parent = workspace(t), root = join(parent, 'actual-project'), alias = join(parent, 'selected-alias');
   mkdirSync(root); mkdirSync(join(root, 'actual-state'));

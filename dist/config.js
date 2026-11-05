@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { AGENTS, MODES, REASONING_EFFORTS } from './types.js';
 import { objectSchema, parseSchema, ValidationError } from './schema.js';
 import { BUILT_IN_SKILL_IDS } from './skills.js';
+import { readUtf8File } from './utf8-file.js';
+import { assertUniqueObjectKeys } from './control-json.js';
 const boundedString = (minLength, maxLength) => ({ type: 'string', minLength, maxLength });
 const fullString = (minLength) => ({ type: 'string', minLength });
 const integer = (minimum, maximum, value) => ({ type: 'integer', minimum, maximum, ...(value === undefined ? {} : { default: value }) });
@@ -63,7 +65,9 @@ export function readJsonFile(filename, maxBytes = 1_048_576) {
     if (statSync(filename).size > maxBytes)
         throw new ValidationError(maxBytes === 1_048_576 ? 'Configuration/input file exceeds 1 MiB.' : 'JSON input exceeds its configured file byte limit.');
     try {
-        return JSON.parse(readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
+        const text = readUtf8File(filename), value = JSON.parse(text);
+        assertUniqueObjectKeys(text, 'JSON file');
+        return value;
     }
     catch (error) {
         if (error instanceof SyntaxError)

@@ -48,7 +48,7 @@ Other hosts can connect through MCP and load `skills/council/SKILL.md`. `COUNCIL
 
 ## Agent setup
 
-Council never reads, copies or rewrites vendor login files. Each agent uses its own installed runtime, authentication, models and provider limits. `doctor` checks executable availability without logging in or making a model call.
+Council never reads, copies or rewrites vendor login files. Each agent uses its own installed runtime, authentication, models and provider limits. `doctor` reports the actual Node executable and embedded SQLite version, then checks executable availability without opening collaboration databases, recovering runs, logging in or making a model call. A runtime that can load Council but fails its version requirements produces a JSON report with a nonzero exit. Much older Node versions without `node:sqlite` cannot load the CLI. Command startup inside a vendor sandbox still needs separate qualification.
 
 | Profile | Default transport | Required setup |
 | --- | --- | --- |

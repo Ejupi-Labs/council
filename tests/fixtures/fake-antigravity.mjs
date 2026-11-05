@@ -8,6 +8,18 @@ const conversation_id = 'offline-antigravity-conversation';
 const output = prompt === 'args' ? JSON.stringify(process.argv.slice(2)) : `Native Antigravity 🌍 ${prompt}`;
 send({ event: 'init', conversation_id, init: { cwd: process.cwd(), tools: [], permission_mode: 'request-review' } });
 send({ event: 'step_update', step_update: { conversation_id, step_index: 0, state: 'DONE', step_type: 'user_input' } });
+if (prompt === 'native-permission-diagnostic') process.stderr.write('SECRET_ACCESS_TOKEN required a permission that headless mode cannot prompt for, so it was auto-denied. SECRET_ACCESS_TOKEN\n');
+if (prompt === 'denied-error-step') {
+  send({ event: 'step_update', step_update: { conversation_id, step_index: 6, state: 'ACTIVE', step_type: 'tool',
+    tool_name: 'read_file', tool_info: { name: 'read_file', parameters: { Path: 'SECRET_ACCESS_TOKEN' } } } });
+  send({ event: 'step_update', step_update: { conversation_id, step_index: 6, state: 'ERROR', step_type: 'tool',
+    tool_name: 'read_file', tool_info: { name: 'read_file', parameters: { Path: 'SECRET_ACCESS_TOKEN' },
+      error: { type: 'permission_denied', message: 'SECRET_ACCESS_TOKEN' } } } });
+  send({ event: 'result', result: { conversation_id, status: 'SUCCESS', response: '' } });
+  process.exit(0);
+}
+if (prompt === 'invalid-step') send({ event: 'step_update', step_update: { conversation_id, step_index: 1, state: 'SECRET_ACCESS_TOKEN', step_type: 'agent_response',
+  text_delta: 'SECRET_ACCESS_TOKEN', tool_info: { parameters: { command: 'SECRET_ACCESS_TOKEN', path: 'SECRET_ACCESS_TOKEN' } } } });
 send({ event: 'step_update', step_update: { conversation_id, step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: output } });
 send({ event: 'step_update', step_update: { conversation_id, step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: '' } });
 if (prompt === 'diagnostics') process.stderr.write('Tool permission was soft-denied: SECRET_ACCESS_TOKEN=do-not-print\n');

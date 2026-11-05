@@ -132,6 +132,7 @@ test('equal-weight assignment ties prefer the lead and then original member orde
 
 test('malformed, partial or unauthorized ballots require attention and never dispatch tasks', async t => {
   const invalid = [() => 'prose {"vote":"approve"}', () => '```json\n{"vote":"approve"}\n```',
+    data => `I will inspect the project first.\n${approve(data)}`,
     data => approve(data, 'codex', { extra: true }), data => approve(data, 'codex', { assignments: {} }),
     data => approve(data, 'not-a-member'), data => approve(data, 'codex', { assignments: { missing: 'codex' } }),
     () => 'null', () => '{"vote":"approve","rationale":"Missing closing document"'];

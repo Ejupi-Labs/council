@@ -25,8 +25,15 @@ export function taskPermissionGuidance(
   }
   if (transport === 'acp') {
     return `${prefix} The Council ACP client exposes scoped text-file reads and no terminal service for this turn. `
+      + 'Resolve project files inside the provided working directory. References to another checkout do not extend the file boundary. '
       + 'Do not request terminal commands, writes or new tool approvals. '
-      + 'Identify any required command or test as an unverified host-executed check.';
+      + 'Report blocked external evidence, commands or tests as unverified host-executed checks.';
+  }
+  if (transport === 'native' && agent.profile === 'antigravity') {
+    return `${prefix} Native Antigravity uses plan mode in its sandbox for this turn. `
+      + 'Keep inspection inside the provided working directory and requested project files. '
+      + 'Do not follow references into other checkouts or request broader approvals. '
+      + 'Report blocked external evidence or checks as unverified; do not claim they were inspected or completed.';
   }
   return prefix;
 }

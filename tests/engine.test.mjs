@@ -742,6 +742,11 @@ test('native write review gives the Claude reviewer its read-tool policy without
   assert.doesNotMatch(backend.calls[0].prompt, /Available tools for this native Claude turn/);
   assert.doesNotMatch(backend.calls[2].prompt, /Available tools for this native Claude turn/);
   assert.equal(new Set(backend.calls.map(call => call.cwd)).size, 1);
+  assert.notEqual(backend.calls[1].cwd, root);
+  for (const call of backend.calls) {
+    assert.ok(call.prompt.includes(`Working directory for this step: ${call.cwd}\n`));
+    assert.ok(!call.prompt.includes(`Working directory for this step: ${root}\n`));
+  }
 });
 
 test('native Claude author and revision retain write guidance in a review workflow', async t => {

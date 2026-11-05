@@ -16,6 +16,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     } } });
   } else if (event.method === 'session/prompt') {
     pendingPrompt = event.id;
+    if (process.env.COUNCIL_TEST_ACP_CASE === 'codex-routing-env') {
+      const text = JSON.stringify(Object.fromEntries(['CODEX_WINDOWS_REGISTERED_CORE', 'CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY', 'CODEX_HOME', 'COUNCIL_DEPTH'].map(key => [key, process.env[key]])));
+      send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+      send({ id: pendingPrompt, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (process.env.COUNCIL_TEST_ACP_CASE?.startsWith('structure-')) {
       send({ method: 'session/update', params: { sessionId: 'council-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Partial offline evidence.\n' } } } });
       if (process.env.COUNCIL_TEST_ACP_CASE === 'structure-deep') process.stdout.write('{"jsonrpc":"2.0","method":"fixture/progress","params":{"payload":' + '['.repeat(300_000) + '0' + ']'.repeat(300_000) + '}}\n');

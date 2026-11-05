@@ -43,3 +43,26 @@ test('native Antigravity provider cancellation remains distinct from failure', a
   assert.equal(result.stopReason, 'cancelled');
   assert.match(result.output, /cancelled/);
 });
+
+test('native Antigravity retains safe invalid-update diagnostics without accepting a later successful result', async () => {
+  const result = await new NativeRunner(config).run(request('invalid-step'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /unsupported step state.*state=unsupported-string.*text_delta=string.*tool_info=object/);
+  assert.equal(result.output, '');
+  assert.equal(JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'), false);
+});
+
+test('native Antigravity preserves an ERROR tool denial despite a later SUCCESS envelope', async () => {
+  const result = await new NativeRunner(config).run(request('denied-error-step'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /tool execution failed or was denied.*state=ERROR.*step_type=tool/);
+  assert.equal(result.output, '');
+  assert.equal(JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'), false);
+});
+
+test('native Antigravity retains an actionable denial when the known stderr diagnostic wins the race', async () => {
+  const result = await new NativeRunner(config).run(request('native-permission-diagnostic'));
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /denied a tool permission request in headless mode.*workspace scope.*native CLI permissions/);
+  assert.equal(JSON.stringify(result).includes('SECRET_ACCESS_TOKEN'), false);
+});

@@ -51,6 +51,16 @@ function childEnvironment(environment) {
     const depth = Number(environment.COUNCIL_DEPTH ?? 0);
     return { ...sanitizedGitEnvironment(environment), COUNCIL_DEPTH: String(Number.isSafeInteger(depth) && depth >= 0 ? depth + 1 : 1) };
 }
+function codexEnvironment(environment) {
+    const result = { ...environment };
+    // Desktop dispatch markers misroute a standalone CLI's sandbox commands into
+    // registered-app startup. Keep user configuration and explicit sandbox args.
+    for (const key of Object.keys(result)) {
+        if (['CODEX_WINDOWS_REGISTERED_CORE', 'CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY'].includes(key.toUpperCase()))
+            delete result[key];
+    }
+    return result;
+}
 function providerAnswerFailure(output) {
     const normalized = output.trim().replace(/^Warning: Model metadata for `[^`\r\n]{1,200}` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.\s*/, '');
     let value;
@@ -534,7 +544,8 @@ export class NativeRunner {
             const protocol = transport === 'acp' ? new AcpProtocol(scoped, resolvedSettings(agent, scoped).model)
                 : agent.profile === 'codex' ? new CodexProtocol(request.prompt)
                     : agent.profile === 'antigravity' ? new AntigravityProtocol(request.prompt) : new ClaudeProtocol(scoped);
-            return await runProtocol(launch, protocol, scoped, this.config, this.options.environment ?? process.env);
+            const environment = this.options.environment ?? process.env;
+            return await runProtocol(launch, protocol, scoped, this.config, transport === 'native' && agent.profile === 'codex' ? codexEnvironment(environment) : environment);
         });
     }
     async doctor() {

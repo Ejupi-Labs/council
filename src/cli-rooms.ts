@@ -33,10 +33,10 @@ const active = (room: RoomRecord): boolean => room.status === 'discussing' || ro
 const incomplete = (room: RoomRecord): boolean => ['failed', 'cancelled', 'needs_attention'].includes(room.status);
 
 /** Lifecycle commands keep their owning process alive until the room reaches a stable state. */
-export async function runRoomCommand(service: CouncilService, command: string, id: string | undefined, options: RoomCliOptions): Promise<{ result: unknown; exitCode?: number }> {
+export async function runRoomCommand(service: CouncilService, command: string, id: string | undefined, options: RoomCliOptions, preparedInput?: { value: unknown }): Promise<{ result: unknown; exitCode?: number }> {
   validateRoomCommand(command, options);
   if (command === 'rooms') return { result: service.rooms.list(integer(options.limit, 20, 1, 100, '--limit')) };
-  const input = () => readJsonFile(resolve(service.config.workspaceRoot, options['input-file']!), Infinity);
+  const input = () => preparedInput ? preparedInput.value : readJsonFile(resolve(service.config.workspaceRoot, options['input-file']!), Infinity);
   if (command === 'room-create') return { result: service.rooms.create(input() as RoomInput) };
   if (!id) throw new Error(`${command} requires a room ID.`);
   if (command === 'room-show') return { result: service.rooms.get(id) };

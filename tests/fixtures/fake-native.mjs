@@ -5,6 +5,8 @@ for await (const part of process.stdin) prompt += part.toString();
 const claude = process.argv.includes('--output-format');
 const send = event => process.stdout.write(JSON.stringify(event) + '\n');
 const text = prompt === 'args' ? JSON.stringify(process.argv.slice(2)) : prompt === 'depth' ? process.env.COUNCIL_DEPTH
+  : prompt === 'codex-routing-env' ? JSON.stringify({ args: process.argv.slice(2), environment: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    ['CODEX_WINDOWS_REGISTERED_CORE', 'CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY', 'CODEX_HOME', 'CODEX_SESSION_ID', 'CODEX_PERMISSION_PROFILE', 'COUNCIL_DEPTH'].includes(key.toUpperCase()))) })
   : prompt === 'git-env' ? JSON.stringify(Object.fromEntries(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'COUNCIL_TEST_KEEP'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])))
   : `Native 🌍 ${prompt}`;
 const structure = () => {

@@ -16,6 +16,13 @@ export function validAcpEnvelope(event) {
         return false;
     return method || (id && result !== error);
 }
+// ACP kinds are coarse, agent-reported categories, not proof of an operation or
+// permission to perform it. Never echo tool titles, inputs or unknown kind text.
+const ACP_TOOL_KINDS = new Set(['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other']);
+function permissionKindDiagnostic(tool) {
+    return Object.hasOwn(tool, 'kind') && typeof tool.kind === 'string' && ACP_TOOL_KINDS.has(tool.kind)
+        ? ` Reported ACP tool kind: ${tool.kind}.` : '';
+}
 export function acpErrorSummary(error) {
     const message = typeof error.message === 'string' ? error.message : '';
     const detail = isObject(error.data) && typeof error.data.detailCode === 'string' ? error.data.detailCode : '';
@@ -181,9 +188,11 @@ export class AcpProtocol {
                 ?? (!allowed ? options.find(option => option.kind === 'reject_always') : undefined);
             control.send({ jsonrpc: '2.0', id: event.id, result: { outcome: selected && typeof selected.optionId === 'string'
                         ? { outcome: 'selected', optionId: selected.optionId } : { outcome: 'cancelled' } } });
-            if (!allowed || !selected)
-                control.fail(question ? 'ACP agent requires a human interaction that unattended Council cannot answer.'
-                    : this.request.permission === 'read' ? 'ACP tool permission was denied by read mode; the task is incomplete.' : 'ACP agent did not offer a one-time permission; the task is incomplete.');
+            if (!allowed || !selected) {
+                const reason = question ? 'ACP agent requires a human interaction that unattended Council cannot answer.'
+                    : this.request.permission === 'read' ? 'ACP tool permission was denied by read mode; the task is incomplete.' : 'ACP agent did not offer a one-time permission; the task is incomplete.';
+                control.fail(reason + (this.request.permission === 'read' ? permissionKindDiagnostic(tool) : ''));
+            }
             return;
         }
         if (isObject(event.error)) {

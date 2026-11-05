@@ -2,6 +2,22 @@ import { acpErrorSummary, isObject } from './acp.js';
 function identity(value) {
     return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x20\x7f]/.test(value);
 }
+/** Only fixed field names, JSON types and known state/category labels may reach retained diagnostics. */
+function stepShape(payload) {
+    const type = (key) => {
+        if (!Object.hasOwn(payload, key))
+            return 'absent';
+        const value = payload[key];
+        return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+    };
+    const index = Number.isSafeInteger(payload.step_index) && payload.step_index >= 0
+        ? 'nonnegative-safe-integer' : type('step_index');
+    const state = payload.state === 'ACTIVE' || payload.state === 'DONE' || payload.state === 'ERROR' ? payload.state
+        : typeof payload.state === 'string' ? 'unsupported-string' : type('state');
+    const category = ['user_input', 'agent_response', 'tool', 'checkpoint'].includes(payload.step_type)
+        ? payload.step_type : typeof payload.step_type === 'string' ? payload.step_type.length ? 'other-string' : 'empty-string' : type('step_type');
+    return `step_index=${index}; state=${state}; step_type=${category}; text_delta=${type('text_delta')}; tool_info=${type('tool_info')}`;
+}
 /** One stdin turn using the documented Antigravity CLI stream-json protocol. */
 export class AntigravityProtocol {
     prompt;
@@ -25,8 +41,15 @@ export class AntigravityProtocol {
     cancel() { if (this.stage !== 'complete' && this.stage !== 'failed')
         this.stage = 'cancelled'; }
     diagnostic(text, control) {
-        if (text.trim())
-            this.fail(control, 'Antigravity emitted diagnostics; successful completion could not be verified. Provider diagnostics were withheld.');
+        if (!text.trim())
+            return;
+        // Match only the observed native CLI denial marker. Any other diagnostic,
+        // including a split marker, still fails immediately without buffering it.
+        if (text.includes('permission that headless mode cannot prompt for, so it was auto-denied.')) {
+            this.fail(control, 'Antigravity denied a tool permission request in headless mode; the task is incomplete. Check the requested workspace scope and native CLI permissions outside Council before retrying. Provider diagnostics were withheld.');
+            return;
+        }
+        this.fail(control, 'Antigravity emitted diagnostics; successful completion could not be verified. Provider diagnostics were withheld.');
     }
     fail(control, message) { this.stage = 'failed'; control.fail(message); }
     event(event, control) {
@@ -60,20 +83,26 @@ export class AntigravityProtocol {
             return;
         }
         if (event.event === 'step_update') {
+            // Native CLI 1.5.1 emits ERROR plus a structured tool error for denied reads,
+            // even when a later terminal envelope misleadingly reports SUCCESS.
+            const failedToolStep = payload.state === 'ERROR' && payload.step_type === 'tool'
+                && isObject(payload.tool_info) && isObject(payload.tool_info.error)
+                && typeof payload.tool_info.error.type === 'string' && typeof payload.tool_info.error.message === 'string';
             if (!Number.isSafeInteger(payload.step_index) || payload.step_index < 0
-                || !['ACTIVE', 'DONE'].includes(payload.state)
+                || (!['ACTIVE', 'DONE'].includes(payload.state) && !failedToolStep)
                 || typeof payload.step_type !== 'string' || !payload.step_type
                 || (Object.hasOwn(payload, 'text_delta') && typeof payload.text_delta !== 'string')) {
-                this.fail(control, 'Antigravity returned an invalid step update.');
+                const unsupportedState = typeof payload.state === 'string' && !['ACTIVE', 'DONE'].includes(payload.state);
+                this.fail(control, `Antigravity returned ${unsupportedState ? 'an unsupported step state' : 'an invalid step update'}; the task is incomplete. Safe step shape: ${stepShape(payload)}. Provider values were withheld.`);
                 return;
             }
             if (Object.hasOwn(payload, 'error') || (Object.hasOwn(payload, 'tool_info') && !isObject(payload.tool_info))) {
-                this.fail(control, 'Antigravity returned an invalid or failed tool step; the task is incomplete.');
+                this.fail(control, `Antigravity returned an invalid or failed tool step; the task is incomplete. Safe step shape: ${stepShape(payload)}. Provider values were withheld.`);
                 return;
             }
             const tool = isObject(payload.tool_info) ? payload.tool_info : {};
             if (Object.hasOwn(tool, 'error')) {
-                this.fail(control, 'Antigravity tool execution failed or was denied; the task is incomplete.');
+                this.fail(control, `Antigravity tool execution failed or was denied; the task is incomplete. Safe step shape: ${stepShape(payload)}. Provider values were withheld.`);
                 return;
             }
             if ([payload.tool_name, tool.name].some(name => typeof name === 'string'

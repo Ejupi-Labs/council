@@ -10,7 +10,9 @@ interface RoomCliOptions {
 export declare function roomCommandOptions(command: string): readonly string[];
 export declare function validateRoomCommand(command: string, options: RoomCliOptions): void;
 /** Lifecycle commands keep their owning process alive until the room reaches a stable state. */
-export declare function runRoomCommand(service: CouncilService, command: string, id: string | undefined, options: RoomCliOptions): Promise<{
+export declare function runRoomCommand(service: CouncilService, command: string, id: string | undefined, options: RoomCliOptions, preparedInput?: {
+    value: unknown;
+}): Promise<{
     result: unknown;
     exitCode?: number;
 }>;

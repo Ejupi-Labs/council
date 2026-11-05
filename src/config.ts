@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { AGENTS, MODES, REASONING_EFFORTS, type CouncilConfig, type WorkflowInput } from './types.js';
 import { objectSchema, parseSchema, ValidationError, type JsonSchema } from './schema.js';
 import { BUILT_IN_SKILL_IDS } from './skills.js';
+import { readUtf8File } from './utf8-file.js';
+import { assertUniqueObjectKeys } from './control-json.js';
 
 const boundedString = (minLength: number, maxLength: number): JsonSchema => ({ type: 'string', minLength, maxLength });
 const fullString = (minLength: number): JsonSchema => ({ type: 'string', minLength });
@@ -63,7 +65,11 @@ export function parseBackend(value: unknown): CouncilConfig['backend'] { return 
 export function readJsonFile(filename: string, maxBytes = 1_048_576): unknown {
   if (maxBytes !== Infinity && (!Number.isSafeInteger(maxBytes) || maxBytes < 1)) throw new ValidationError('JSON file byte limit must be a positive integer or Infinity.');
   if (statSync(filename).size > maxBytes) throw new ValidationError(maxBytes === 1_048_576 ? 'Configuration/input file exceeds 1 MiB.' : 'JSON input exceeds its configured file byte limit.');
-  try { return JSON.parse(readFileSync(filename, 'utf8').replace(/^\uFEFF/, '')); }
+  try {
+    const text = readUtf8File(filename), value: unknown = JSON.parse(text);
+    assertUniqueObjectKeys(text, 'JSON file');
+    return value;
+  }
   catch (error) { if (error instanceof SyntaxError) throw new ValidationError(`Invalid JSON in ${filename}.`); throw error; }
 }
 function escapes(path: string): boolean { return path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path); }

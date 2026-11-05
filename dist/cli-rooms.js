@@ -33,11 +33,11 @@ export function validateRoomCommand(command, options) {
 const active = (room) => room.status === 'discussing' || room.status === 'running';
 const incomplete = (room) => ['failed', 'cancelled', 'needs_attention'].includes(room.status);
 /** Lifecycle commands keep their owning process alive until the room reaches a stable state. */
-export async function runRoomCommand(service, command, id, options) {
+export async function runRoomCommand(service, command, id, options, preparedInput) {
     validateRoomCommand(command, options);
     if (command === 'rooms')
         return { result: service.rooms.list(integer(options.limit, 20, 1, 100, '--limit')) };
-    const input = () => readJsonFile(resolve(service.config.workspaceRoot, options['input-file']), Infinity);
+    const input = () => preparedInput ? preparedInput.value : readJsonFile(resolve(service.config.workspaceRoot, options['input-file']), Infinity);
     if (command === 'room-create')
         return { result: service.rooms.create(input()) };
     if (!id)

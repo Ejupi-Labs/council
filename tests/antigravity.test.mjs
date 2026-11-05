@@ -79,6 +79,30 @@ test('Antigravity refuses malformed steps, changed step types and duplicate comp
   assert.equal(changed.failures.length, 1);
 });
 
+test('Antigravity retains body-free field shapes for invalid steps and distinguishes unsupported state strings', () => {
+  const cases = [
+    [{ step_index: 'PRIVATE_INDEX' }, /invalid step update.*step_index=string/],
+    [{ state: null }, /invalid step update.*state=null/],
+    [{ state: 'PRIVATE_FUTURE_STATE' }, /unsupported step state.*state=unsupported-string/],
+    [{ step_type: '' }, /invalid step update.*step_type=empty-string/],
+    [{ step_type: ['PRIVATE_CATEGORY'] }, /invalid step update.*step_type=array/],
+    [{ text_delta: { command: 'PRIVATE_COMMAND' } }, /invalid step update.*text_delta=object/],
+    [{ tool_info: ['PRIVATE_TOOL'] }, /invalid or failed tool step.*tool_info=array/],
+  ];
+  for (const [override, expected] of cases) {
+    const state = session();
+    state.event(step({ ...override, parameters: { command: 'PRIVATE_COMMAND', path: 'PRIVATE_PATH' }, title: 'PRIVATE_TITLE' }));
+    state.event(result());
+    assert.match(state.failures[0], expected);
+    assert.equal(JSON.stringify(state.failures).includes('PRIVATE_'), false);
+    assert.deepEqual(state.output, []); assert.deepEqual(state.completed, []);
+  }
+  const unknown = session();
+  unknown.event(step({ step_index: null, step_type: 'PRIVATE_CATEGORY', text_delta: 'PRIVATE_BODY', tool_info: { parameters: 'PRIVATE_PARAMETERS' } }));
+  assert.match(unknown.failures[0], /step_type=other-string; text_delta=string; tool_info=object/);
+  assert.equal(JSON.stringify(unknown.failures).includes('PRIVATE_'), false);
+});
+
 test('Antigravity requires a complete assistant stream that exactly matches the terminal response', () => {
   for (const [updates, terminal] of [
     [[], result()], [[step({ state: 'ACTIVE' })], result()], [[step()], result({ response: 'Different answer\n' })],
@@ -137,6 +161,39 @@ test('Antigravity rejects failed tools and human permission requests without inv
   }
 });
 
+test('Antigravity classifies observed native ERROR tool frames as failures despite later terminal SUCCESS', () => {
+  for (const partial of [false, true]) {
+    const state = session();
+    if (partial) state.event(step({ step_index: 1, text_delta: 'Partial evidence.' }));
+    const active = step({ step_index: 6, state: 'ACTIVE', step_type: 'tool',
+      tool_name: 'read_file', tool_info: { name: 'read_file', parameters: { Path: 'PRIVATE_PATH' } } });
+    delete active.step_update.text_delta;
+    state.event(active);
+    const failure = step({ step_index: 6, state: 'ERROR', step_type: 'tool', tool_name: 'read_file',
+      tool_info: { name: 'read_file', parameters: { Path: 'PRIVATE_PATH' }, error: { type: 'permission_denied', message: 'PRIVATE_DIAGNOSTIC' } } });
+    delete failure.step_update.text_delta;
+    state.event(failure);
+    state.event(result({ response: partial ? 'Partial evidence.' : '' }));
+    assert.match(state.failures[0], /tool execution failed or was denied.*state=ERROR.*step_type=tool/);
+    assert.equal(JSON.stringify(state.failures).includes('PRIVATE_'), false);
+    assert.deepEqual(state.completed, []);
+    assert.deepEqual(state.output, partial ? ['Partial evidence.'] : []);
+    assert.deepEqual(state.sent, []);
+  }
+});
+
+test('Antigravity ERROR cannot become a successful state without a valid structured tool failure', () => {
+  for (const override of [
+    { state: 'ERROR' }, { state: 'ERROR', step_type: 'tool' },
+    { state: 'ERROR', step_type: 'tool', tool_info: { error: null } },
+    { state: 'ERROR', step_type: 'tool', tool_info: { error: { type: 'permission_denied', message: {} } } },
+  ]) {
+    const state = session(); state.event(step(override)); state.event(result());
+    assert.match(state.failures[0], /unsupported step state/);
+    assert.deepEqual(state.completed, []); assert.deepEqual(state.output, []);
+  }
+});
+
 test('Antigravity diagnostics prevent partial success without exposing stderr contents', () => {
   const clean = session();
   for (const text of ['', ' ', '\r\n\t']) clean.protocol.diagnostic(text, clean.control);
@@ -150,6 +207,34 @@ test('Antigravity diagnostics prevent partial success without exposing stderr co
     assert.match(state.failures[0], /diagnostics.*withheld/i);
     assert.equal(state.failures[0].includes('PRIVATE_DIAGNOSTIC'), false);
     if (!completed) { state.event(result()); assert.deepEqual(state.completed, []); }
+  }
+});
+
+test('Antigravity recognizes the exact native headless denial diagnostic without retaining provider content', () => {
+  const state = session();
+  state.protocol.diagnostic('PRIVATE_TOOL required a permission that headless mode cannot prompt for, so it was auto-denied. PRIVATE_PATH PRIVATE_DIAGNOSTIC', state.control);
+  state.event(result({ response: '' }));
+  assert.match(state.failures[0], /denied a tool permission request in headless mode.*workspace scope.*native CLI permissions.*withheld/);
+  assert.equal(JSON.stringify(state.failures).includes('PRIVATE_'), false);
+  assert.deepEqual(state.completed, []); assert.deepEqual(state.output, []);
+});
+
+test('Antigravity never waits for a split diagnostic marker or classifies loose permission text as the native denial', () => {
+  const marker = 'permission that headless mode cannot prompt for, so it was auto-denied.';
+  for (let split = 1; split < marker.length; split++) {
+    const state = session();
+    state.protocol.diagnostic(marker.slice(0, split), state.control);
+    assert.match(state.failures[0], /emitted diagnostics.*withheld/);
+    state.protocol.diagnostic(marker.slice(split), state.control);
+    state.event(result());
+    assert.deepEqual(state.completed, []); assert.deepEqual(state.output, []);
+  }
+  for (const text of ['Permission denied PRIVATE_DIAGNOSTIC', 'Tool permission debug PRIVATE_DIAGNOSTIC', marker.slice(0, -1),
+    marker.replace('auto-denied.', 'not auto-denied. PRIVATE_PATH')]) {
+    const state = session(); state.protocol.diagnostic(text, state.control);
+    assert.match(state.failures[0], /emitted diagnostics.*withheld/);
+    assert.equal(JSON.stringify(state.failures).includes('PRIVATE_'), false);
+    assert.deepEqual(state.completed, []);
   }
 });
 
