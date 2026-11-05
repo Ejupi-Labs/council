@@ -61,6 +61,16 @@ The root also aligned UI text admission with Unicode White_Space, preserving U+F
 content consistently with the server. The native author independently reviewed that narrow change;
 the actual browser regression saves it and verifies exact CLI retrieval.
 
+## Hosted correction gate closure
+
+[Run42115752948](https://github.com/Ejupi-Labs/council/actions/runs/42115752948) passed all seven jobs
+against implementation commit93c8c2530f99ff97f35e7c55180df9b42d97fcb6: Windows/macOS/Linux each
+AMD64/ARM64 native build, Go tests, real browser journeys, extracted-package/startup checks,
+static/generated-output checks and packaging; plus supported Linux AMD64 race checks. This closes
+both path-alias and elevated Windows ownership findings on actual hosted platforms. Feature002
+implementation may proceed after its design/task gate. The prior locally bounded statements below
+remain the original review limits; this hosted record supplies the subsequent platform evidence.
+
 ## Limits
 
 Executed runtime qualification is Windows ARM64, Go1.27.3, SQLite3.54.1, Chromium151.0.7922.34.

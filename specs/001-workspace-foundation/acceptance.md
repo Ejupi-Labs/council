@@ -1,7 +1,8 @@
 # Workspace foundation acceptance
 
 Date: 2026-11-05. Branch: refactor. Scope: feature001 only.
-Result: implemented and reviewed, with runtime acceptance on Windows ARM64.
+Result: implemented and reviewed, with native runtime CI acceptance on Windows, macOS and Linux,
+each AMD64/ARM64, at implementation commit93c8c2530f99ff97f35e7c55180df9b42d97fcb6.
 Application2.0.0-dev / API1 / Go1.27.3 / bundled SQLite3.54.1.
 
 ## Observed checks
@@ -15,6 +16,7 @@ Application2.0.0-dev / API1 / Go1.27.3 / bundled SQLite3.54.1.
 | npm run release:local | Passed; allowlisted Windows ARM64 preview and SHA256 manifest |
 | Native lock/privacy/project/discovery scoped tests and vet | Passed on actual Windows ARM64 |
 | Native package test-binary cross-compilation | Passed for Windows/macOS/Linux, AMD64/ARM64; compile evidence only |
+| [Hosted runtime CI42115752948](https://github.com/Ejupi-Labs/council/actions/runs/42115752948) | Passed all six native platform jobs plus Linux AMD64 race checks against93c8c25 |
 | Independent correction rechecks | All eight CLI/HTTP findings and both reproduced UI findings closed; see review.md |
 
 The reproducible checks are committed tests. Raw local logs, exit markers and inspected renders
@@ -135,6 +137,6 @@ saves U+FEFF-only text and retrieves it exactly through the CLI.
 ## Remaining product work
 
 No agent task, automatic model routing, account capacity claim, verified integration or MCP host
-interface is delivered by001. All five live adapters remain unqualified. Six-platform CI is
-configured; unexecuted jobs and unsupported native Windows ARM64 race detection are not passes.
+interface is delivered by001. All five live adapters remain unqualified. Six-platform native CI and Linux AMD64 race checks passed in run42115752948.
+Native Windows ARM64 race detection is unsupported and was not claimed as a pass.
 Feature002 may begin after the reviewed foundation commit. The full rebuild goal remains active.

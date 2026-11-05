@@ -1,7 +1,7 @@
 # Council rebuild requirements traceability
 
 Status: feature001 foundation implemented/reviewed on Windows ARM64. FR-001 is implemented for
-that qualified platform; other parent requirements remain partial or not implemented as marked.
+all six native CI targets qualified at93c8c25; other parent requirements remain partial or not implemented as marked.
 Date: 5 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
@@ -35,12 +35,12 @@ single status cannot hide an unmet claim.
 
 | Requirement | Acceptance responsibility | Primary slice | Supporting slices | Planned acceptance evidence | Current status |
 | --- | --- | --- | --- | --- | --- |
-| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — Windows ARM64; other runtime targets pending |
+| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — six native platform jobs passed at93c8c25 |
 | FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — installation/unknown capability separation; execution qualification pending |
 | FR-003 | Reuse vendor-owned authentication without accessing credentials or changing global settings | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — no credential access; native execution authentication reuse pending |
 | FR-004 | Keep provider, account, harness and model identities distinct; link shared accounts | 004 | 002, 003, 009–012 | `specs/004-economical-routing/acceptance.md#target-and-account-identities` | NOT IMPLEMENTED |
 | FR-005 | Supply all five core lifecycle adapters with truthful optional capabilities and qualification | 012 | 002, 003, 009, 010, 011 | `specs/012-release-qualification/acceptance.md#adapter-capability-matrix` | NOT IMPLEMENTED |
-| FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary-and-authority` | IMPLEMENTED — Windows ARM64 foundation; later records repeat exclusion checks |
+| FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary-and-authority` | IMPLEMENTED — six-platform foundation; later records repeat exclusion checks |
 | FR-007 | Admit tasks with project/task and Auto defaults, preserving resolved choices | 002 | 001, 004, 005, 012 | `specs/002-managed-execution/acceptance.md#task-admission-defaults` | NOT IMPLEMENTED |
 | FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | PARTIAL — exact immutable draft versions; execution/guidance pending |
 | FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | PARTIAL — requested preference saved; effective execution pending |
