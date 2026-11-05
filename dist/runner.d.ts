@@ -6,6 +6,8 @@ export interface AcpxRunnerOptions extends RunnerOptions {
     acpxEntrypoint?: string;
 }
 export declare const MAX_AGENT_FRAME_BYTES: number;
+/** Internal causal evidence; copies and provider-controlled result fields confer no authority. */
+export declare function trustedRunnerFailure(result: AgentResult): 'failed' | 'timeout' | undefined;
 /** Reject unsupported explicit effort before executable lookup or provider dispatch. */
 export declare function reasoningEffortError(config: CouncilConfig, agent: AgentConfig, effort: unknown): string | undefined;
 export declare class NativeRunner implements AgentRunner {

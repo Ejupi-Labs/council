@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MODES } from './types.js';
 import { GitWorkspaces } from './workspaces.js';
-import { reasoningEffortError } from './runner.js';
+import { reasoningEffortError, trustedRunnerFailure } from './runner.js';
 import { taskPermissionGuidance } from './agent-permissions.js';
 import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
 import { DispatchQuarantinedError, QUARANTINE_INSPECTION_REQUIRED, QUARANTINE_PERSISTENCE_WARNING } from './dispatch-quarantine.js';
@@ -384,6 +384,7 @@ export class WorkflowEngine {
         let monitorFailure;
         let dispatchFailure;
         let persistenceFailure;
+        let runnerFailure;
         const pollCancellation = (strict = false) => {
             if (signal.aborted) {
                 if (strict && monitorFailure)
@@ -715,6 +716,7 @@ export class WorkflowEngine {
             let cleanupDiagnostic;
             let quarantineFailure;
             let runnerPending = false, runnerInvoked = false;
+            let observedRunnerFailure;
             const callReportKey = randomUUID();
             let privateOutput = Boolean(privateTurn);
             const callController = new AbortController();
@@ -801,6 +803,7 @@ export class WorkflowEngine {
                     cwd, permission, timeoutMs: this.config.timeoutMs, signal: callSignal, model, effort,
                     ...(options.resolvedSettings ? { resolvedSettings: true } : {}),
                 });
+                observedRunnerFailure = trustedRunnerFailure(result);
                 runnerPending = false;
                 if (result.status === 'failed' && typeof result.error === 'string' && result.error.startsWith(PROCESS_CLEANUP_ERROR)) {
                     cleanupDiagnostic = clip(result.error, MAX_ERROR_CHARS);
@@ -821,7 +824,7 @@ export class WorkflowEngine {
                     result = { ...result, status: 'failed', error: this.cleanupFailureMessage() };
                 else if (protectionFailure && !cleanupDiagnostic)
                     result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
-                else if (privateTurn && signal.aborted && !cleanupDiagnostic)
+                else if (privateTurn && signal.aborted && !cleanupDiagnostic && !observedRunnerFailure)
                     result = { ...result, status: 'cancelled', error: 'Private coordination was cancelled before the reply settled.' };
                 if (privateTurn) {
                     let recursive = privateChatCandidate(output);
@@ -885,6 +888,13 @@ export class WorkflowEngine {
                 result = { ...result, status: 'failed', error: this.cleanupFailureMessage() };
             else if (protectionFailure)
                 result = { ...result, status: 'failed', error: clip(errorMessage(protectionFailure), MAX_ERROR_CHARS) };
+            // Keep the native runner's first authoritative failure across a later
+            // cancellation, after private diagnostics have been redacted for sharing.
+            if (observedRunnerFailure) {
+                if (result.status === 'cancelled')
+                    result.status = observedRunnerFailure;
+                runnerFailure ??= new Error(result.error ?? ('Agent ' + agent + ' ' + observedRunnerFailure + '.'));
+            }
             const step = { id: stepId, agent, role, result };
             run.steps.push(step);
             try {
@@ -1052,8 +1062,8 @@ export class WorkflowEngine {
             run.status = 'completed';
         }
         catch (error) {
-            run.status = this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
-            run.error = this.processCleanupFailure ? this.cleanupFailureMessage() : persistenceFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
+            run.status = this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure || runnerFailure ? 'failed' : signal?.aborted || error instanceof Cancelled ? 'cancelled' : 'failed';
+            run.error = this.processCleanupFailure ? this.cleanupFailureMessage() : persistenceFailure?.message ?? runnerFailure?.message ?? clip(errorMessage(error), MAX_ERROR_CHARS);
             for (const artifact of run.workspaces ?? []) {
                 if (![...handles.values()].some(handle => handle.path === artifact.path))
                     artifact.exportError = `Worktree preparation did not finish: ${run.error}`;
@@ -1129,6 +1139,10 @@ export class WorkflowEngine {
                 if (this.processCleanupFailure || monitorFailure || dispatchFailure || persistenceFailure) {
                     run.status = 'failed';
                     run.error = clip([this.processCleanupFailure ? this.cleanupFailureMessage() : undefined, monitorFailure?.message, dispatchFailure?.message, persistenceFailure?.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
+                }
+                else if (runnerFailure) {
+                    run.status = 'failed';
+                    run.error = clip([runnerFailure.message, run.error].filter((value, index, all) => value && all.indexOf(value) === index).join('; '), MAX_ERROR_CHARS);
                 }
                 else if (signal.aborted) {
                     run.status = 'cancelled';

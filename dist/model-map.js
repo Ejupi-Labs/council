@@ -104,7 +104,7 @@ export function validateModelMap(value) {
         nonempty(task.label, 'Task label');
         nonempty(task.description, 'Task description');
     }
-    const cohorts = new Map();
+    const cohorts = new Map(), configurations = new Set();
     for (const observation of catalog.observations) {
         if (!sources.has(observation.sourceId))
             throw new Error(`Observation ${observation.id} references a missing source.`);
@@ -119,6 +119,10 @@ export function validateModelMap(value) {
         if (previous !== undefined && previous !== protocol)
             throw new Error(`Cohort ${observation.cohort} mixes incompatible benchmark versions, metrics, units, score directions or harnesses.`);
         cohorts.set(observation.cohort, protocol);
+        const configuration = JSON.stringify([observation.cohort, observation.modelId, observation.effort]);
+        if (configurations.has(configuration))
+            throw new Error(`Cohort ${JSON.stringify(observation.cohort)} repeats the exact model and effort configuration ${JSON.stringify([observation.modelId, observation.effort])}. Correct the existing observation ID or use a distinct cohort for another run.`);
+        configurations.add(configuration);
     }
     for (const model of catalog.models) {
         nonempty(model.name, 'Model name');

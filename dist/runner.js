@@ -9,14 +9,23 @@ import { checkAgentJsonStructure } from './agent-json.js';
 import { agentTransport, CLAUDE_READ_TOOLS } from './agent-permissions.js';
 import { REASONING_EFFORTS } from './types.js';
 export const MAX_AGENT_FRAME_BYTES = 4 * 1024 * 1024;
+const trustedFailures = new WeakMap();
+/** Internal causal evidence; copies and provider-controlled result fields confer no authority. */
+export function trustedRunnerFailure(result) { return trustedFailures.get(result); }
 async function withBudget(request, task) {
     const started = performance.now();
     const controller = new AbortController();
-    let timedOut = false;
-    const expire = () => { if (controller.signal.aborted)
-        return; timedOut = true; controller.abort(); };
+    let cause;
+    const observeStop = value => { if (!cause && !controller.signal.aborted)
+        cause = Object.freeze({ status: value.status, error: value.error.slice(0, 4096) }); };
+    const expire = () => {
+        if (controller.signal.aborted)
+            return;
+        observeStop({ status: 'timeout', error: 'Agent exceeded its total time limit, including executable startup.' });
+        controller.abort();
+    };
     const timer = setTimeout(expire, Math.min(request.timeoutMs, 2_147_483_647));
-    const cancel = () => controller.abort();
+    const cancel = () => { observeStop({ status: 'cancelled', error: 'Agent request cancelled.' }); controller.abort(); };
     request.signal?.addEventListener('abort', cancel, { once: true });
     if (request.signal?.aborted)
         cancel();
@@ -29,7 +38,7 @@ async function withBudget(request, task) {
     };
     let result;
     try {
-        result = await task(controller.signal, remaining);
+        result = await task(controller.signal, remaining, observeStop);
     }
     catch (error) {
         result = failed(request, error instanceof Error ? error.message : 'Unable to resolve the configured agent executable.');
@@ -41,10 +50,12 @@ async function withBudget(request, task) {
     const durationMs = Math.round(performance.now() - started);
     if (result.error?.startsWith(PROCESS_CLEANUP_ERROR))
         return { ...result, status: 'failed', durationMs };
-    if (timedOut)
-        return { ...result, status: 'timeout', durationMs, error: 'Agent exceeded its total time limit, including executable startup.' };
-    if (controller.signal.aborted)
-        return { ...result, status: 'cancelled', durationMs, error: 'Agent request cancelled.' };
+    if (cause) {
+        const outcome = { ...result, status: cause.status, durationMs, error: cause.error };
+        if (cause.status === 'failed' || cause.status === 'timeout')
+            trustedFailures.set(outcome, cause.status);
+        return outcome;
+    }
     return { ...result, durationMs };
 }
 function childEnvironment(environment) {
@@ -118,7 +129,7 @@ function validateRequest(config, request) {
     return undefined;
 }
 /** Shared framing and lifecycle checks for native CLI, direct ACP, and optional external ACPX. */
-async function runProtocol(launch, protocol, request, config, environment) {
+async function runProtocol(launch, protocol, request, config, environment, observeStop) {
     const started = performance.now();
     const maxBytes = config.maxOutputBytes;
     const maxWireBytes = Math.min(64 * 1024 * 1024, Math.max(4 * 1024 * 1024, Buffer.byteLength(request.prompt, 'utf8') * 6 + maxBytes * 8));
@@ -147,6 +158,8 @@ async function runProtocol(launch, protocol, request, config, environment) {
         const finish = (status, error) => {
             if (settled)
                 return;
+            if (status === 'failed' && error)
+                observeStop({ status: 'failed', error });
             settled = true;
             clearTimeout(timer);
             if (graceTimer)
@@ -160,6 +173,7 @@ async function runProtocol(launch, protocol, request, config, environment) {
         const terminate = (status, error) => {
             if (forcedStatus || settled)
                 return;
+            observeStop({ status: status === 'failed' ? 'failed' : status === 'timeout' ? 'timeout' : 'cancelled', error });
             forcedStatus = status;
             failure = error;
             try {
@@ -213,6 +227,10 @@ async function runProtocol(launch, protocol, request, config, environment) {
                     return;
                 }
                 stopReason = reason;
+                if (reason === 'cancelled')
+                    observeStop({ status: 'cancelled', error: 'Agent cancelled its turn.' });
+                else if (reason !== 'end_turn')
+                    observeStop({ status: 'failed', error: `Agent stopped with ${reason}; the task is incomplete.` });
                 if (protocol.closeAfterCompletion)
                     graceTimer = setTimeout(() => { closingAfterCompletion = true; child.kill(); }, 500);
             },
@@ -306,6 +324,33 @@ async function runProtocol(launch, protocol, request, config, environment) {
             terminate('failed', 'Unable to start the configured agent executable. Run council doctor.');
         });
         child.once('close', async (code, signal) => {
+            // Classify a trailing frame before asynchronous client-operation drainage
+            // can admit a later cancellation or deadline as the apparent first cause.
+            if (!settled && !forcedStatus) {
+                readFrame();
+                frameBytes = 0;
+            }
+            let terminalError;
+            if (!settled && !forcedStatus) {
+                if (code !== 0 && !(closingAfterCompletion && code === null))
+                    terminalError = signal ? 'Agent was terminated before successful completion.'
+                        : code === 5 ? 'Agent permission request was denied or could not be answered; the task is incomplete.' : `Agent exited with code ${code ?? 'unknown'}. Provider diagnostics were withheld.`;
+                else if (stopReason !== 'cancelled') {
+                    if (stopReason !== 'end_turn')
+                        terminalError = stopReason ? `Agent stopped with ${stopReason}; the task is incomplete.` : 'Agent exited without a successful terminal completion.';
+                    else if (!output.trim())
+                        terminalError = 'Agent returned an empty answer.';
+                    else if (config.agents[request.agent]?.profile === 'junie' && output.trim() === 'Authentication data is invalid or missing')
+                        terminalError = 'Junie authentication is unavailable. Sign in through the Junie CLI outside Council, then retry.';
+                    else {
+                        terminalError = providerAnswerFailure(output);
+                        if (terminalError)
+                            output = '';
+                    }
+                }
+                if (terminalError)
+                    observeStop({ status: 'failed', error: terminalError });
+            }
             await protocol.settle?.();
             if (settled)
                 return;
@@ -313,37 +358,12 @@ async function runProtocol(launch, protocol, request, config, environment) {
                 finish(forcedStatus, failure);
                 return;
             }
-            readFrame();
-            frameBytes = 0;
-            if (forcedStatus) {
-                finish(forcedStatus, failure);
-                return;
-            }
-            if (code !== 0 && !(closingAfterCompletion && code === null)) {
-                finish('failed', signal ? 'Agent was terminated before successful completion.'
-                    : code === 5 ? 'Agent permission request was denied or could not be answered; the task is incomplete.' : `Agent exited with code ${code ?? 'unknown'}. Provider diagnostics were withheld.`);
+            if (terminalError) {
+                finish('failed', terminalError);
                 return;
             }
             if (stopReason === 'cancelled') {
                 finish('cancelled', 'Agent cancelled its turn.');
-                return;
-            }
-            if (stopReason !== 'end_turn') {
-                finish('failed', stopReason ? `Agent stopped with ${stopReason}; the task is incomplete.` : 'Agent exited without a successful terminal completion.');
-                return;
-            }
-            if (!output.trim()) {
-                finish('failed', 'Agent returned an empty answer.');
-                return;
-            }
-            if (config.agents[request.agent]?.profile === 'junie' && output.trim() === 'Authentication data is invalid or missing') {
-                finish('failed', 'Junie authentication is unavailable. Sign in through the Junie CLI outside Council, then retry.');
-                return;
-            }
-            const providerFailure = providerAnswerFailure(output);
-            if (providerFailure) {
-                output = '';
-                finish('failed', providerFailure);
                 return;
             }
             finish('completed');
@@ -537,7 +557,7 @@ export class NativeRunner {
         if (invalid)
             return invalid;
         const agent = this.config.agents[request.agent];
-        return await withBudget(request, async (signal, remaining) => {
+        return await withBudget(request, async (signal, remaining, observeStop) => {
             const scoped = { ...request, signal };
             const { launch, transport } = await this.launch(agent, scoped, signal);
             scoped.timeoutMs = remaining();
@@ -545,7 +565,7 @@ export class NativeRunner {
                 : agent.profile === 'codex' ? new CodexProtocol(request.prompt)
                     : agent.profile === 'antigravity' ? new AntigravityProtocol(request.prompt) : new ClaudeProtocol(scoped);
             const environment = this.options.environment ?? process.env;
-            return await runProtocol(launch, protocol, scoped, this.config, transport === 'native' && agent.profile === 'codex' ? codexEnvironment(environment) : environment);
+            return await runProtocol(launch, protocol, scoped, this.config, transport === 'native' && agent.profile === 'codex' ? codexEnvironment(environment) : environment, observeStop);
         });
     }
     async doctor() {
@@ -583,13 +603,13 @@ export class AcpxRunner {
         const agent = this.config.agents[request.agent];
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(agent.profile))
             return failed(request, 'Invalid external ACPX agent profile.');
-        return await withBudget(request, async (signal, remaining) => {
+        return await withBudget(request, async (signal, remaining, observeStop) => {
             const scoped = { ...request, signal };
             const launch = await this.executable(request.cwd, signal);
             scoped.timeoutMs = remaining();
             const write = request.permission === 'write', { model } = resolvedSettings(agent, request);
             launch.args.push('--format', 'json', '--json-strict', '--cwd', resolve(request.cwd), write ? '--approve-all' : '--deny-all', '--permission-policy', JSON.stringify({ defaultAction: write ? 'approve' : 'deny' }), '--non-interactive-permissions', 'deny', '--timeout', String(scoped.timeoutMs / 1000), ...(model ? ['--model', model] : []), agent.profile, 'exec', '--file', '-');
-            return await runProtocol(launch, new ExternalAcpxProtocol(request.prompt), scoped, this.config, this.options.environment ?? process.env);
+            return await runProtocol(launch, new ExternalAcpxProtocol(request.prompt), scoped, this.config, this.options.environment ?? process.env, observeStop);
         });
     }
     async doctor() {

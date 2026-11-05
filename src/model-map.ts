@@ -81,7 +81,7 @@ export function validateModelMap(value: unknown): ModelMapCatalog {
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error(`Source ${source.id} must have an HTTP or HTTPS URL without credentials.`);
   }
   for (const task of catalog.tasks) { nonempty(task.label, 'Task label'); nonempty(task.description, 'Task description'); }
-  const cohorts = new Map<string, string>();
+  const cohorts = new Map<string, string>(), configurations = new Set<string>();
   for (const observation of catalog.observations) {
     if (!sources.has(observation.sourceId)) throw new Error(`Observation ${observation.id} references a missing source.`);
     if (!models.has(observation.modelId)) throw new Error(`Observation ${observation.id} must reference an exact catalog model ID.`);
@@ -91,6 +91,9 @@ export function validateModelMap(value: unknown): ModelMapCatalog {
     const previous = cohorts.get(observation.cohort);
     if (previous !== undefined && previous !== protocol) throw new Error(`Cohort ${observation.cohort} mixes incompatible benchmark versions, metrics, units, score directions or harnesses.`);
     cohorts.set(observation.cohort, protocol);
+    const configuration = JSON.stringify([observation.cohort, observation.modelId, observation.effort]);
+    if (configurations.has(configuration)) throw new Error(`Cohort ${JSON.stringify(observation.cohort)} repeats the exact model and effort configuration ${JSON.stringify([observation.modelId, observation.effort])}. Correct the existing observation ID or use a distinct cohort for another run.`);
+    configurations.add(configuration);
   }
   for (const model of catalog.models) {
     nonempty(model.name, 'Model name'); nonempty(model.provider, 'Model provider');

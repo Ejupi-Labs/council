@@ -65,7 +65,7 @@ export function readJsonFile(filename, maxBytes = 1_048_576) {
     if (statSync(filename).size > maxBytes)
         throw new ValidationError(maxBytes === 1_048_576 ? 'Configuration/input file exceeds 1 MiB.' : 'JSON input exceeds its configured file byte limit.');
     try {
-        const text = readUtf8File(filename), value = JSON.parse(text);
+        const text = readUtf8File(filename, maxBytes), value = JSON.parse(text);
         assertUniqueObjectKeys(text, 'JSON file');
         return value;
     }

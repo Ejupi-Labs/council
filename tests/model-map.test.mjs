@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { modelMapView, validateModelMap } from '../dist/model-map.js';
@@ -30,7 +30,7 @@ function catalog() {
         recommendations: [recommendation(1, { basis: 'policy-inference', sourceIds: ['methodology'] })] })] };
 }
 function fixture(t, base = catalog()) {
-  const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'council-model-map-')), stateDir = join(root, '.council');
+  const parent = realpathSync.native(tmpdir()), root = realpathSync.native(mkdtempSync(join(parent, 'council-model-map-'))), stateDir = join(root, '.council');
   const config = { workspaceRoot: root, stateDir, agents: {
     native: { enabled: true, profile: 'codex' }, exact: { enabled: true, profile: 'junie', model: 'alpha-v1' },
     alias: { enabled: false, profile: 'claude', model: 'alpha-exact-alias' }, unknown: { enabled: true, profile: 'antigravity', model: 'Gemini 3.8' },
@@ -281,4 +281,59 @@ test('the shipped map keeps recorded configurations, namespaces, uncertain evide
   assert.ok(validated.observations.filter(observation => observation.cohort.startsWith('tb4-')).every(observation => observation.uncertainty));
   assert.ok(validated.models.every(model => !model.harnesses?.length), 'Published benchmark harnesses do not establish local wrapper compatibility.');
   assert.ok(validated.models.flatMap(model => model.recommendations).every(recommendation => recommendation.sourceIds.length));
+});
+
+test('distinct observation IDs cannot repeat one exact cohort model and effort configuration', () => {
+  for (const score of [95, 99]) {
+    const base = catalog();
+    base.observations.push({ ...base.observations[0], id: 'another-literal-observation-id', score });
+    assert.throws(() => validateModelMap(base), /repeats the exact model and effort configuration/);
+  }
+});
+
+test('public local overrides reject a duplicate configuration before it shifts another model rank', t => {
+  const f = fixture(t), original = f.base.observations[0];
+  assert.equal(f.view({ model: 'beta-v1' }).rankings.find(row => row.cohort === original.cohort).entries[0].rank, 2);
+  f.overlay({ observations: [{ ...original, id: 'new-id-same-model-effort', score: 99 }] });
+  assert.throws(() => f.view({ model: 'beta-v1' }), /repeats the exact model and effort configuration/);
+  assert.equal(f.base.observations.length, 4);
+  assert.equal(f.base.observations[0].score, 95);
+});
+
+test('existing observation IDs remain valid for score corrections without renumbering retained evidence', t => {
+  const f = fixture(t), original = f.base.observations[0];
+  f.overlay({ observations: [{ ...original, score: 75 }] });
+  const view = f.view({ model: 'beta-v1', includeFullCatalog: true });
+  assert.equal(view.catalog.observations.length, 4);
+  assert.equal(view.catalog.observations.find(row => row.id === original.id).score, 75);
+  assert.deepEqual(view.catalog.models.find(row => row.id === 'alpha-v1').evidenceIds, ['alpha-quality', 'alpha-cost']);
+  assert.equal(view.rankings.find(row => row.cohort === original.cohort).entries[0].rank, 1);
+  assert.equal(view.hierarchy.find(row => row.task === 'implementation').tied, true);
+});
+
+test('different efforts and different cohort runs preserve separate configuration observations', t => {
+  const f = fixture(t), original = f.base.observations[0];
+  f.overlay({ observations: [
+    { ...original, id: 'lower-effort', effort: 'low', score: 85 },
+    { ...original, id: 'separate-run', cohort: 'distinct-run-v2', score: 91 },
+  ] });
+  const view = f.view({ model: 'beta-v1', includeFullCatalog: true });
+  assert.equal(view.catalog.observations.length, 6);
+  assert.equal(view.rankings.find(row => row.cohort === original.cohort).entries[0].rank, 3);
+  assert.equal(view.catalog.observations.find(row => row.id === 'separate-run').effort, 'high');
+});
+
+test('configuration tuple identity keeps unreported effort distinct from literal labels and separator-containing IDs', () => {
+  const base = catalog(), original = base.observations[0];
+  base.observations.push(...[null, 'null', 'unreported', 'reported|high'].map((effort, index) => ({
+    ...original, id: 'literal-effort-' + index, effort,
+  })));
+  base.models.push(model('beta', { evidenceIds: ['tuple-one'], recommendations: [] }), model('alpha|beta', { evidenceIds: ['tuple-two'], recommendations: [] }));
+  base.observations.push(
+    observation('tuple-one', 'beta', 1, { cohort: 'group|alpha', effort: null }),
+    observation('tuple-two', 'alpha|beta', 1, { cohort: 'group', effort: null }),
+  );
+  const checked = validateModelMap(base);
+  assert.equal(checked.observations.length, 10);
+  assert.deepEqual(checked.observations.filter(row => row.id.startsWith('literal-effort-')).map(row => row.effort), [null, 'null', 'unreported', 'reported|high']);
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -14,8 +14,8 @@ import { serveDashboard } from '../dist/dashboard.js';
 
 const execute = promisify(execFile), cli = new URL('../dist/cli.js', import.meta.url);
 function workspace(t, beforeCleanup = async () => {}) {
-  const root = mkdtempSync(join(tmpdir(), 'council-model-map-integration-'));
-  t.after(async () => { await beforeCleanup(); assert.equal(dirname(root), resolve(tmpdir())); assert.ok(basename(root).startsWith('council-model-map-integration-')); rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const parent = realpathSync.native(tmpdir()), root = realpathSync.native(mkdtempSync(join(parent, 'council-model-map-integration-')));
+  t.after(async () => { await beforeCleanup(); assert.equal(dirname(root), parent); assert.ok(basename(root).startsWith('council-model-map-integration-')); rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return root;
 }
 function fixture(t) {

@@ -5,6 +5,7 @@ import { RoomStore } from './room-store.js';
 import { assertUniqueObjectKeys } from './control-json.js';
 import { checkAgentJsonStructure } from './agent-json.js';
 import { objectSchema, parseSchema, type JsonSchema } from './schema.js';
+import { roomMessageDefinition } from './rooms-schema.js';
 import { REASONING_EFFORTS, type RunRecord, type WorkflowInput, type WorkspaceArtifact } from './types.js';
 import { BUILT_IN_SKILL_IDS, validateSkills } from './skills.js';
 import type { CouncilService } from './service.js';
@@ -154,7 +155,7 @@ export class RoomManager {
 
   postMessage(id: string, value: { author: string; body: string }): RoomRecord {
     this.available();
-    const input = parseSchema<{ author: string; body: string }>(objectSchema({ author: text(80), body: text() }, ['author', 'body']), value, 'message');
+    const input = parseSchema<{ author: string; body: string }>(roomMessageDefinition, value, 'message');
     nonempty(input.author, 'Message author', 320); nonempty(input.body, 'Message body');
     return this.change(id, room => {
       room.messages.push(message(input.author, 'human', input.body));

@@ -5,6 +5,7 @@ import { RoomStore } from './room-store.js';
 import { assertUniqueObjectKeys } from './control-json.js';
 import { checkAgentJsonStructure } from './agent-json.js';
 import { objectSchema, parseSchema } from './schema.js';
+import { roomMessageDefinition } from './rooms-schema.js';
 import { REASONING_EFFORTS } from './types.js';
 import { BUILT_IN_SKILL_IDS, validateSkills } from './skills.js';
 const text = (maximum) => ({ type: 'string', minLength: 1, ...(maximum === undefined ? {} : { maxLength: maximum }), pattern: '^[^\\u0000]+$' });
@@ -160,7 +161,7 @@ export class RoomManager {
     }
     postMessage(id, value) {
         this.available();
-        const input = parseSchema(objectSchema({ author: text(80), body: text() }, ['author', 'body']), value, 'message');
+        const input = parseSchema(roomMessageDefinition, value, 'message');
         nonempty(input.author, 'Message author', 320);
         nonempty(input.body, 'Message body');
         return this.change(id, room => {

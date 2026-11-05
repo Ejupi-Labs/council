@@ -19,7 +19,7 @@ import type { ModelMapQuery } from './model-map-types.js';
 import type { RoutingInput } from './routing-types.js';
 import { parseRoutingInput } from './routing-schema.js';
 import { billingInputDefinition, billingImportDefinition } from './billing-schema.js';
-import { roomDefinition, roomTaskDefinition } from './rooms-schema.js';
+import { roomDefinition, roomMessageDefinition, roomTaskDefinition } from './rooms-schema.js';
 import { parseSchema } from './schema.js';
 import { readUtf8File } from './utf8-file.js';
 import { verifyStateSnapshot } from './state-snapshot.js';
@@ -238,6 +238,8 @@ async function main(): Promise<void> {
     return;
   }
   if ((command === 'billing-set' || command === 'billing-import') && (!values.agent?.trim() || !values['input-file'])) throw new Error(`${command} requires --agent and --input-file.`);
+  const billingRevision = (command === 'billing-set' || command === 'billing-import') && values.revision !== undefined ? Number(values.revision) : undefined;
+  if (billingRevision !== undefined && (!Number.isSafeInteger(billingRevision) || billingRevision < 0)) throw new Error('Expected billing revision must be a nonnegative safe integer.');
   if ((command === 'route' || command === 'route-plan') && values['input-file'] && routeOptions.some(option => option !== 'input-file' && Object.hasOwn(values, option))) throw new Error('Choose a routing --input-file or routing flags, not both.');
   // Read supplied files once before opening state or registering a Council host.
   const fileInputs = new Map<string, unknown>();
@@ -253,6 +255,7 @@ async function main(): Promise<void> {
     parseSchema(command === 'billing-set' ? billingInputDefinition : billingImportDefinition, requestInput);
   }
   if (command === 'room-create') parseSchema(roomDefinition, requestInput);
+  if (command === 'room-message') parseSchema(roomMessageDefinition, requestInput, 'message');
   if (command === 'room-task') parseSchema(roomTaskDefinition, requestInput);
   let routingInput: RoutingInput | undefined;
   if (command === 'route' || command === 'route-plan') {
@@ -297,7 +300,7 @@ async function main(): Promise<void> {
     if (values.skills !== undefined) for (const alias of new Set([...input.agents, ...(input.judge ? [input.judge] : [])])) {
       input.agentSettings = { ...input.agentSettings, [alias]: { ...input.agentSettings?.[alias], skills: values.skills.split(',').map(value => value.trim()) } };
     }
-    return input;
+    return parseWorkflow(input);
   };
   const preparedWorkflow = command === 'plan' || command === 'run' ? workflowInput() : undefined;
   const service = await CouncilService.open(config);
@@ -347,7 +350,7 @@ async function main(): Promise<void> {
       }
     }
     else if (command === 'billing-set' || command === 'billing-import') {
-      const revision = values.revision === undefined ? service.billing.get(values.agent!).revision : Number(values.revision);
+      const revision = billingRevision ?? service.billing.get(values.agent!).revision;
       print(command === 'billing-set' ? service.billing.update(values.agent!, requestInput as any, revision) : service.billing.importSnapshot(values.agent!, requestInput as any, revision));
     }
     else if (command === 'route' || command === 'route-plan') {

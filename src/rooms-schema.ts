@@ -3,6 +3,10 @@ import { BUILT_IN_SKILL_IDS } from './skills.js';
 
 const text = (minLength: number, maxLength: number): JsonSchema => ({ type: 'string', minLength, maxLength });
 export const effortDefinition: JsonSchema = { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] };
+export const roomMessageDefinition = objectSchema({
+  author: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[^\\u0000]+$' },
+  body: { type: 'string', minLength: 1, pattern: '^[^\\u0000]+$' },
+}, ['author', 'body']);
 export const roomTaskDefinition = objectSchema({ title: text(1, 200), brief: { type: 'string', minLength: 1 },
   permission: { type: 'string', enum: ['read', 'write'], default: 'read' },
   dependsOn: { type: 'array', items: text(1, 256) },

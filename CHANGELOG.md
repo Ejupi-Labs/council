@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve the first native protocol failure, provider cancellation or timeout while subprocess cleanup drains. Carry verified native failures through workflow finalization without exposing private coordination diagnostics or changing already admitted parallel work; cleanup uncertainty remains a failure.
+- Validate CLI-added effort/skills, room-message structure and explicit billing revisions before opening state. Enforce finite JSON byte limits during descriptor reads, including file growth after the size check, while preserving complete Unicode/BOM input and explicit unlimited text reads.
+- Reject repeated exact model/effort configurations inside one benchmark cohort before they inflate rankings. Preserve existing-ID score corrections, distinct efforts and separate runs, and canonicalize model-map temporary fixtures across platforms.
 - Recognize observed native Antigravity `ERROR` tool frames and headless-denial diagnostics as failures, even when followed by terminal `SUCCESS`. Name each step's actual directory and scope ACP/Antigravity read guidance to avoid following references outside its workspace. Strengthen whole-turn ballot instructions while retaining the reproduced Junie compatibility failure without stripping assistant text or granting broader permissions.
 - Isolate independent native Codex sessions from inherited Windows Desktop sandbox-dispatch markers, preserving explicit read/write sandbox arguments and account configuration. Report actual Node/SQLite runtime readiness through an offline doctor that does not open or recover collaboration state.
 - Reject invalid UTF-8 and duplicate JSON keys in supplied task/configuration/request files, and preflight supplied CLI files and applicable schemas before opening state. Preserve BOM-prefixed Unicode and reuse the same input through dispatch.

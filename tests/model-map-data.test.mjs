@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { MODEL_MAP_CATALOG, createModelMapCohort } from '../dist/model-map-data.js';
@@ -38,7 +38,7 @@ test('observation identity preserves literal components and separates unreported
 });
 
 test('an older full-record observation override updates only its intended model and effort after a catalogue refresh', t => {
-  const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'council-model-map-data-')), stateDir = join(root, '.council');
+  const parent = realpathSync.native(tmpdir()), root = realpathSync.native(mkdtempSync(join(parent, 'council-model-map-data-'))), stateDir = join(root, '.council');
   t.after(() => { assert.equal(dirname(resolve(root)), parent); assert.ok(basename(root).startsWith('council-model-map-data-')); rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const original = observations([['alpha-v1', 90, 'high'], ['beta-v1', 80, 'medium']]);
   const refreshed = observations([['alpha-v1', 30, 'low'], ['beta-v1', 82, 'medium'], ['alpha-v1', 91, 'high']]);
