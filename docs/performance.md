@@ -18,6 +18,10 @@ The waiter workload made 120 summary reads in about 505 ms and decoded about 2.0
 
 Persisted summaries and covering indexes trade additional database space and write work for bounded reads. Full results still require an explicit transcript read. Integrity checks, backup, initial schema migration and actual provider latency are separate workloads; these measurements do not establish their throughput or a hosted-service SLA. Hardware, filesystem, antivirus and concurrent load affect elapsed time. Run the script on the deployment machine when choosing operational capacity.
 
+## 5 November 2026 algorithm measurement
+
+The `1.3.0-dev.10` offline benchmark ran on Windows ARM64 with Node 24.18.1 during concurrent endurance work. Ten listings took 758.158 ms through full snapshots and 4.828 ms through metadata; ten cancellation checks took 9.305 ms and 0.165 ms respectively. Twenty foreign waiters made 120 summary reads and zero full-record reads in 512.287 ms. The benchmark checks equivalent answers between algorithms in the same runtime under that load; these timings do not measure a release-to-release speedup or establish an SLA. No provider calls were made.
+
 ## Version 1.2 stress fixtures
 
 The following measurements use disposable local fixtures on the same Windows ARM64 development machine. They isolate the indicated query or algorithm; they do not measure provider latency or end-to-end workflow throughput.
@@ -36,6 +40,8 @@ A final version 1.2 build measurement during concurrent endurance tests recorded
 A sustained four-writer run exposed online-backup starvation after the database reached about 19 MB. In a controlled copy of that fixture, a foreign commit after every 128-page backup step left the unpinned copy at 4,518 of 4,646 pages remaining for 100 steps. Pinning a dedicated read snapshot completed in 36 callbacks and 333.82 ms while all 36 foreign writes continued; the backup contained the prewrite counter and passed integrity checking. The copy retains 128-page steps, cancellation checks and the 60-second budget. This is a fixture result, with WAL retention lasting until the snapshot closes.
 
 Fair queue admission also changes latency under contention. In a controlled three-slot fixture, strict head-only admission delayed eligible B/C callers by 274/526 ms while free capacity waited for older A to poll. Reserving capacity for the older prefix admitted B/C in 13/3 ms, while A retained its reservation and acquired at 271 ms. This removes avoidable polling serialization; it does not promise a maximum wait or a throughput multiplier. Queue waits remain cancellable and have no independent deadline.
+
+## Endurance harness behavior
 
 The artifact harness stops at its requested duration or its explicit/default 1,000-cycle ceiling, whichever comes first. Its summary records the requested duration, observed workload time, cycle limit and stopping reason; reaching the cycle limit does not qualify the full requested duration. Setup and cleanup timings are separate. The 128 MiB fixture budget remains enforced independently.
 

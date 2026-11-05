@@ -1,5 +1,21 @@
 # Council verification record
 
+## 1.3 release verification — 5 November 2026
+
+The exact stable commit `9834308` passed **1,218 local tests: 1,211 passed, seven platform skips, zero failures**, in 487.599 seconds. All six jobs succeeded in [Verify run 41961330657](https://github.com/Ejupi-Labs/council/actions/runs/41961330657), covering Node 24 and 26 on Windows, Linux and macOS.
+
+The endurance captures below use frozen builds. Source10 (`243216e`, `1.3.0-dev.10`) and stable (`9834308`, `1.3.0`) have matching functional code with only version-file differences; each result is labelled by its captured build.
+
+| Workload | Captured build | Requested duration | Observed outcome |
+| --- | --- | --- | --- |
+| [Windows room lifecycles](https://github.com/Ejupi-Labs/council/actions/runs/41960348898) | Source10 | 30 minutes | Completed: 3,220 scenarios, 16,100 fake calls, all 1,288 workers drained and 644 fixtures removed. |
+| [Linux storage](https://github.com/Ejupi-Labs/council/actions/runs/41960353592) | Source10 | 30 minutes | Completed: 155,638 terminal cycles, 59 checked backups, all 18 workers drained and six fixtures removed; harness `busyRetries`: 13. |
+| Node 26 coordination | Source10 | 60 minutes | Completed: 5,721 cycles, 74,373 fake calls, 61 checked snapshots, 1,364 hot-backup writes and 287 drained rotations; fixture removed. |
+| Node 24 coordination | Exact stable | 60 minutes | Completed: 5,883 cycles, 76,479 fake calls, 61 checked snapshots, 1,383 hot-backup writes and 295 drained rotations; fixture removed. |
+| Node 26 MCP, 30-second interval | Exact stable | 60 minutes | Completed: 120 ticks, 504 workflows (40 intentionally cancelled), 1,240 fake calls and 6 backups; all 4 rotations closed/drained and harness cleanup completed. |
+
+All tests and endurance workloads above use local fake agents with zero live provider calls. The sparse MCP capture uses an explicit 30-second interval and does not qualify the default two-second package workload. Package checks use a separate offline production installation tied to the frozen tarball's recorded SHA-256, with their own provenance records.
+
 ## Ordered workflow evidence — 5 November 2026, development candidate
 
 The final **1.3.0-dev.10** local suite passed **1,218 tests: 1,211 passed, seven platform skips, zero failures**, in 460.2 seconds on Windows ARM64. All six jobs passed in [Verify run 41960300278](https://github.com/Ejupi-Labs/council/actions/runs/41960300278), covering Node 24 and 26 on Windows, Linux and macOS. The shared candidate also passed 35 focused evidence/quarantine checks on each of Node 24.18.1 and Node 26.13.0, with no skips or failures. These include genuine state write-BEGIN retries for saves, events and finalization; body/COMMIT/range failures without retry; ordered snapshots and frozen payloads; cancellation and allowance changes after a pending evidence barrier; queued sibling evidence after the first fault; awaited worktree intent; and unknown terminal acknowledgements distinguished from known committed outcomes.
@@ -22,7 +38,7 @@ The preceding dev8 Windows full-suite failure identifies shared call coordinatio
 
 A separately frozen local dev9 Node 26 coordination capture completed one hour: 5,700 cycles, 74,100 fake agent calls, 61 checked snapshots and 1,452 writes during hot backups. It exercised rooms, private exchanges, advisors, protected dispatch and delegated reports without live provider calls. The Linux storage [run 41952489552](https://github.com/Ejupi-Labs/council/actions/runs/41952489552) completed 30 minutes with 151,862 terminal cycles (130,161 completed and 21,701 intentionally cancelled), 59 checked backups, six removed fixtures and all 18 workers exited.
 
-The dev9 Windows room endurance capture failed at a verified state write-BEGIN in `saveRun` before an agent call. Dev10 addresses that evidence-write boundary; controlled fake-runner service and room-discussion proofs recover the initial save with one call and no replay. The failed endurance result remains a failure, and a dev10 endurance rerun is not yet qualified here.
+The dev9 Windows room endurance capture failed at a verified state write-BEGIN in `saveRun` before an agent call. Dev10 addresses that evidence-write boundary; controlled fake-runner service and room-discussion proofs recover the initial save with one call and no replay. The earlier failed capture remains a failure; completed source10 repeats are recorded in the release verification table above.
 
 ## SQLite contention without workflow replay — 5 November 2026, development candidate
 
