@@ -155,7 +155,7 @@ export class DraftsView {
     // Do not assign value during typing; preserve the caret and original stored text.
     if (this.text.value !== displayText.replace(/\r\n?/g, '\n')) this.text.value = displayText;
     this.save.disabled = !editor || editor.historical || this.saving.has(editor)
-      || (!editor.pending && !/\S/u.test(editor.text));
+      || (!editor.pending && /^\p{White_Space}*$/u.test(editor.text));
     this.save.textContent = editor && this.saving.has(editor) ? 'Saving…' : editor?.pending ? 'Retry pending save' : 'Save draft';
     element<HTMLButtonElement>('new-draft').disabled = !editor || !!editor.pending;
     this.usePolicy.disabled = !editor || !editor.draftId || editor.historical;
@@ -248,7 +248,7 @@ export class DraftsView {
     const editor = this.current;
     if (!editor || editor.historical || this.saving.has(editor)) return;
     if (!editor.pending) {
-      if (!/\S/u.test(editor.text)) { feedback('draft-status', 'Enter task text before saving a draft.', 'error'); return; }
+      if (/^\p{White_Space}*$/u.test(editor.text)) { feedback('draft-status', 'Enter task text before saving a draft.', 'error'); return; }
       const id = requestId();
       editor.pending = editor.draftId ? {
         path: '/drafts/' + editor.draftId, method: 'PUT', editGeneration: editor.editGeneration,

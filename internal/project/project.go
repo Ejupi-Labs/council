@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
+	"github.com/Ejupi-Labs/council/v2/internal/localpath"
 	"io"
 	"os"
 	"os/exec"
@@ -47,7 +48,7 @@ func Inspect(ctx context.Context, selectedPath, basePath string) (Inspection, er
 		path = filepath.Join(basePath, path)
 	}
 	path = filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, err := localpath.Resolve(path)
 	if err != nil {
 		return result, fail("project_unavailable", "The selected folder is missing or inaccessible. Select an accessible local Git project.")
 	}
@@ -75,7 +76,7 @@ func Inspect(ctx context.Context, selectedPath, basePath string) (Inspection, er
 	if err != nil || !validPath(repo) {
 		return result, fail("project_unavailable", "Cannot inspect the Git worktree root.")
 	}
-	repo, err = filepath.EvalSymlinks(filepath.FromSlash(repo))
+	repo, err = localpath.Resolve(filepath.FromSlash(repo))
 	if err != nil {
 		return result, fail("project_unavailable", "Cannot resolve the Git worktree root.")
 	}

@@ -35,6 +35,23 @@ with preservation-plan correction219fa2f. No application implementation preceded
 
 All reported blocking findings are closed. Reviews did not authorize new features or live calls.
 
+## Cross-platform CI correction
+
+Run42110748901 exposed canonical-spelling assumptions in the private state owner and project
+fixture assertions on macOS and Windows hosted runners. Ordinary ancestor aliases now resolve to
+one physical owner root after leaf/same-file validation. A redirected v2 leaf or private state
+file is still rejected. Windows uses metadata-only GetFinalPathNameByHandle for junction ancestors;
+Unix uses filesystem canonical resolution. The same helper fixes an independently reproduced
+project-through-junction failure; its regression failed before the fix and passes after it.
+Physical UTF-16 conversion rejects malformed scalar/NUL input and preserves literal U+FFFD. Tests exercise alias/canonical lock exclusion,
+descriptor parity/cleanup and untouched redirected-file sentinels. Root independently inspected
+the production diff and platform fixture helpers; native author reran uncached Windows ARM64
+tests/vet and six-target compilation. Runtime CI of the correction remains separately reported.
+
+The root also aligned UI text admission with Unicode White_Space, preserving U+FEFF-only valid
+content consistently with the server. The native author independently reviewed that narrow change;
+the actual browser regression saves it and verifies exact CLI retrieval.
+
 ## Limits
 
 Executed runtime qualification is Windows ARM64, Go1.27.3, SQLite3.54.1, Chromium151.0.7922.34.

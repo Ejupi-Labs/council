@@ -37,6 +37,10 @@ test('lost save acknowledgement retries the same intent while preserving newer t
     await page.locator('#save-draft').click();
     await page.waitForFunction(() => /Saved revision 2/i.test(document.querySelector('#draft-status')?.textContent ?? ''));
     assert.equal(f.cli(['drafts', 'get', listed[0].id]).envelope.data.originalText, 'Newer typing must survive');
+    // U+FEFF is preserved content, not Unicode White_Space; UI and CLI use the same rule.
+    await page.locator('#task-text').fill('\uFEFF'); await page.locator('#save-draft').click();
+    await page.waitForFunction(() => /Saved revision 3/i.test(document.querySelector('#draft-status')?.textContent ?? ''));
+    assert.equal(f.cli(['drafts', 'get', listed[0].id]).envelope.data.originalText, '\uFEFF');
   } finally { if (owner) await owner.stop(); await f.close(); }
 });
 

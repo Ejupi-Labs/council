@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Ejupi-Labs/council/v2/internal/localpath"
 )
 
 var ErrLocked = errors.New("another Council owner holds the state lock")
@@ -45,6 +47,8 @@ func DefaultRoot() (string, error) {
 }
 
 // Acquire establishes privacy before writing state, and ownership before opening a database.
+// Ancestor aliases are resolved to one physical root; the state-directory leaf itself must
+// remain an ordinary directory, and private state files must remain ordinary files.
 func Acquire(root string) (*Lock, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("Council state root must be absolute.")
@@ -57,10 +61,15 @@ func Acquire(root string) (*Lock, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("Council's v2 root must be an ordinary private directory.")
 	}
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil || resolved != root {
-		return nil, errors.New("Council's v2 root cannot use redirected directories.")
+	resolved, err := localpath.Resolve(root)
+	if err != nil {
+		return nil, errors.New("Cannot resolve Council's private v2 directory.")
 	}
+	resolvedInfo, err := os.Lstat(resolved)
+	if err != nil || !resolvedInfo.IsDir() || resolvedInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, resolvedInfo) {
+		return nil, errors.New("Council's v2 directory changed while resolving its physical location.")
+	}
+	root = resolved
 	if err := securePrivate(root, true); err != nil {
 		return nil, fmt.Errorf("Cannot protect Council's v2 directory: %w", err)
 	}

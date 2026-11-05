@@ -92,7 +92,7 @@ An extracted executable runs version, initializes private policy state and serve
 another working directory with an empty PATH: no Node, Go, Git or development packages available.
 Project inspection normally requires Git. Build/release generation is development-only.
 Latest local archive: council-2.0.0-dev-windows-arm64.zip, SHA256
-ea4e80fe5ec82f81154e4ca7b080a2db40dc5fe90222367d31fc9701b528368d.
+43896262208827f05525e839e6f3ce9b83b2faac261cfdd600e78ae70105222d.
 This unreleased preview is not an npm publication or the completed product release.
 
 ## Requirement evidence
@@ -110,6 +110,20 @@ This unreleased preview is not an npm publication or the completed product relea
 | WS-014 | CLI parser/acknowledgement/panic tests and injected storage rollback/uncertainty; reviewed failure copy |
 | WS-015 | extracted empty-PATH native startup plus meaningful npm test/check wrappers |
 | SC-001–007 | all sections above, independent review.md and checked executable tasks.md |
+
+## CI correction follow-through
+
+Initial run42110748901 passed Linux ARM64 and Linux race coverage, and exposed macOS/Windows
+ancestor-alias spelling assumptions. Private ownership now resolves legitimate ancestor aliases
+while validating an ordinary same-file v2 leaf. Both owner and project inspection share native
+canonical-path metadata handling. A real Windows junction project regression failed before the
+fix and passes after it; invalid physical-path Unicode is rejected rather than replaced.
+The corrected complete npm test/check suite and extracted-package journey pass on Windows ARM64.
+Six affected target test binaries compile. Corrected runtime CI remains pending and is not counted
+as qualification here. See review.md for independent diff inspection and the bounded correction.
+
+The same correction includes UI/server Unicode White_Space parity. Actual browser acceptance
+saves U+FEFF-only text and retrieves it exactly through the CLI.
 
 ## Remaining product work
 

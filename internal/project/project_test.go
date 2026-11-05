@@ -65,11 +65,20 @@ func TestReadOnlyGitMetadataAndPhysicalAliases(t *testing.T) {
 	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "hostile"))
 	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "unrelated-index"))
 	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalSub, err := filepath.EvalSymlinks(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the original selection/base spelling while checking the canonical observation.
 	a, err := Inspect(context.Background(), "selected subfolder", root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Observation.ResolvedPath != sub || a.Observation.RepositoryRoot != root || a.Observation.Branch == nil || *a.Observation.Branch != "test-main" || a.Observation.Commit == nil {
+	if a.Observation.ResolvedPath != canonicalSub || a.Observation.RepositoryRoot != canonicalRoot || a.Observation.Branch == nil || *a.Observation.Branch != "test-main" || a.Observation.Commit == nil {
 		t.Fatalf("incorrect metadata: %+v", a)
 	}
 	b, err := Inspect(context.Background(), filepath.Join(sub, "..", "selected subfolder"), root)

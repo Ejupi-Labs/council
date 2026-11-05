@@ -191,6 +191,9 @@ replay data may include original task text.
 
 The private state root is `<user-home>/.council/v2/`, containing SQLite state (including its
 journal/WAL companions), the native ownership lock and an ephemeral owner connection descriptor.
+Resolve legitimate ancestor aliases to one canonical physical directory, while rejecting a
+redirected v2 leaf or private state file; aliases never grant a second ownership lock. Verify
+that the selected ordinary leaf and canonical leaf are the same physical directory before use.
 Create/verify private directory permissions before opening the database or writing a bearer
 token: Unix mode 0700 with 0600 files, and a Windows DACL restricted to the current owner, SYSTEM
 and Administrators. Do not place the new store under the selected repository or read legacy

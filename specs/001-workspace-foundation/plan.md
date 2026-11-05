@@ -94,6 +94,7 @@ internal/domain/       # neutral shared DTOs, errors, exact validation
 internal/app/          # service operations, native conversion and aliases
 internal/store/        # SQLite transactions, replay, exact cursors
 internal/project/      # identity and read-only Git metadata
+internal/localpath/    # shared canonical directory metadata for owner/project aliases
 internal/discovery/    # five filesystem-only observations
 internal/localstate/   # privacy, OS lock, descriptor, owner/client
 internal/httpapi/      # contract, authority checks, UI delivery
