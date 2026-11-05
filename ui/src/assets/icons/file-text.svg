@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" data-icon="file-text" data-style="mono-dark" role="img" aria-label="File Text">
+  <title>File Text</title>
+  <path d="M10 6H25V16Q25 22 31 22H39Q42 22 42 25V38Q42 42 38 42H10Q6 42 6 38V10Q6 6 10 6ZM15 26H27Q29 26 29 28V28Q29 30 27 30H15Q13 30 13 28V28Q13 26 15 26ZM15 34H33Q35 34 35 36V36Q35 38 33 38H15Q13 38 13 36V36Q13 34 15 34Z" data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" />
+  <path d="M30 6.5L40.7 16.7Q42 18 40 18H33Q29 18 29 14V8Q29 5.5 30 6.5Z" data-tone="secondary" fill="#F5F2FF" fill-rule="evenodd" />
+</svg>

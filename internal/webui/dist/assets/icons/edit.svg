@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" data-icon="edit" data-style="mono-dark" role="img" aria-label="Edit">
+  <title>Edit</title>
+  <path data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" d="M12.9192 28.9192 Q12 28 12.9192 27.0808 L26.0808 13.9192 Q27 13 27.9192 13.9192 L34.0808 20.0808 Q35 21 34.0808 21.9192 L20.9192 35.0808 Q20 36 19.0808 35.0808 Z" />
+  <path data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" d="M9.6041 31.1595 Q9.9 30.1 10.6778 30.8778 L17.1222 37.3222 Q17.9 38.1 16.8405 38.3959 L7.8595 40.9041 Q6.8 41.2 7.0959 40.1405 Z" />
+  <path data-tone="secondary" fill="#F5F2FF" fill-rule="evenodd" d="M29.1 10.9 L32.7 7.3 C34.6 5.4 37.4 5.4 39.3 7.3 L40.7 8.7 C42.6 10.6 42.6 13.4 40.7 15.3 L37.1 18.9 Z" />
+</svg>

@@ -30,6 +30,13 @@ replacement into main without a further user request. The functional reference i
 - Preserve local data under `.council/`, outside Git and release artifacts. Do not silently open,
   migrate or delete legacy collaboration state while implementing the replacement.
 
+The selected replacement uses Go 1.27.3 and an embedded authored TypeScript UI. Runtime state is
+`<user-home>/.council/v2/`; legacy reference files under `reference/legacy/` are excluded from build
+and release inputs. Run `npm run build`, `npm test` and `npm run check`; commit compiled browser
+assets under `internal/webui/dist/` with source changes. Native binaries are ignored build outputs.
+Use native Go tooling where the current semantic server cannot serve Go; generic Serena source
+edits remain available. Runtime npm dependencies remain prohibited.
+
 The requirements below still govern edits to the legacy implementation while it is present.
 Replacement feature plans must provide meaningful equivalent verification and release rules;
 keep the `npm test` and `npm run check` developer commands working if the tooling changes.

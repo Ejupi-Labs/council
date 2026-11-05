@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" data-icon="plug" data-style="mono-dark" role="img" aria-label="Plug">
+  <title>Plug</title>
+  <path data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" d="M16.5 5C17.8807 5 19 6.1193 19 7.5V18H14V7.5C14 6.1193 15.1193 5 16.5 5Z" />
+  <path data-tone="secondary" fill="#F5F2FF" fill-rule="evenodd" d="M31.5 5C32.8807 5 34 6.1193 34 7.5V18H29V7.5C29 6.1193 30.1193 5 31.5 5Z" />
+  <path data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" d="M13 17H35Q39 17 39 21V23C39 29.5 34.2 33.8 26.5 34.8V40.5Q26.5 43 24 43Q21.5 43 21.5 40.5V34.8C13.8 33.8 9 29.5 9 23V21Q9 17 13 17Z" />
+</svg>

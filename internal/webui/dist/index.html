@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Council — Workspace</title>
+  <link rel="icon" href="/assets/brand/symbol.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/workspace.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#task-text">Skip to task</a>
+  <div class="workspace-shell">
+    <aside class="sidebar" aria-label="Workspace navigation">
+      <a class="brand-link" href="#tasks" aria-label="Ejupi Labs Council workspace"><img class="brand-logo" src="/assets/brand/logo-horizontal.svg" alt="Ejupi Labs" width="240" height="48"></a>
+      <div class="product-name">Council <span class="preview-label">Preview</span></div>
+      <p class="sidebar-caption">Your local workspace</p>
+      <nav aria-label="Primary">
+        <a href="#tasks" aria-current="page"><img src="/assets/icons/edit.svg" alt="" width="24" height="24">Tasks</a>
+        <a href="#agents"><img src="/assets/icons/plug.svg" alt="" width="24" height="24">Agents</a>
+        <a href="#preferences"><img src="/assets/icons/settings.svg" alt="" width="24" height="24">Preferences</a>
+      </nav>
+      <div class="sidebar-note"><img src="/assets/icons/shield.svg" alt="" width="24" height="24"><p>Local preparation.<br>Agent execution is not available yet.</p></div>
+    </aside>
+    <main id="tasks">
+      <header class="page-header">
+        <div><p class="eyebrow">Workspace</p><h1>Tasks</h1><p class="subheading">Choose a project. Keep the full task ready for later.</p></div>
+        <span class="local-badge"><span aria-hidden="true"></span> Local preview</span>
+      </header>
+      <div class="app-feedback" id="app-status" data-testid="app-status" role="status" aria-live="polite">Connecting to the local owner…</div>
+      <button class="secondary compact" id="reconnect" type="button" hidden>Reconnect to local owner</button>
+
+      <section class="panel project-panel" aria-labelledby="project-heading">
+        <div class="section-heading"><img src="/assets/icons/folder-open.svg" alt="" width="24" height="24"><h2 id="project-heading">Project</h2></div>
+        <form id="project-form">
+          <label for="project-path">Absolute project folder</label>
+          <div class="input-action"><input id="project-path" data-testid="project-path" type="text" placeholder="C:\Projects\my-app" autocomplete="off" spellcheck="false" aria-describedby="project-path-help" required><button id="open-project" data-testid="open-project" class="secondary" type="submit" disabled>Open project</button></div>
+          <p class="help" id="project-path-help">An existing Git working folder. Spaces and Unicode are preserved.</p>
+        </form>
+        <div class="saved-project-row"><label for="project-select">Opened projects</label><select id="project-select" data-testid="project-select" disabled><option value="">Choose an opened project</option></select><button id="more-projects" class="quiet compact" type="button" hidden>Load more projects</button></div>
+        <div id="project-status" class="feedback" role="status" aria-live="polite"></div>
+        <dl id="project-details" data-testid="project-details" class="facts project-facts"><div><dt>Working folder</dt><dd>Open a project to begin.</dd></div></dl>
+      </section>
+
+      <div class="task-grid">
+        <section class="panel composer-panel" aria-labelledby="composer-heading">
+          <div class="section-heading heading-between"><h2 id="composer-heading">Task draft</h2><button id="new-draft" data-testid="new-draft" class="quiet compact" type="button" disabled><img src="/assets/icons/plus.svg" alt="" width="20" height="20">New draft</button></div>
+          <div class="composer-context"><span class="chip">Auto</span><span class="draft-state">Draft / Not run</span></div>
+          <form id="draft-form">
+            <label for="task-text">What would you like to work on?</label>
+            <textarea id="task-text" data-testid="task-text" rows="9" placeholder="Describe the change, what matters, and how you will know it works." aria-describedby="execution-note draft-status" disabled></textarea>
+            <label class="checkbox-label" for="use-current-policy"><input id="use-current-policy" data-testid="use-current-policy" type="checkbox" disabled>Use the current preference for this new version</label>
+            <div class="composer-footer"><p id="execution-note" class="help">Task execution is unavailable in this preview.</p><button id="save-draft" data-testid="save-draft" class="primary" type="submit" disabled>Save draft</button></div>
+          </form>
+          <div id="draft-status" data-testid="draft-status" class="feedback" role="status" aria-live="polite">Open a project to prepare a task.</div>
+          <dl id="draft-meta" data-testid="draft-meta" class="facts draft-facts"></dl>
+          <div id="draft-conflict" class="conflict-box" hidden>
+            <p>Your text is retained. Choose how to reconcile the saved version.</p>
+            <div class="button-row"><button id="apply-latest-revision" data-testid="apply-latest-revision" class="secondary" type="button">Keep my text with latest revision</button><button id="reload-saved-draft" data-testid="reload-saved-draft" class="quiet" type="button">Reload saved text</button></div>
+          </div>
+          <button id="restore-draft-text" class="quiet" type="button" hidden>Restore retained local text</button>
+          <form id="draft-history-form" class="history-controls" hidden>
+            <label for="draft-history-revision">Inspect saved revision</label><div class="input-action"><input id="draft-history-revision" data-testid="draft-history-revision" type="text" inputmode="numeric" pattern="[1-9][0-9]*" aria-describedby="history-help"><button id="load-draft-version" data-testid="load-draft-version" class="secondary" type="submit">Open revision</button></div>
+            <p class="help" id="history-help">Saved versions are immutable. <button id="return-current-draft" class="text-button" type="button">Return to current draft</button></p>
+          </form>
+        </section>
+
+        <section class="panel drafts-panel" aria-labelledby="saved-drafts-heading">
+          <div class="section-heading"><img src="/assets/icons/file-text.svg" alt="" width="24" height="24"><h2 id="saved-drafts-heading">Saved drafts</h2></div>
+          <p class="help">Every saved revision keeps its original text and requested preference.</p>
+          <div id="draft-list-status" class="feedback" role="status" aria-live="polite">Choose a project to see its drafts.</div>
+          <ul id="draft-list" data-testid="draft-list" class="draft-list"></ul>
+          <button id="more-drafts" class="quiet" type="button" hidden>Load more drafts</button>
+        </section>
+      </div>
+
+      <section id="agents" class="agents-section" aria-labelledby="agents-heading">
+        <div class="section-header"><div><p class="eyebrow">Connections</p><h2 id="agents-heading">Agents</h2><p class="help">Installation evidence only. Authentication, model access and allowance remain unknown.</p></div><button id="refresh-agents" data-testid="refresh-agents" class="secondary" type="button" disabled><img src="/assets/icons/refresh.svg" alt="" width="20" height="20">Refresh installations</button></div>
+        <div id="agents-status" data-testid="agents-status" class="feedback" role="status" aria-live="polite">Waiting for local access.</div>
+        <div id="agents-list" data-testid="agents-list" class="agents-grid"></div>
+      </section>
+
+      <section id="preferences" class="panel preferences-panel" aria-labelledby="preferences-heading">
+        <div class="section-heading"><img src="/assets/icons/shield.svg" alt="" width="24" height="24"><h2 id="preferences-heading">Operating preference</h2></div>
+        <p class="help">Saved for future task preparation. Effective harness permissions have not been verified.</p>
+        <form id="policy-form"><label for="policy-mode">Requested autonomy</label><div class="input-action"><select id="policy-mode" data-testid="policy-mode" disabled><option value="autonomous">Autonomous full access</option><option value="supervised">Supervised</option></select><button id="save-policy" data-testid="save-policy" class="secondary" type="submit" disabled>Save preference</button></div></form>
+        <div id="policy-status" data-testid="policy-status" class="feedback" role="status" aria-live="polite">Loading saved preference…</div>
+        <button id="reload-policy" class="quiet" type="button" hidden>Reload saved preference</button>
+      </section>
+      <footer class="page-footer">Council · Workspace preview <span>Drafts are saved locally. No agent task has run.</span></footer>
+    </main>
+  </div>
+</body>
+</html>

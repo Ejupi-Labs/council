@@ -90,7 +90,8 @@ Draft / Not run and “Task execution is unavailable in this preview”, with no
 
 ```text
 cmd/council/main.go
-internal/app/          # DTOs, errors, validation, services
+internal/domain/       # neutral shared DTOs, errors, exact validation
+internal/app/          # service operations, native conversion and aliases
 internal/store/        # SQLite transactions, replay, exact cursors
 internal/project/      # identity and read-only Git metadata
 internal/discovery/    # five filesystem-only observations

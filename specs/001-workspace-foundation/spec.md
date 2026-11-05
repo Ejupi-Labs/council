@@ -6,7 +6,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Ready for design
+**Status**: Implemented and reviewed; Windows ARM64 foundation accepted in [acceptance.md](acceptance.md)
 
 **Input**: Build the first usable Council workspace: open a local project, discover existing
 harness installations without model calls, persist the owner's autonomy preference and a task

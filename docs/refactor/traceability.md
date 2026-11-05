@@ -1,6 +1,7 @@
 # Council rebuild requirements traceability
 
-Status: planning baseline; **all FR-001 through FR-048 are NOT IMPLEMENTED** in the rebuilt product.
+Status: feature001 foundation implemented/reviewed on Windows ARM64. FR-001 is implemented for
+that qualified platform; other parent requirements remain partial or not implemented as marked.
 Date: 5 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
@@ -16,8 +17,8 @@ This is not permission to postpone foundational controls: task ownership, bounde
 failure/cancellation precedence, complete evidence, isolation and fail-closed cleanup exist from
 002. Slice 007 adds deliberate recovery and retention operations to that established base.
 
-Every evidence path below is **planned and not yet created**. It identifies the future
-`acceptance.md` section that must contain the observed result; a path alone is not evidence.
+Feature001 evidence exists in its acceptance.md and review.md. Other evidence paths are
+**planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
@@ -34,15 +35,15 @@ single status cannot hide an unmet claim.
 
 | Requirement | Acceptance responsibility | Primary slice | Supporting slices | Planned acceptance evidence | Current status |
 | --- | --- | --- | --- | --- | --- |
-| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | NOT IMPLEMENTED |
-| FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness` | NOT IMPLEMENTED |
-| FR-003 | Reuse vendor-owned authentication without accessing credentials or changing global settings | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#authentication-boundary` | NOT IMPLEMENTED |
+| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — Windows ARM64; other runtime targets pending |
+| FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — installation/unknown capability separation; execution qualification pending |
+| FR-003 | Reuse vendor-owned authentication without accessing credentials or changing global settings | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — no credential access; native execution authentication reuse pending |
 | FR-004 | Keep provider, account, harness and model identities distinct; link shared accounts | 004 | 002, 003, 009–012 | `specs/004-economical-routing/acceptance.md#target-and-account-identities` | NOT IMPLEMENTED |
 | FR-005 | Supply all five core lifecycle adapters with truthful optional capabilities and qualification | 012 | 002, 003, 009, 010, 011 | `specs/012-release-qualification/acceptance.md#adapter-capability-matrix` | NOT IMPLEMENTED |
-| FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary` | NOT IMPLEMENTED |
+| FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary-and-authority` | IMPLEMENTED — Windows ARM64 foundation; later records repeat exclusion checks |
 | FR-007 | Admit tasks with project/task and Auto defaults, preserving resolved choices | 002 | 001, 004, 005, 012 | `specs/002-managed-execution/acceptance.md#task-admission-defaults` | NOT IMPLEMENTED |
-| FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | NOT IMPLEMENTED |
-| FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | NOT IMPLEMENTED |
+| FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | PARTIAL — exact immutable draft versions; execution/guidance pending |
+| FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | PARTIAL — requested preference saved; effective execution pending |
 | FR-010 | Report actual harness policy capabilities and restrictions honestly | 002 | 003, 009–012 | `specs/002-managed-execution/acceptance.md#permission-capabilities-and-limits` | NOT IMPLEMENTED |
 | FR-011 | Validate task data and destination before side effects | 002 | 004, 005, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | NOT IMPLEMENTED |
 | FR-012 | Select proportionate workflow stages without mandatory model planning, debate or review | 005 | 002, 004, 012 | `specs/005-verified-delivery/acceptance.md#proportionate-workflow` | NOT IMPLEMENTED |
@@ -76,12 +77,12 @@ single status cannot hide an unmet claim.
 | FR-040 | Revalidate evidence/destination changes and preserve both candidate and user work on conflict | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#integration-conflicts-and-freshness` | NOT IMPLEMENTED |
 | FR-041 | Require explicit scope for external delivery and reuse existing applicable authorization | 005 | 002, 004, 008, 012 | `specs/005-verified-delivery/acceptance.md#external-delivery-scope` | NOT IMPLEMENTED |
 | FR-042 | Export evidence, back up/restore state and clean reviewed artifacts with explicit scope | 007 | 001, 002, 012 | `specs/007-recovery-and-retention/acceptance.md#export-backup-and-cleanup` | NOT IMPLEMENTED |
-| FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-primary-journey` | NOT IMPLEMENTED |
-| FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#english-and-accessible-states` | NOT IMPLEMENTED |
-| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | NOT IMPLEMENTED |
-| FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#idempotency-and-stale-clients` | NOT IMPLEMENTED |
-| FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | NOT IMPLEMENTED |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | NOT IMPLEMENTED |
+| FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — branded Auto composer/agents; progress/evidence/usage pending |
+| FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — foundation copy/keyboard/error states qualified |
+| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI preparation parity; execution/MCP pending |
+| FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#idempotency-and-stale-clients` | PARTIAL — draft/policy/open replay and stale-client handling; task start pending |
+| FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation offline journey; complete release qualification pending |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — feature001 specified/reviewed/accepted; later features pending |
 
 ## Per-feature review and fix gates
 

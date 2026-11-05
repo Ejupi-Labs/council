@@ -1,2 +1,7 @@
 * text=auto eol=lf
 *.png binary
+# Approved asset hashes cover their exact upstream bytes.
+ui/src/assets/** -text whitespace=cr-at-eol
+internal/webui/dist/assets/** -text whitespace=cr-at-eol
+# Retain the full upstream notice texts and their final blank lines.
+third-party/go-NOTICES.txt whitespace=-blank-at-eof

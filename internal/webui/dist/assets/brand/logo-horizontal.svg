@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1332.6996" height="368" viewBox="0 0 1332.6996 368" fill="none" role="img" data-appearance="dark-colour" data-arrangement="logo-horizontal" aria-label="Ejupi Labs — logo horizontal — Dark · Lilac + Pear">
+  <g transform="translate(64 64) scale(0.225) translate(-131 -114.3495)">
+    <path fill="#B8A5FF" d="M133 730V591C133 536 163 486 212 459L831 121C865 102 907 126 907 164V253C907 290 886 324 853 342L133 730Z" data-tone="primary" fill-rule="evenodd" />
+    <path fill="#B8A5FF" d="M534 578V749C534 768 524 782 507 790L281 904C270 910 270 921 281 927L490 1044C503 1051 511 1063 511 1078V1168C511 1175 506 1181 500 1181H379C372 1181 366 1178 359 1174L171 1063C146 1048 131 1024 131 996V855C131 813 149 778 184 756L534 578Z" data-tone="primary" fill-rule="evenodd" />
+    <path fill="#DFFF5E" d="M575 554C575 531 590 513 612 513C621 513 630 516 638 521L797 632C819 648 832 671 832 699V920C832 936 821 948 806 948C800 948 794 946 788 942L598 819C583 809 575 797 575 781V554Z" data-tone="accent" fill-rule="evenodd" />
+    <path fill="#B8A5FF" d="M575 859L777 992C784 997 791 1000 800 1000H997C1017 1000 1038 1010 1051 1026L1155 1158C1163 1168 1158 1177 1146 1177H697C678 1177 662 1170 648 1159L610 1129C588 1112 575 1091 575 1065V859Z" data-tone="primary" fill-rule="evenodd" />
+  </g>
+  <g transform="translate(367.2785 94) scale(0.4737) translate(0 0)" fill="#B8A5FF" fill-rule="evenodd">
+    <g data-letter="e">
+      <path d="M 269,160 L 165,230 L 139,230 C 116,230 102,229 91,227 Q 84.8889,225.8889 89,230 C 101,242 117,248 139,248 L 190,248 C 222,248 246,262 246,282 C 246,301 234,314 216,314 L 140,314 C 59,314 0,264 0,198 C 0,133 59,88 137,88 C 195,88 246,119 269,160 Z M 76,214 L 173,155 C 162,149 153,146 139,146 C 101,146 72,168 72,193 C 72,201 73,208 76,214 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+    </g>
+    <g data-letter="j">
+      <path d="M 295,115 C 295,99 308,92 330,92 C 352,92 365,99 365,115 L 365,254 C 365,329 321,380 254,380 C 238,380 225,378 216,373 C 211,370 210,363 210,355 C 210,342 217,333 230,328 L 253,317 C 282,305 295,285 295,254 L 295,115 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+      <path d="M 366,36 C 366,55.882 349.882,72 330,72 C 310.118,72 294,55.882 294,36 C 294,16.118 310.118,0 330,0 C 349.882,0 366,16.118 366,36 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(9 0)" data-letter="u">
+      <path d="M 374,92 L 399,92 C 425,92 444,111 444,137 L 444,203 C 444,232 463,249 494,249 C 525,249 544,232 544,203 L 544,92 L 614,92 L 614,203 C 614,268 563,314 494,314 C 425,314 374,268 374,203 L 374,92 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(17 0)" data-letter="p">
+      <path d="M 696,201 L 696,329 C 696,359 674,380 646,380 L 626,380 L 626,203 C 626,137 680,88 752,88 C 823,88 877,136 877,201 C 877,266 825,314 759,314 C 736,314 726,306 718,289 C 711,276 715,266 728,259 C 738,253 745,252 753,252 C 785,252 809,231 809,201 C 809,171 784,148 752,148 C 720,148 696,171 696,201 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(20 0)" data-letter="i">
+      <path d="M 892,112 C 892,98 902,92 927,92 C 951,92 962,98 962,112 L 962,310 L 892,310 L 892,112 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+      <path d="M 963,36 C 963,55.882 946.882,72 927,72 C 907.118,72 891,55.882 891,36 C 891,16.118 907.118,0 927,0 C 946.882,0 963,16.118 963,36 Z" fill="#B8A5FF" data-tone="primary" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(30 0)" data-letter="l">
+      <path d="M 1044,0 L 1064,0 C 1093,0 1114,22 1114,50 L 1114,310 L 1093,310 C 1065,310 1044,287 1044,259 L 1044,0 Z" fill="#DFFF5E" data-tone="accent" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(34 0)" data-letter="a">
+      <path d="M 1305,88 C 1344,88 1373,117 1373,155 L 1373,310 L 1303,310 L 1303,171 C 1303,156 1298,150 1288,150 C 1283,150 1278,152 1273,154 L 1218,175 C 1202,181 1192,192 1192,207 C 1192,234 1215,252 1242,252 C 1258,252 1268,249 1277,244 Q 1282,241.2222 1282,247 L 1282,275 C 1282,302 1270,314 1249,314 C 1178,314 1128,266 1128,201 C 1128,162 1150,139 1187,124 L 1270,94 C 1284,89 1295,88 1305,88 Z" fill="#DFFF5E" data-tone="accent" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(38 0)" data-letter="b">
+      <path d="M 1387,0 L 1407,0 C 1436,0 1457,22 1457,50 L 1457,107 C 1473,94 1493,88 1515,88 C 1586,88 1638,136 1638,201 C 1638,267 1586,314 1515,314 C 1442,314 1387,266 1387,201 L 1387,0 Z M 1515,148 C 1483,148 1457,171 1457,201 C 1457,232 1483,255 1515,255 C 1547,255 1570,232 1570,201 C 1570,171 1547,148 1515,148 Z" fill="#DFFF5E" data-tone="accent" fill-rule="evenodd" />
+    </g>
+    <g transform="translate(42 0)" data-letter="s">
+      <path d="M 1732,92 L 1786,92 C 1820,92 1844,110 1844,142 L 1844,143 C 1844,146 1842,148 1839,148 L 1735,148 C 1722,148 1715,153 1715,162 C 1715,171 1722,176 1735,176 L 1765,176 C 1828,176 1861,198 1861,240 C 1861,285 1824,310 1768,310 L 1728,310 C 1682,310 1656,291 1656,258 L 1656,257 C 1656,254 1658,252 1661,252 L 1778,252 C 1791,252 1798,247 1798,239 C 1798,231 1791,226 1778,226 L 1744,226 C 1686,226 1652,201 1652,150 C 1652,109 1685,92 1732,92 Z" fill="#DFFF5E" data-tone="accent" fill-rule="evenodd" />
+    </g>
+  </g>
+<title>Ejupi Labs — logo horizontal — Dark · Lilac + Pear</title><desc>Approved custom vector lettering and four-plane symbol where present. Dark · Lilac + Pear.</desc></svg>

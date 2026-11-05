@@ -1,0 +1,86 @@
+name: Verify native workspace preview
+
+on:
+  push:
+    branches: [refactor]
+  pull_request:
+    branches: [refactor]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native ${{ matrix.platform }}-${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: windows
+            architecture: amd64
+          - runner: windows-11-arm
+            platform: windows
+            architecture: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            architecture: amd64
+          - runner: macos-15
+            platform: darwin
+            architecture: arm64
+          - runner: ubuntu-24.04
+            platform: linux
+            architecture: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.1'
+          cache: npm
+      - name: Install locked development tools
+        run: npm ci --ignore-scripts
+      - name: Install pinned Chromium and native browser dependencies
+        run: node node_modules/playwright/cli.js install --with-deps chromium
+      - name: Build embedded UI and native binary
+        run: npm run build
+      - name: Run native, browser, packaging and extracted offline checks
+        run: npm test
+      - name: Check native source and authored TypeScript
+        run: npm run check
+      - name: Confirm committed embedded browser output
+        run: git diff --exit-code -- internal/webui/dist
+      - name: Create local allowlisted native preview
+        run: npm run release:local
+      # A passing native job is runtime evidence for this runner only. This workflow
+      # neither publishes artifacts nor treats a cross-compiled binary as tested.
+
+  race:
+    name: Linux AMD64 native race checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Run supported native race detector
+        run: go test -race ./cmd/... ./internal/... ./scripts/packagearchive

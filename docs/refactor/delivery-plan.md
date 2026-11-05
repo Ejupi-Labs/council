@@ -1,6 +1,7 @@
 # Council rebuild delivery plan
 
-Status: planned; no rebuilt feature is implemented or accepted by this document. Date: 5 November 2026.
+Status: feature001 implemented/reviewed on Windows ARM64; features002–012 remain planned.
+Date: 5 November 2026. See the feature001 acceptance/review records for actual evidence.
 
 ## Release boundary
 
@@ -21,8 +22,8 @@ numbered feature context without creating or checking out a feature branch. Main
 reference implementation until the user requests integration. No application runtime, provider
 call or rebuilt capability is established by these planning documents.
 
-Technology remains open until the first active feature records its architecture decision. That
-decision must compare suitable options against local installation, Windows process control,
+Feature001 selected Go1.27.3 with an embedded authored TypeScript UI, after comparing suitable
+options in its research.md. Subsequent consequential changes must compare suitable options against local installation, Windows process control,
 shared UI/CLI/host semantics, accessible UI, persistence, packaging and maintenance requirements.
 The legacy implementation language, database layout and dependency policy are inputs to evaluate,
 not an automatic architecture choice. Every selected dependency must have a concrete purpose,

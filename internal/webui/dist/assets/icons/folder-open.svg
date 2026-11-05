@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" data-icon="folder-open" data-style="mono-dark" role="img" aria-label="Folder Open">
+  <title>Folder Open</title>
+  <path d="M10 8H18C20 8 21 9 23 11L26 14H36Q40 14 40 18V20H15Q11 20 9.5 24L6 33V12Q6 8 10 8Z" data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" />
+  <path d="M30 12H33Q37 12 37 16V20H27V15Q27 12 30 12Z" data-tone="secondary" fill="#F5F2FF" fill-rule="evenodd" />
+  <path d="M16 23H40Q44 23 42.5 27L38 38Q36.8 41 33.5 41H8.5Q4 41 5.8 37L10.8 26.4Q12.4 23 16 23Z" data-tone="primary" fill="#F5F2FF" fill-rule="evenodd" />
+</svg>
