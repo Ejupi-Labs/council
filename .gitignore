@@ -1,6 +1,8 @@
 node_modules/
 .council/
 .serena/
+.agents/*
+!.agents/skills/
 coverage/
 *.tgz
 .env

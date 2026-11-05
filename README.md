@@ -1,5 +1,10 @@
 # Council 1.3
 
+> **`refactor` branch:** the clean rebuild starts from the reviewed
+> [product requirements and functional specification](docs/refactor/README.md).
+> Features follow Specify specification, design, tasks, implementation and independent review.
+> The runtime documented below is the functional reference while replacement development proceeds.
+
 A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
 
 Use project rooms to turn a discussion into an approved plan and execute tasks in dependency order, or choose a collaboration mode directly. Select models suited to the work, consult read-only advisors and coordinate overlaps in private peer chats. Review complete results and history alongside isolated worktree patches before accepting changes.

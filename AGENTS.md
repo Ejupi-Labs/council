@@ -1,5 +1,41 @@
 # Council development
 
+## Clean rebuild on `refactor`
+
+The user has requested a replacement built from functional requirements, rather than an
+incremental port of the legacy runtime. Work on the exact branch `refactor`; do not merge the
+replacement into main without a further user request. The functional reference is commit
+`27822baa3aee663366a870bde7fb1190649d3418`.
+
+- Read `docs/refactor/vision.md`, `docs/refactor/functional-requirements.md` and
+  `.specify/memory/constitution.md` before designing replacement features.
+- All newly authored requirements, specifications, product copy and engineering documents are
+  English. Keep original evidence verbatim when fidelity requires it.
+- Use Specify for one feature at a time: specification, design/plan, tasks, implementation,
+  independent review, corrections and acceptance evidence before implementing the next feature.
+- Keep Spec Kit feature context separate from the Git branch. Do not install automatic Git
+  branching hooks. Parallel work within the current feature needs explicit file ownership.
+- Technology is open, including Rust. Choose and record the replacement stack in the first
+  feature's technical plan. The legacy Node/SQLite implementation is reference material, not
+  a language or storage constraint on the replacement.
+- The new product prioritizes suitable small models, existing account capacity, focused context,
+  minimal configuration and a persisted autonomous full-access preference. Report unsupported
+  harness capabilities and unknown telemetry honestly.
+- Unlike the legacy product's blanket no-merge behavior below, the replacement may integrate a
+  verified local change automatically when the saved task policy authorizes that destination.
+  Preserve user edits; external publication must be explicitly included in task scope.
+- Use the verified Ejupi Labs assets and notices in `docs/refactor/design-identity.md`.
+- Never inspect or copy vendor credentials. Development tests use fake agents; live provider
+  qualification requires a specific user-requested live task.
+- Preserve local data under `.council/`, outside Git and release artifacts. Do not silently open,
+  migrate or delete legacy collaboration state while implementing the replacement.
+
+The requirements below still govern edits to the legacy implementation while it is present.
+Replacement feature plans must provide meaningful equivalent verification and release rules;
+keep the `npm test` and `npm run check` developer commands working if the tooling changes.
+
+## Legacy implementation
+
 Council is a local TypeScript MCP server and CLI. Node 24.18.1+ with SQLite 3.51.3+ is required for patched built-in SQLite.
 
 - Keep subprocess invocations shell-free and Windows compatible. Do not inspect or copy vendor credentials.
