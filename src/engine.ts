@@ -8,6 +8,7 @@ import type {
 } from './types.js';
 import { GitWorkspaces } from './workspaces.js';
 import { reasoningEffortError } from './runner.js';
+import { taskPermissionGuidance } from './agent-permissions.js';
 import { ProcessCleanupError, PROCESS_CLEANUP_ERROR } from './process.js';
 import { DispatchQuarantinedError, QUARANTINE_INSPECTION_REQUIRED, QUARANTINE_PERSISTENCE_WARNING,
   type ProcessCleanupIncident, type ProcessCleanupIncidentInput, type ProcessCleanupStage } from './dispatch-quarantine.js';
@@ -614,7 +615,7 @@ export class WorkflowEngine {
         if (calls >= plan.estimatedCalls) throw new Error('Internal workflow call budget exceeded');
         calls++; runnerInvoked = true; runnerPending = true;
         result = await this.runner.run({
-          agent, prompt: prompt(agent, role, `${permission === 'read' ? 'Read-only task: do not modify files. ' : 'Make changes only in the provided isolated worktree. '}${brief}`, context, privateTurn?.chatId, allowAdvisor || Boolean(privateTurn)),
+          agent, prompt: prompt(agent, role, `${taskPermissionGuidance(this.config, agent, permission)} ${brief}`, context, privateTurn?.chatId, allowAdvisor || Boolean(privateTurn)),
           cwd, permission, timeoutMs: this.config.timeoutMs, signal: callSignal, model, effort,
           ...(options.resolvedSettings ? { resolvedSettings: true as const } : {}),
         });

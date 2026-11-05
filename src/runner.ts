@@ -6,6 +6,7 @@ import { AntigravityProtocol } from './antigravity.js';
 import { ManagedProcess, ProcessCleanupError, PROCESS_CLEANUP_ERROR, resolveLaunch, type ProcessLaunch } from './process.js';
 import { sanitizedGitEnvironment } from './git-env.js';
 import { checkAgentJsonStructure } from './agent-json.js';
+import { agentTransport, CLAUDE_READ_TOOLS } from './agent-permissions.js';
 import { REASONING_EFFORTS } from './types.js';
 import type { AgentConfig, AgentHealth, AgentRequest, AgentResult, AgentRunner, CouncilConfig, ReasoningEffort, ResultStatus } from './types.js';
 
@@ -69,7 +70,7 @@ export function reasoningEffortError(config: CouncilConfig, agent: AgentConfig, 
   if (effort === undefined) return undefined;
   if (!REASONING_EFFORTS.includes(effort as ReasoningEffort)) return 'Reasoning effort must be low, medium, high, xhigh or max.';
   if (config.backend === 'mock') return undefined;
-  const transport = agent.transport ?? (['codex', 'claude'].includes(agent.profile) ? 'native' : 'acp');
+  const transport = agentTransport(agent);
   const supported = config.backend === 'native' && ((transport === 'native' && ['codex', 'antigravity'].includes(agent.profile))
     || (transport === 'native' && agent.profile === 'claude' && effort !== 'xhigh')
     || (transport === 'acp' && agent.profile === 'junie' && ['low', 'medium', 'high'].includes(effort as string)));
@@ -248,7 +249,7 @@ class ClaudeProtocol implements AgentProtocol {
       for (const block of event.message.content) {
         if (!isObject(block)) continue;
         if (block.type === 'text' && typeof block.text === 'string') control.append(block.text);
-        if (block.type === 'tool_use' && this.request.permission === 'read' && !['Read', 'Glob', 'Grep'].includes(String(block.name))) control.fail('Claude requested a tool outside the read-mode allowlist.');
+        if (block.type === 'tool_use' && this.request.permission === 'read' && !CLAUDE_READ_TOOLS.includes(String(block.name))) control.fail('Claude requested a tool outside the read-mode allowlist.');
       }
     }
     if (event.type === 'result') {
@@ -296,7 +297,7 @@ function nativeArguments(agent: AgentConfig, request: AgentRequest): string[] {
     '--sandbox', request.permission === 'write' ? 'workspace-write' : 'read-only', '--cd', resolve(request.cwd), ...(model ? ['--model', model] : []),
     ...(effort ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []), '-'];
   if (agent.profile === 'claude') {
-    const tools = request.permission === 'read' ? 'Read,Glob,Grep' : 'Read,Glob,Grep,Edit,Write,Bash';
+    const tools = request.permission === 'read' ? CLAUDE_READ_TOOLS.join(',') : 'Read,Glob,Grep,Edit,Write,Bash';
     return ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--permission-mode', 'dontAsk',
       '--tools', tools, '--allowedTools', tools, '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
       '--settings', '{"disableAllHooks":true}', ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])];
@@ -317,7 +318,7 @@ function defaultAcp(agent: AgentConfig): ProcessLaunch {
 export class NativeRunner implements AgentRunner {
   constructor(private readonly config: CouncilConfig, private readonly options: RunnerOptions = {}) {}
   private async launch(agent: AgentConfig, request: AgentRequest, signal?: AbortSignal): Promise<{ launch: ProcessLaunch; transport: 'native' | 'acp' }> {
-    const transport = agent.transport ?? (['codex', 'claude'].includes(agent.profile) ? 'native' : 'acp');
+    const transport = agentTransport(agent);
     const environment = this.options.environment ?? process.env;
     if (transport === 'native') return { transport, launch: await resolveLaunch(agent.command ?? (agent.profile === 'antigravity' ? 'agy' : agent.profile), [...agent.args ?? [], ...nativeArguments(agent, request)], request.cwd, environment, signal) };
     const defaults = agent.command ? { command: agent.command, args: agent.args ?? [] } : defaultAcp(agent);

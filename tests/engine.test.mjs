@@ -726,6 +726,41 @@ test('write review shares author worktree with read-only reviewers and retains p
   assert.equal(readFileSync(join(root, 'tracked.txt'), 'utf8'), 'base\n');
 });
 
+test('native write review gives the Claude reviewer its read-tool policy without restricting author writes', async t => {
+  const { root } = repository(t);
+  const backend = runner(async request => {
+    if (request.permission === 'write') writeFileSync(join(request.cwd, 'reviewed.txt'), 'verified fixture\n');
+    else assert.equal(readFileSync(join(request.cwd, 'reviewed.txt'), 'utf8'), 'verified fixture\n');
+    return { agent: request.agent, status: 'completed', output: 'Offline review evidence.', durationMs: 1 };
+  });
+  const result = await new WorkflowEngine(config(root, { backend: 'native' }), backend, store())
+    .run(input('review', { permission: 'write' }));
+  assert.equal(result.status, 'completed', result.error);
+  assert.deepEqual(backend.calls.map(call => call.permission), ['write', 'read', 'write']);
+  assert.match(backend.calls[1].prompt, /Available tools for this native Claude turn: Read, Glob, Grep/);
+  assert.match(backend.calls[1].prompt, /required host-executed check and report it unverified/);
+  assert.doesNotMatch(backend.calls[0].prompt, /Available tools for this native Claude turn/);
+  assert.doesNotMatch(backend.calls[2].prompt, /Available tools for this native Claude turn/);
+  assert.equal(new Set(backend.calls.map(call => call.cwd)).size, 1);
+});
+
+test('native Claude author and revision retain write guidance in a review workflow', async t => {
+  const { root } = repository(t);
+  const backend = runner(async request => {
+    if (request.permission === 'write') writeFileSync(join(request.cwd, 'authored.txt'), 'write fixture\n');
+    return { agent: request.agent, status: 'completed', output: 'Offline review evidence.', durationMs: 1 };
+  });
+  const result = await new WorkflowEngine(config(root, { backend: 'native' }), backend, store())
+    .run(input('review', { agents: ['claude', 'codex'], permission: 'write' }));
+  assert.equal(result.status, 'completed', result.error);
+  assert.deepEqual(backend.calls.map(call => call.permission), ['write', 'read', 'write']);
+  for (const call of [backend.calls[0], backend.calls[2]]) {
+    assert.equal(call.agent, 'claude');
+    assert.match(call.prompt, /Make changes only in the provided isolated worktree/);
+    assert.doesNotMatch(call.prompt, /Available tools for this native Claude turn/);
+  }
+});
+
 test('write parallel isolates each worker and read-only judge', async t => {
   const { root } = repository(t);
   const backend = runner(async request => {
