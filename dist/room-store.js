@@ -1,3 +1,4 @@
+import { writeStatement } from './sqlite-write.js';
 import { admissionConnection, admissionTransaction } from './admission-attempt.js';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -101,13 +102,13 @@ export class RoomStore {
                 continue;
             if (typeof message.id !== 'string' || !message.id || message.id.length > 256)
                 throw new Error('Invalid room message ID.');
-            insert.run(id, message.id, json(message));
+            writeStatement(insert).run(id, message.id, json(message));
         }
     }
     insert(room) {
         this.transaction(() => {
             const document = { ...room, messages: [] };
-            this.db.prepare('INSERT INTO rooms(id,document,revision,updated_at,status) VALUES(?,?,?,?,?)')
+            writeStatement(this.db.prepare('INSERT INTO rooms(id,document,revision,updated_at,status) VALUES(?,?,?,?,?)'))
                 .run(room.id, json(document), room.revision, room.updatedAt, room.status);
             this.append(room.id, room.messages);
         });
@@ -221,7 +222,7 @@ export class RoomStore {
             const owner = options.release ? null : options.claim?.id ?? row.owner;
             const pid = options.release ? null : options.claim?.pid ?? row.owner_pid;
             const cancelled = options.release || options.claim ? 0 : row.cancel_requested;
-            this.db.prepare('UPDATE rooms SET document=?,revision=?,updated_at=?,status=?,owner=?,owner_pid=?,cancel_requested=? WHERE id=?')
+            writeStatement(this.db.prepare('UPDATE rooms SET document=?,revision=?,updated_at=?,status=?,owner=?,owner_pid=?,cancel_requested=? WHERE id=?'))
                 .run(json({ ...room, messages: [] }), room.revision, room.updatedAt, room.status, owner, pid, cancelled, id);
             return structuredClone(room);
         });
@@ -250,7 +251,7 @@ export class RoomStore {
                 room.revision = row.revision + 1;
                 room.updatedAt = new Date().toISOString();
                 this.append(id, room.messages);
-                this.db.prepare('UPDATE rooms SET status=?,revision=?,updated_at=?,document=? WHERE id=?')
+                writeStatement(this.db.prepare('UPDATE rooms SET status=?,revision=?,updated_at=?,document=? WHERE id=?'))
                     .run(room.status, room.revision, room.updatedAt, json({ ...room, messages: [] }), id);
                 return room;
             }
@@ -258,7 +259,7 @@ export class RoomStore {
                 return room;
             room.revision = row.revision + 1;
             room.updatedAt = new Date().toISOString();
-            this.db.prepare('UPDATE rooms SET cancel_requested=1,revision=?,updated_at=?,document=? WHERE id=?')
+            writeStatement(this.db.prepare('UPDATE rooms SET cancel_requested=1,revision=?,updated_at=?,document=? WHERE id=?'))
                 .run(room.revision, room.updatedAt, json({ ...room, messages: [] }), id);
             return room;
         });
@@ -291,7 +292,7 @@ export class RoomStore {
             room.revision = row.revision + 1;
             room.updatedAt = new Date().toISOString();
             this.append(id, room.messages);
-            this.db.prepare('UPDATE rooms SET status=?,revision=?,updated_at=?,document=? WHERE id=?')
+            writeStatement(this.db.prepare('UPDATE rooms SET status=?,revision=?,updated_at=?,document=? WHERE id=?'))
                 .run(room.status, room.revision, room.updatedAt, json({ ...room, messages: [] }), id);
             return structuredClone(room);
         });
@@ -347,7 +348,7 @@ export class RoomStore {
                 room.revision = current.revision + 1;
                 room.updatedAt = new Date().toISOString();
                 this.append(room.id, [{ id: randomUUID(), author: 'system', kind: 'system', body: room.error, createdAt: room.updatedAt }]);
-                this.db.prepare('UPDATE rooms SET document=?,revision=?,updated_at=?,status=?,owner=NULL,owner_pid=NULL,cancel_requested=0 WHERE id=?')
+                writeStatement(this.db.prepare('UPDATE rooms SET document=?,revision=?,updated_at=?,status=?,owner=NULL,owner_pid=NULL,cancel_requested=0 WHERE id=?'))
                     .run(json({ ...room, messages: [] }), room.revision, room.updatedAt, room.status, room.id);
             });
         }

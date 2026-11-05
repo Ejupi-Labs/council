@@ -100,8 +100,16 @@ export declare class CouncilStore {
     }): DispatchQuarantineAcknowledgmentResult;
     /** Stable per-call IDs reserve free capacity for older durable waiters across processes. */
     acquireSlot(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
-    /** Settle the exact owned token; never rerun an agent or skip cleanup on abort. */
+    /** Retry only a proven native BEGIN refusal before this call receives a queue result or slot. */
+    acquireSlotWithRetry(instanceId: string, runId: string, limit: number, waiterId?: string, options?: {
+        signal?: AbortSignal;
+        assertDispatch?: () => void;
+    }): Promise<string | undefined>;
+    /** Retry only known idempotent cleanup identities; never replay work or skip drain on abort. */
+    private settleOwnedCleanup;
     releaseSlotWithRetry(token: string, instanceId: string): Promise<void>;
+    /** Pin one queue generation before deleting; failed snapshots are never retried. */
+    cancelSlotWaiterWithRetry(instanceId: string, waiterId: string): Promise<void>;
     releaseSlot(token: string, instanceId: string): void;
     /** Idempotent cleanup for a per-call wait that was aborted before admission. */
     cancelSlotWaiter(instanceId: string, waiterId: string): void;

@@ -1,3 +1,4 @@
+import { writeStatement } from './sqlite-write.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -85,9 +86,9 @@ export class DelegationManager {
                 const rows = this.db.prepare('SELECT sequence FROM delegation_reports ORDER BY sequence').all() as { sequence: number }[];
                 for (const row of rows) {
                   reportRevision = increment(reportRevision);
-                  this.db.prepare('UPDATE delegation_reports SET change_revision=? WHERE sequence=?').run(reportRevision, row.sequence);
+                  writeStatement(this.db.prepare('UPDATE delegation_reports SET change_revision=? WHERE sequence=?')).run(reportRevision, row.sequence);
                 }
-                this.db.prepare('UPDATE delegation_settings SET report_revision=? WHERE id=1').run(reportRevision);
+                writeStatement(this.db.prepare('UPDATE delegation_settings SET report_revision=? WHERE id=1')).run(reportRevision);
                 this.db.exec('CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision);');
               } else if (current === 0) {
                 this.db.exec(`CREATE TABLE delegation_settings(id INTEGER PRIMARY KEY CHECK(id=1), document TEXT NOT NULL, report_revision INTEGER NOT NULL, workspace_id TEXT NOT NULL);
@@ -96,7 +97,7 @@ export class DelegationManager {
                   CREATE INDEX delegation_report_open ON delegation_reports(resolved,kind,sequence);
                   CREATE UNIQUE INDEX delegation_report_changes ON delegation_reports(change_revision);`);
                 const initial: DelegationConfiguration = { mode: 'human', delegate: '', mandate: '', roomIds: [], revision: 0, updatedAt: new Date().toISOString() };
-                this.db.prepare('INSERT INTO delegation_settings(id,document,report_revision,workspace_id) VALUES(1,?,0,?)').run(JSON.stringify(initial), randomUUID());
+                writeStatement(this.db.prepare('INSERT INTO delegation_settings(id,document,report_revision,workspace_id) VALUES(1,?,0,?)')).run(JSON.stringify(initial), randomUUID());
               }
               this.db.exec(`CREATE TABLE delegation_report_retries(author TEXT NOT NULL, retry_key TEXT NOT NULL,
                 report_id TEXT NOT NULL UNIQUE REFERENCES delegation_reports(id), request_digest TEXT NOT NULL,
@@ -134,7 +135,7 @@ export class DelegationManager {
   }
   private bumpReports(): number {
     const next = increment(this.state().reportRevision);
-    this.db.prepare('UPDATE delegation_settings SET report_revision=? WHERE id=1').run(next);
+    writeStatement(this.db.prepare('UPDATE delegation_settings SET report_revision=? WHERE id=1')).run(next);
     return next;
   }
 
@@ -159,7 +160,7 @@ export class DelegationManager {
       if (current.revision !== input.expectedRevision) throw new DelegationRevisionConflict(current.revision);
       const { expectedRevision: _, ...settings } = input;
       const result: DelegationConfiguration = { ...settings, revision: increment(current.revision), updatedAt: new Date().toISOString() };
-      this.db.prepare('UPDATE delegation_settings SET document=? WHERE id=1').run(JSON.stringify(result));
+      writeStatement(this.db.prepare('UPDATE delegation_settings SET document=? WHERE id=1')).run(JSON.stringify(result));
       return result;
     });
     const tracked = new Set(saved.roomIds);
@@ -195,11 +196,11 @@ export class DelegationManager {
       const { expectedRoomRevisions: _, idempotencyKey: __, ...details } = input;
       const report: DelegationReport = { ...details, id: randomUUID(), sequence: 0, revision: 1, observedRooms, createdAt: new Date().toISOString() };
       const changeRevision = this.bumpReports();
-      const row = this.db.prepare('INSERT INTO delegation_reports(id,kind,document,change_revision) VALUES(?,?,?,?)').run(report.id, report.kind, JSON.stringify(report), changeRevision);
+      const row = writeStatement(this.db.prepare('INSERT INTO delegation_reports(id,kind,document,change_revision) VALUES(?,?,?,?)')).run(report.id, report.kind, JSON.stringify(report), changeRevision);
       report.sequence = Number(row.lastInsertRowid);
       if (!Number.isSafeInteger(report.sequence)) throw new Error('Delegate report sequence space is exhausted.');
-      this.db.prepare('UPDATE delegation_reports SET document=? WHERE id=?').run(JSON.stringify(report), report.id);
-      if (input.idempotencyKey !== undefined) this.db.prepare('INSERT INTO delegation_report_retries(author,retry_key,report_id,request_digest) VALUES(?,?,?,?)')
+      writeStatement(this.db.prepare('UPDATE delegation_reports SET document=? WHERE id=?')).run(JSON.stringify(report), report.id);
+      if (input.idempotencyKey !== undefined) writeStatement(this.db.prepare('INSERT INTO delegation_report_retries(author,retry_key,report_id,request_digest) VALUES(?,?,?,?)'))
         .run(input.author, input.idempotencyKey, report.id, digest!);
       created = true;
       return report;
@@ -227,7 +228,7 @@ export class DelegationManager {
       report.revision = increment(report.revision);
       report.resolution = { author: input.author, body: input.body, createdAt: new Date().toISOString() };
       const changeRevision = this.bumpReports();
-      this.db.prepare('UPDATE delegation_reports SET resolved=1,document=?,change_revision=? WHERE id=?').run(JSON.stringify(report), changeRevision, id);
+      writeStatement(this.db.prepare('UPDATE delegation_reports SET resolved=1,document=?,change_revision=? WHERE id=?')).run(JSON.stringify(report), changeRevision, id);
       changed = true;
       return report;
     });

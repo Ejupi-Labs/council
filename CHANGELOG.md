@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve exact 64-bit SQLite write metadata on Node 24 and 26 while retaining numeric query APIs. Reject unsafe event cursors inside a transaction so no partial event is committed.
+- Retry verified state-BEGIN refusals during call-slot acquisition before dispatching an agent, preserving the same queue identity, fresh controls and the separate capacity wait.
+- Pin cancelled queue entries to their exact generation during bounded cleanup; preserve newer entries even when a caller reuses the same waiter ID.
+
 - Retry verified state-BEGIN lock refusals for one room launch within a fixed five-second window, with fresh ownership, guidance, pause, quarantine and budget checks. Keep waiting task promises tracked, stop pending admission after a sibling failure and preserve already admitted work.
 - Await bounded, idempotent shared-slot cleanup after transient SQLite contention, including cancellation and shutdown, while retaining the original agent result and exact token ownership.
 

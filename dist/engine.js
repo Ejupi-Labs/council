@@ -590,13 +590,16 @@ export class WorkflowEngine {
             }
             let slotToken;
             let waiterId;
-            const clearWaiter = () => {
+            const clearWaiter = async () => {
                 if (!waiterId)
                     return;
                 const queued = waiterId;
                 waiterId = undefined;
                 try {
-                    this.store.cancelSlotWaiter?.(this.options.instanceId, queued);
+                    if (this.store.cancelSlotWaiterWithRetry)
+                        await this.store.cancelSlotWaiterWithRetry(this.options.instanceId, queued);
+                    else
+                        await this.store.cancelSlotWaiter?.(this.options.instanceId, queued);
                 }
                 catch (error) {
                     evidenceFailure(error, 'remove a shared workflow call waiter');
@@ -623,7 +626,7 @@ export class WorkflowEngine {
                 }
                 finally {
                     try {
-                        clearWaiter();
+                        await clearWaiter();
                     }
                     finally {
                         release();
@@ -635,7 +638,10 @@ export class WorkflowEngine {
                 if (this.options.instanceId && this.store.acquireSlot && this.store.releaseSlot) {
                     waiterId = randomUUID();
                     let retryMs = 50;
-                    while (!(slotToken = this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency, waiterId))) {
+                    const acquire = () => this.store.acquireSlotWithRetry
+                        ? this.store.acquireSlotWithRetry(this.options.instanceId, id, this.config.maxConcurrency, waiterId, { signal, assertDispatch: check })
+                        : this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency, waiterId);
+                    while (!(slotToken = await acquire())) {
                         check();
                         await delay(retryMs, undefined, { signal });
                         retryMs = Math.min(250, retryMs * 2);

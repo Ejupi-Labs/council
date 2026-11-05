@@ -5,7 +5,7 @@ declare const attemptBrand: unique symbol;
 export type AdmissionConnection = { readonly [connectionBrand]: true };
 export type AdmissionAttempt = { readonly [attemptBrand]: true };
 type Connection = { db: DatabaseSync; role: 'state' | 'rooms' };
-type Attempt = { nonce: symbol; room: Connection; state: Connection; guard: () => void; active: boolean; ended: boolean; used: boolean; invalid: boolean; didThrow: boolean; thrown?: unknown; refusal?: object };
+type Attempt = { nonce: symbol; room?: Connection; state: Connection; guard: () => void; active: boolean; ended: boolean; used: boolean; invalid: boolean; didThrow: boolean; thrown?: unknown; refusal?: object };
 const connections = new WeakMap<AdmissionConnection, Connection>();
 const registered = new WeakMap<DatabaseSync, AdmissionConnection>();
 const attempts = new WeakMap<AdmissionAttempt, Attempt>();
@@ -34,6 +34,14 @@ export function newAdmissionAttempt(room: AdmissionConnection, state: AdmissionC
   const attempt: Attempt = { nonce: Symbol('admission-attempt'), room: a, state: b, guard, active: false, ended: false, used: false, invalid: false, didThrow: false };
   attempts.set(handle, attempt); newestNonce = attempt.nonce; return handle;
 }
+/** A single call-slot admission needs only its exact state connection. */
+export function newStateAdmissionAttempt(state: AdmissionConnection, guard: () => void): AdmissionAttempt {
+  const connection = connections.get(state);
+  if (!connection || connection.role !== 'state') throw new Error('Invalid state admission connection.');
+  const handle = Object.freeze({}) as AdmissionAttempt;
+  const attempt: Attempt = { nonce: Symbol('admission-attempt'), state: connection, guard, active: false, ended: false, used: false, invalid: false, didThrow: false };
+  attempts.set(handle, attempt); newestNonce = attempt.nonce; return handle;
+}
 export function runAdmissionAttempt<T>(handle: AdmissionAttempt, operation: () => T): T {
   const attempt = attempts.get(handle);
   if (!attempt || attempt.active || attempt.ended) throw new Error('Admission attempt was already used.');
@@ -53,9 +61,9 @@ export function consumeAdmissionRefusal(handle: AdmissionAttempt, error: unknown
   const attempt = attempts.get(handle);
   if (!attempt || attempt.used) return false;
   attempt.used = true;
-  return newestNonce === attempt.nonce && finishedNonce === attempt.nonce && attempt.ended && !attempt.active && !attempt.invalid && attempt.didThrow && attempt.thrown === error
+  return scopes.length === 0 && newestNonce === attempt.nonce && finishedNonce === attempt.nonce && attempt.ended && !attempt.active && !attempt.invalid && attempt.didThrow && attempt.thrown === error
     && typeof error === 'object' && error !== null && attempt.refusal === error && refusals.get(error)?.attempt === attempt
-    && closed(attempt.room.db) && closed(attempt.state.db);
+    && (!attempt.room || closed(attempt.room.db)) && closed(attempt.state.db);
 }
 /** Fixed diagnostic metadata only; this never grants retry authority. */
 export function admissionRefusalOrigin(error: unknown): { area: 'state'; phase: 'begin'; code: number } | undefined {
@@ -63,7 +71,7 @@ export function admissionRefusalOrigin(error: unknown): { area: 'state'; phase: 
   return proof ? { area: 'state', phase: 'begin', code: proof.code } : undefined;
 }
 export function admissionTransaction<T>(db: DatabaseSync, operation: () => T, write = true): T {
-  const attempt = scopes.at(-1), allowed = attempt && (attempt.room.db === db || attempt.state.db === db);
+  const attempt = scopes.at(-1), allowed = attempt && (attempt.room?.db === db || attempt.state.db === db);
   const initiallyClosed = Boolean(attempt && allowed && write && attempt.state.db === db) && closed(db);
   if (attempt && !allowed) attempt.invalid = true;
   if (attempt && allowed && write) attempt.guard();

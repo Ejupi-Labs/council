@@ -1,4 +1,5 @@
-import { admissionConnection, admissionTransaction } from './admission-attempt.js';
+import { writeStatement } from './sqlite-write.js';
+import { admissionConnection, admissionTransaction, consumeAdmissionRefusal, newStateAdmissionAttempt, runAdmissionAttempt } from './admission-attempt.js';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -291,7 +292,7 @@ export class CouncilStore {
             if (!row)
                 break;
             const run = JSON.parse(row.document);
-            this.statement('UPDATE runs SET status = ?, revision = 1, summary = ?, has_artifacts = ? WHERE id = ?')
+            writeStatement(this.statement('UPDATE runs SET status = ?, revision = 1, summary = ?, has_artifacts = ? WHERE id = ?'))
                 .run(run.status, encode(summarizeRun(run)), (run.workspaces?.length ?? 0) > 0 ? 1 : 0, row.id);
             id = row.id;
         }
@@ -301,7 +302,7 @@ export class CouncilStore {
             if (!row)
                 break;
             const event = { sequence: row.sequence, runId: row.run_id, type: row.type, data: JSON.parse(row.data), createdAt: row.created_at };
-            this.statement('UPDATE events SET summary = ? WHERE sequence = ?').run(encode(summarizeEvent(event).data), row.sequence);
+            writeStatement(this.statement('UPDATE events SET summary = ? WHERE sequence = ?')).run(encode(summarizeEvent(event).data), row.sequence);
             sequence = row.sequence;
         }
     }
@@ -319,10 +320,10 @@ export class CouncilStore {
                 throw new Error('Terminal run records are immutable.');
             // Cancellation and owner columns are deliberately absent from the partial-update clause.
             const revision = (existing?.revision ?? 0) + 1;
-            this.statement('INSERT INTO runs(id, updated_at, document, status, revision, summary, has_artifacts) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, document = excluded.document, status = excluded.status, revision = excluded.revision, summary = excluded.summary, has_artifacts = excluded.has_artifacts')
+            writeStatement(this.statement('INSERT INTO runs(id, updated_at, document, status, revision, summary, has_artifacts) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, document = excluded.document, status = excluded.status, revision = excluded.revision, summary = excluded.summary, has_artifacts = excluded.has_artifacts'))
                 .run(run.id, run.updatedAt, document, run.status, revision, encode(summarizeRun(run, revision)), (run.workspaces?.length ?? 0) > 0 ? 1 : 0);
             if (!['queued', 'running'].includes(run.status))
-                this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(run.id);
+                writeStatement(this.statement('DELETE FROM slot_waiters WHERE run_id = ?')).run(run.id);
         });
     }
     /** Creation, ownership and the queued event commit together, leaving no unowned crash window. */
@@ -350,7 +351,7 @@ export class CouncilStore {
             const active = this.statement("SELECT COUNT(*) AS value FROM runs WHERE status IN ('queued', 'running')").get();
             if (active.value >= 100)
                 throw new Error('This workspace already has 100 active Council runs. Wait for completion or inspect abandoned work before starting more.');
-            this.statement('INSERT INTO runs(id, updated_at, document, owner_instance, owner_pid, status, revision, summary, has_artifacts, cancel_requested) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
+            writeStatement(this.statement('INSERT INTO runs(id, updated_at, document, owner_instance, owner_pid, status, revision, summary, has_artifacts, cancel_requested) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)'))
                 .run(run.id, run.updatedAt, document, instanceId, instance.pid, run.status, summary, (run.workspaces?.length ?? 0) > 0 ? 1 : 0, this.legacyCancellation(run.id) ? 1 : 0);
             this.writeEvent(run.id, 'queued', { mode: run.input.mode });
             for (const event of initialEvents)
@@ -393,20 +394,23 @@ export class CouncilStore {
     appendEvent(runId, type, data) {
         text(runId, 'Run id', 256);
         text(type, 'Event type', 128);
-        return type === 'cancel_requested' && !this.db.isTransaction
+        return !this.db.isTransaction
             ? this.transaction(() => this.writeEvent(runId, type, data))
             : this.writeEvent(runId, type, data);
     }
     writeEvent(runId, type, data) {
         const createdAt = new Date().toISOString();
         const event = { sequence: 0, runId, type, data, createdAt };
-        const result = this.statement('INSERT INTO events(run_id, type, data, created_at, summary) VALUES (?, ?, ?, ?, ?)')
+        const result = writeStatement(this.statement('INSERT INTO events(run_id, type, data, created_at, summary) VALUES (?, ?, ?, ?, ?)'))
             .run(runId, type, encode(data), createdAt, encode(summarizeEvent(event).data));
         if (type === 'cancel_requested') {
-            this.statement('UPDATE runs SET cancel_requested = 1, revision = revision + 1 WHERE id = ? AND cancel_requested = 0').run(runId);
-            this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(runId);
+            writeStatement(this.statement('UPDATE runs SET cancel_requested = 1, revision = revision + 1 WHERE id = ? AND cancel_requested = 0')).run(runId);
+            writeStatement(this.statement('DELETE FROM slot_waiters WHERE run_id = ?')).run(runId);
         }
-        return { ...event, sequence: Number(result.lastInsertRowid) };
+        const sequence = Number(result.lastInsertRowid);
+        if (!Number.isSafeInteger(sequence))
+            throw new Error('Event sequence space is exhausted.');
+        return { ...event, sequence };
     }
     events(runId, after = 0, limit = 1000) {
         text(runId, 'Run id', 256);
@@ -482,7 +486,7 @@ export class CouncilStore {
         if (input.runId !== undefined)
             text(input.runId, 'Run id', 256);
         const message = { ...input, id: randomUUID(), createdAt: new Date().toISOString() };
-        this.statement('INSERT INTO messages(id, sender, recipient, created_at, document) VALUES (?, ?, ?, ?, ?)')
+        writeStatement(this.statement('INSERT INTO messages(id, sender, recipient, created_at, document) VALUES (?, ?, ?, ?, ?)'))
             .run(message.id, message.from, message.to, message.createdAt, encode(message));
         return message;
     }
@@ -524,7 +528,7 @@ export class CouncilStore {
     acknowledge(id, agent) {
         text(id, 'Message id', 256);
         text(agent, 'Agent', 128);
-        const result = this.statement('UPDATE messages SET acknowledged_at = ? WHERE id = ? AND recipient = ? AND acknowledged_at IS NULL')
+        const result = writeStatement(this.statement('UPDATE messages SET acknowledged_at = ? WHERE id = ? AND recipient = ? AND acknowledged_at IS NULL'))
             .run(new Date().toISOString(), id, agent);
         return result.changes > 0;
     }
@@ -546,7 +550,7 @@ export class CouncilStore {
                     throw new Error('The store connection is not bound to this lease owner instance.');
             }
             const now = Date.now();
-            this.statement('DELETE FROM leases WHERE expires_at <= ?').run(now);
+            writeStatement(this.statement('DELETE FROM leases WHERE expires_at <= ?')).run(now);
             const active = this.readLeases(now);
             for (const requested of normalized) {
                 const conflict = active.find(lease => (lease.owner !== owner || lease.runId !== runId || lease.instanceId !== instanceId) && lease.paths.some(path => overlaps(path, requested)));
@@ -557,7 +561,7 @@ export class CouncilStore {
             return normalized.map(path => {
                 const existing = active.find(lease => lease.owner === owner && lease.paths[0]?.toLowerCase() === path.toLowerCase());
                 const lease = { id: existing?.id ?? randomUUID(), owner, paths: [path], expiresAt, ...(runId === undefined ? {} : { runId }), ...(instanceId === undefined ? {} : { instanceId }) };
-                this.statement('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at, instance_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET id = excluded.id, owner = excluded.owner, path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at, instance_id = excluded.instance_id')
+                writeStatement(this.statement('INSERT INTO leases(id, owner, path, path_key, run_id, expires_at, instance_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path_key) DO UPDATE SET id = excluded.id, owner = excluded.owner, path = excluded.path, run_id = excluded.run_id, expires_at = excluded.expires_at, instance_id = excluded.instance_id'))
                     .run(lease.id, owner, path, path.toLowerCase(), runId ?? null, now + ttlMs, instanceId ?? null);
                 return lease;
             });
@@ -569,14 +573,14 @@ export class CouncilStore {
             text(runId, 'Run id', 256);
         if (paths === undefined)
             return Number(runId === undefined
-                ? this.statement('DELETE FROM leases WHERE owner = ?').run(owner).changes
-                : this.statement('DELETE FROM leases WHERE owner = ? AND run_id = ?').run(owner, runId).changes);
+                ? writeStatement(this.statement('DELETE FROM leases WHERE owner = ?')).run(owner).changes
+                : writeStatement(this.statement('DELETE FROM leases WHERE owner = ? AND run_id = ?')).run(owner, runId).changes);
         if (!Array.isArray(paths) || paths.length > 100)
             throw new Error('Release at most 100 paths');
         const normalized = paths.map(normalizePath);
         return this.transaction(() => normalized.reduce((count, path) => count + Number(runId === undefined
-            ? this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ?').run(owner, path.toLowerCase()).changes
-            : this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ? AND run_id = ?').run(owner, path.toLowerCase(), runId).changes), 0));
+            ? writeStatement(this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ?')).run(owner, path.toLowerCase()).changes
+            : writeStatement(this.statement('DELETE FROM leases WHERE owner = ? AND path_key = ? AND run_id = ?')).run(owner, path.toLowerCase(), runId).changes), 0));
     }
     readLeases(now = Date.now()) {
         const rows = this.statement('SELECT id, owner, path, run_id, expires_at, instance_id FROM leases WHERE expires_at > ? ORDER BY path_key').all(now);
@@ -591,7 +595,7 @@ export class CouncilStore {
         text(author, 'Context author', 128);
         const entry = { key, value, author, updatedAt: new Date().toISOString() };
         encode(entry); // Apply the same explicit record-size guard used by peer messages.
-        this.statement('INSERT INTO context(key, value, author, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, author = excluded.author, updated_at = excluded.updated_at')
+        writeStatement(this.statement('INSERT INTO context(key, value, author, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, author = excluded.author, updated_at = excluded.updated_at'))
             .run(key, value, author, entry.updatedAt);
         return entry;
     }
@@ -615,7 +619,7 @@ export class CouncilStore {
             if (existing && existing.pid !== pid)
                 throw new Error('This Council instance ID is already registered by another process.');
             const now = Date.now();
-            this.statement('INSERT INTO instances(id, pid, registered_at, heartbeat_at, slot_limit) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at, slot_limit = COALESCE(excluded.slot_limit, instances.slot_limit)')
+            writeStatement(this.statement('INSERT INTO instances(id, pid, registered_at, heartbeat_at, slot_limit) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at, slot_limit = COALESCE(excluded.slot_limit, instances.slot_limit)'))
                 .run(instanceId, pid, now, now, slotLimit ?? null);
         });
         this.boundInstance ??= instanceId;
@@ -627,7 +631,7 @@ export class CouncilStore {
     }
     heartbeat(instanceId) {
         text(instanceId, 'Instance id', 128);
-        return this.statement('UPDATE instances SET heartbeat_at = ? WHERE id = ? AND pid = ?').run(Date.now(), instanceId, process.pid).changes > 0;
+        return writeStatement(this.statement('UPDATE instances SET heartbeat_at = ? WHERE id = ? AND pid = ?')).run(Date.now(), instanceId, process.pid).changes > 0;
     }
     unregisterInstance(instanceId) {
         text(instanceId, 'Instance id', 128);
@@ -641,7 +645,7 @@ export class CouncilStore {
             if (active) {
                 throw new Error('Cannot unregister a Council instance while it owns unfinished runs.');
             }
-            this.statement('DELETE FROM instances WHERE id = ?').run(instanceId);
+            writeStatement(this.statement('DELETE FROM instances WHERE id = ?')).run(instanceId);
         });
     }
     claimRun(runId, instanceId) {
@@ -660,7 +664,7 @@ export class CouncilStore {
                     throw new Error('This run is already owned by a live Council instance.');
                 throw new Error('This run has an orphaned owner; recover it before starting a replacement.');
             }
-            this.statement('UPDATE runs SET owner_instance = ?, owner_pid = ? WHERE id = ?').run(instanceId, instance.pid, runId);
+            writeStatement(this.statement('UPDATE runs SET owner_instance = ?, owner_pid = ? WHERE id = ?')).run(instanceId, instance.pid, runId);
         });
     }
     requestCancellation(runId) {
@@ -749,10 +753,10 @@ export class CouncilStore {
     }
     /** Caller holds the write transaction and has checked its narrow mutation authority. */
     writeRun(run, revision) {
-        this.statement('UPDATE runs SET document = ?, updated_at = ?, status = ?, revision = ?, summary = ?, has_artifacts = ? WHERE id = ?')
+        writeStatement(this.statement('UPDATE runs SET document = ?, updated_at = ?, status = ?, revision = ?, summary = ?, has_artifacts = ? WHERE id = ?'))
             .run(encode(run, MAX_RUN_JSON_BYTES), run.updatedAt, run.status, revision, encode(summarizeRun(run, revision)), (run.workspaces?.length ?? 0) > 0 ? 1 : 0, run.id);
         if (!['queued', 'running'].includes(run.status))
-            this.statement('DELETE FROM slot_waiters WHERE run_id = ?').run(run.id);
+            writeStatement(this.statement('DELETE FROM slot_waiters WHERE run_id = ?')).run(run.id);
     }
     /** Persist an owned observation before releasing admission; never store runner diagnostics. */
     reportProcessCleanupIncident(input) {
@@ -776,7 +780,7 @@ export class CouncilStore {
                 throw new Error('The store connection is not bound to the reporting Council instance.');
             const insert = this.statement("INSERT INTO process_cleanup_incidents(id, report_key, instance_id, run_id, reporting_pid, reason, stage, observed_at) VALUES (?, ?, ?, ?, ?, 'process_cleanup_unverified', ?, ?)");
             insert.setReadBigInts(true);
-            insert.run(randomUUID(), input.reportKey, input.instanceId, input.runId ?? null, instance.pid, input.stage, new Date().toISOString());
+            writeStatement(insert).run(randomUUID(), input.reportKey, input.instanceId, input.runId ?? null, instance.pid, input.stage, new Date().toISOString());
             return this.cleanupIncidentByKey(input.reportKey);
         });
     }
@@ -840,9 +844,9 @@ export class CouncilStore {
         incident_count AS incidentCount, unowned_unfinished_runs AS unownedUnfinishedRuns FROM dispatch_quarantine_acknowledgments WHERE revision = ?`).get(BigInt(revision));
             if (receipt.blocked) {
                 acknowledgment = { id: randomUUID(), revision, acknowledgedAt: new Date().toISOString(), incidentCount: receipt.openCount, unownedUnfinishedRuns: activity.unowned };
-                this.statement('INSERT INTO dispatch_quarantine_acknowledgments(id, revision, acknowledged_at, incident_count, unowned_unfinished_runs) VALUES (?, ?, ?, ?, ?)')
+                writeStatement(this.statement('INSERT INTO dispatch_quarantine_acknowledgments(id, revision, acknowledged_at, incident_count, unowned_unfinished_runs) VALUES (?, ?, ?, ?, ?)'))
                     .run(acknowledgment.id, BigInt(revision), acknowledgment.acknowledgedAt, acknowledgment.incidentCount, acknowledgment.unownedUnfinishedRuns);
-                this.statement('UPDATE process_cleanup_incidents SET acknowledgment_id = ? WHERE acknowledgment_id IS NULL').run(acknowledgment.id);
+                writeStatement(this.statement('UPDATE process_cleanup_incidents SET acknowledgment_id = ? WHERE acknowledgment_id IS NULL')).run(acknowledgment.id);
             }
             return { blocked: false, currentRevision: revision, openCount: 0, incidents: [], nextCursor: null,
                 unownedUnfinishedRuns: activity.unowned, ...(acknowledgment ? { acknowledgment: { ...acknowledgment } } : {}) };
@@ -871,9 +875,9 @@ export class CouncilStore {
                 throw new Error('This run is no longer active.');
             if (this.isCancellationRequested(runId))
                 throw new Error('Cancellation has been requested for this run.');
-            this.statement('UPDATE instances SET slot_limit = ? WHERE id = ? AND (slot_limit IS NULL OR slot_limit <> ?)').run(limit, instanceId, limit);
+            writeStatement(this.statement('UPDATE instances SET slot_limit = ? WHERE id = ? AND (slot_limit IS NULL OR slot_limit <> ?)')).run(limit, instanceId, limit);
             // Metadata-only cleanup also handles interrupted callers and old manually edited databases.
-            this.statement("DELETE FROM slot_waiters WHERE NOT EXISTS (SELECT 1 FROM runs INDEXED BY runs_metadata_lookup WHERE runs.id = slot_waiters.run_id AND runs.owner_instance = slot_waiters.instance_id AND runs.status IN ('queued', 'running') AND runs.cancel_requested = 0) OR NOT EXISTS (SELECT 1 FROM instances WHERE instances.id = slot_waiters.instance_id)").run();
+            writeStatement(this.statement("DELETE FROM slot_waiters WHERE NOT EXISTS (SELECT 1 FROM runs INDEXED BY runs_metadata_lookup WHERE runs.id = slot_waiters.run_id AND runs.owner_instance = slot_waiters.instance_id AND runs.status IN ('queued', 'running') AND runs.cancel_requested = 0) OR NOT EXISTS (SELECT 1 FROM instances WHERE instances.id = slot_waiters.instance_id)")).run();
             if (waiterId !== undefined) {
                 const existing = this.statement('SELECT run_id FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').get(instanceId, waiterId);
                 if (existing && existing.run_id !== runId)
@@ -882,7 +886,7 @@ export class CouncilStore {
                     const count = this.statement('SELECT COUNT(*) AS total, SUM(run_id = ?) AS own FROM slot_waiters').get(runId);
                     if (count.total >= 800 || (count.own ?? 0) >= 32)
                         throw Object.assign(new Error('The Council slot waiter queue is full; cancel abandoned waits before retrying.'), { code: 'COUNCIL_SLOT_QUEUE_FULL' });
-                    this.statement('INSERT INTO slot_waiters(instance_id, run_id, waiter_id) VALUES (?, ?, ?)').run(instanceId, runId, waiterId);
+                    writeStatement(this.statement('INSERT INTO slot_waiters(instance_id, run_id, waiter_id) VALUES (?, ?, ?)')).run(instanceId, runId, waiterId);
                 }
             }
             const minimum = this.statement('SELECT MIN(slot_limit) AS value FROM instances WHERE slot_limit IS NOT NULL').get();
@@ -901,14 +905,65 @@ export class CouncilStore {
                     return undefined;
             }
             const token = randomUUID();
-            this.statement('INSERT INTO slots(token, instance_id, run_id, acquired_at) VALUES (?, ?, ?, ?)').run(token, instanceId, runId, Date.now());
+            writeStatement(this.statement('INSERT INTO slots(token, instance_id, run_id, acquired_at) VALUES (?, ?, ?, ?)')).run(token, instanceId, runId, Date.now());
             if (waiterId !== undefined)
-                this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').run(instanceId, waiterId);
+                writeStatement(this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?')).run(instanceId, waiterId);
             return token;
         });
     }
-    /** Settle the exact owned token; never rerun an agent or skip cleanup on abort. */
-    async releaseSlotWithRetry(token, instanceId) {
+    /** Retry only a proven native BEGIN refusal before this call receives a queue result or slot. */
+    async acquireSlotWithRetry(instanceId, runId, limit, waiterId, options = {}) {
+        let deadline;
+        let returned = false;
+        const check = (insideAttempt = false) => {
+            // A known queue result is admitted coordination work, never a retry candidate.
+            if (returned)
+                return;
+            options.signal?.throwIfAborted();
+            if (!insideAttempt && this.db.isTransaction)
+                throw new Error('Shared-slot admission cannot start inside an open transaction.');
+            this.assertInstance(instanceId);
+            const run = this.ownedRun(runId);
+            if (!run || run.owner_instance !== instanceId)
+                throw new Error('The Council instance does not own this workflow.');
+            if (!['queued', 'running'].includes(run.status))
+                throw new Error('This workflow is no longer active.');
+            if (this.isCancellationRequested(runId))
+                throw new Error('Workflow cancellation was requested before call-slot admission.');
+            this.assertDispatchUnblocked();
+            options.assertDispatch?.();
+            options.signal?.throwIfAborted();
+            if (deadline !== undefined && performance.now() >= deadline)
+                throw new Error('Shared workflow call-slot admission remained blocked by SQLite write contention for five seconds. No agent call was dispatched for this admission.');
+        };
+        for (;;) {
+            check();
+            const attempt = newStateAdmissionAttempt(this.admissionConnection(), () => check(true));
+            try {
+                return runAdmissionAttempt(attempt, () => {
+                    const token = this.acquireSlot(instanceId, runId, limit, waiterId);
+                    returned = true;
+                    return token;
+                });
+            }
+            catch (error) {
+                if (returned || !consumeAdmissionRefusal(attempt, error))
+                    throw error;
+                deadline ??= performance.now() + 5000;
+                check();
+                try {
+                    await delay(Math.min(25, Math.max(1, deadline - performance.now())), undefined, { signal: options.signal });
+                }
+                catch (failure) {
+                    if (options.signal?.aborted)
+                        throw options.signal.reason;
+                    throw failure;
+                }
+            }
+        }
+    }
+    /** Retry only known idempotent cleanup identities; never replay work or skip drain on abort. */
+    async settleOwnedCleanup(operation) {
         let deadline, last;
         for (;;) {
             if (deadline !== undefined && performance.now() >= deadline)
@@ -921,9 +976,9 @@ export class CouncilStore {
                 throw last ?? error;
             }
             if (open)
-                throw last ?? new Error('Shared-slot cleanup cannot run inside an open transaction.');
+                throw last ?? new Error('Shared workflow cleanup cannot run inside an open transaction.');
             try {
-                this.releaseSlot(token, instanceId);
+                operation();
             }
             catch (error) {
                 try {
@@ -952,21 +1007,45 @@ export class CouncilStore {
                 throw last ?? error;
             }
             if (open)
-                throw last ?? new Error('Shared-slot cleanup left an open transaction.');
+                throw last ?? new Error('Shared workflow cleanup left an open transaction.');
             return;
         }
+    }
+    async releaseSlotWithRetry(token, instanceId) {
+        return this.settleOwnedCleanup(() => this.releaseSlot(token, instanceId));
+    }
+    /** Pin one queue generation before deleting; failed snapshots are never retried. */
+    async cancelSlotWaiterWithRetry(instanceId, waiterId) {
+        text(instanceId, 'Instance id', 128);
+        text(waiterId, 'Slot waiter id', 128);
+        if (this.db.isTransaction)
+            throw new Error('Shared waiter cleanup cannot snapshot inside an open transaction.');
+        this.assertInstance(instanceId);
+        const entry = this.statement('SELECT CAST(sequence AS TEXT) AS generation FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?')
+            .get(instanceId, waiterId);
+        if (this.db.isTransaction)
+            throw new Error('Shared waiter cleanup snapshot left an open transaction.');
+        if (!entry)
+            return;
+        if (typeof entry.generation !== 'string' || !/^[1-9][0-9]{0,18}$/.test(entry.generation) || BigInt(entry.generation) > 9223372036854775807n)
+            throw new Error('Shared waiter generation is invalid; inspect local state.');
+        const generation = BigInt(entry.generation);
+        return this.settleOwnedCleanup(() => {
+            this.assertInstance(instanceId);
+            writeStatement(this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ? AND sequence = ?')).run(instanceId, waiterId, generation);
+        });
     }
     releaseSlot(token, instanceId) {
         text(token, 'Slot token', 256);
         text(instanceId, 'Instance id', 128);
-        this.statement('DELETE FROM slots WHERE token = ? AND instance_id = ?').run(token, instanceId);
+        writeStatement(this.statement('DELETE FROM slots WHERE token = ? AND instance_id = ?')).run(token, instanceId);
     }
     /** Idempotent cleanup for a per-call wait that was aborted before admission. */
     cancelSlotWaiter(instanceId, waiterId) {
         text(instanceId, 'Instance id', 128);
         text(waiterId, 'Slot waiter id', 128);
         this.assertInstance(instanceId);
-        this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?').run(instanceId, waiterId);
+        writeStatement(this.statement('DELETE FROM slot_waiters WHERE instance_id = ? AND waiter_id = ?')).run(instanceId, waiterId);
     }
     /** Heartbeat age alone is never proof that a process is dead. PID reuse is intentionally conservative. */
     recoverOrphans() {
@@ -1016,8 +1095,8 @@ export class CouncilStore {
             recovered.push(run);
         }
         for (const instanceId of dead) {
-            this.statement('DELETE FROM slots WHERE instance_id = ?').run(instanceId);
-            this.statement('DELETE FROM instances WHERE id = ?').run(instanceId);
+            writeStatement(this.statement('DELETE FROM slots WHERE instance_id = ?')).run(instanceId);
+            writeStatement(this.statement('DELETE FROM instances WHERE id = ?')).run(instanceId);
         }
         return recovered;
     }
@@ -1081,9 +1160,9 @@ export class CouncilStore {
             if (options.dryRun !== false)
                 return result;
             for (const { id } of candidates) {
-                result.deletedEvents += Number(this.statement('DELETE FROM events WHERE run_id = ?').run(id).changes);
-                this.statement('DELETE FROM slots WHERE run_id = ?').run(id);
-                result.deletedRuns += Number(this.statement('DELETE FROM runs WHERE id = ?').run(id).changes);
+                result.deletedEvents += Number(writeStatement(this.statement('DELETE FROM events WHERE run_id = ?')).run(id).changes);
+                writeStatement(this.statement('DELETE FROM slots WHERE run_id = ?')).run(id);
+                result.deletedRuns += Number(writeStatement(this.statement('DELETE FROM runs WHERE id = ?')).run(id).changes);
             }
             return result;
         }, options.dryRun === false);

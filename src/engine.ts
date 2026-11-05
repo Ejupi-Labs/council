@@ -60,7 +60,10 @@ export interface WorkflowStore {
   events?(runId: string, after?: number): Array<{ type: string; sequence?: number }>;
   isCancellationRequested?(runId: string): boolean;
   acquireSlot?(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
+  acquireSlotWithRetry?(instanceId: string, runId: string, limit: number, waiterId?: string,
+    options?: { signal?: AbortSignal; assertDispatch?: () => void }): Promise<string | undefined>;
   cancelSlotWaiter?(instanceId: string, waiterId: string): void;
+  cancelSlotWaiterWithRetry?(instanceId: string, waiterId: string): void | Promise<void>;
   releaseSlot?(token: string, instanceId: string): void;
   releaseSlotWithRetry?(token: string, instanceId: string): void | Promise<void>;
   finalizeRun?(run: RunRecord): RunRecord;
@@ -460,11 +463,14 @@ export class WorkflowEngine {
       catch (error) { if (signal?.aborted) return undefined; throw error; }
       let slotToken: string | undefined;
       let waiterId: string | undefined;
-      const clearWaiter = (): void => {
+      const clearWaiter = async (): Promise<void> => {
         if (!waiterId) return;
         const queued = waiterId;
         waiterId = undefined;
-        try { this.store.cancelSlotWaiter?.(this.options.instanceId!, queued); }
+        try {
+          if (this.store.cancelSlotWaiterWithRetry) await this.store.cancelSlotWaiterWithRetry(this.options.instanceId!, queued);
+          else await this.store.cancelSlotWaiter?.(this.options.instanceId!, queued);
+        }
         catch (error) { evidenceFailure(error, 'remove a shared workflow call waiter'); }
       };
       const releaseDurable = async (): Promise<void> => {
@@ -479,14 +485,17 @@ export class WorkflowEngine {
       };
       const releaseAll = async (): Promise<void> => {
         try { await releaseDurable(); }
-        finally { try { clearWaiter(); } finally { release(); } }
+        finally { try { await clearWaiter(); } finally { release(); } }
       };
       try {
         check();
         if (this.options.instanceId && this.store.acquireSlot && this.store.releaseSlot) {
           waiterId = randomUUID();
           let retryMs = 50;
-          while (!(slotToken = this.store.acquireSlot(this.options.instanceId, id, this.config.maxConcurrency, waiterId))) {
+          const acquire = (): string | undefined | Promise<string | undefined> => this.store.acquireSlotWithRetry
+            ? this.store.acquireSlotWithRetry(this.options.instanceId!, id, this.config.maxConcurrency, waiterId, { signal, assertDispatch: check })
+            : this.store.acquireSlot!(this.options.instanceId!, id, this.config.maxConcurrency, waiterId);
+          while (!(slotToken = await acquire())) {
             check();
             await delay(retryMs, undefined, { signal });
             retryMs = Math.min(250, retryMs * 2);

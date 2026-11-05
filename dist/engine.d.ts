@@ -14,7 +14,12 @@ export interface WorkflowStore {
     }>;
     isCancellationRequested?(runId: string): boolean;
     acquireSlot?(instanceId: string, runId: string, limit: number, waiterId?: string): string | undefined;
+    acquireSlotWithRetry?(instanceId: string, runId: string, limit: number, waiterId?: string, options?: {
+        signal?: AbortSignal;
+        assertDispatch?: () => void;
+    }): Promise<string | undefined>;
     cancelSlotWaiter?(instanceId: string, waiterId: string): void;
+    cancelSlotWaiterWithRetry?(instanceId: string, waiterId: string): void | Promise<void>;
     releaseSlot?(token: string, instanceId: string): void;
     releaseSlotWithRetry?(token: string, instanceId: string): void | Promise<void>;
     finalizeRun?(run: RunRecord): RunRecord;

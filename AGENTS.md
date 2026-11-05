@@ -7,6 +7,7 @@ Council is a local TypeScript MCP server and CLI. Node 24.18.1+ with SQLite 3.51
 - Workflow results must distinguish completed, failed and cancelled work; partial results never imply success.
 - Native Codex read mode uses its read-only sandbox; Claude uses a read/search allowlist. ACP read mode denies new tool approval requests and scopes its file service to project files. No universal OS sandbox is promised. Write workflows use isolated Git worktrees and never merge automatically.
 - Persist collaboration state under `.council/`; keep it out of Git and npm packages.
+- Configure SQLite writes with writeStatement() to preserve exact 64-bit result metadata without changing query types. Reject unsafe public numeric cursors before commit.
 - Run `npm test` and `npm run check` before handing off changes. Tests use local fake agents; live agent calls require a user-requested task.
 - Reference implementations are inspiration. Retain attribution if code is ever copied.
 - Runtime code has no third-party npm dependencies. The official MCP SDK is development-only interoperability tooling.

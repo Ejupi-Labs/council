@@ -455,9 +455,12 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {WorkflowEngine} from ${JSON.stringify(new URL('../dist/engine.js', import.meta.url).href)};
 import {CouncilStore} from ${JSON.stringify(new URL('../dist/store.js', import.meta.url).href)};
+import {admissionRefusalOrigin} from ${JSON.stringify(new URL('../dist/admission-attempt.js', import.meta.url).href)};
+import {traceSlotAcquisition} from ${JSON.stringify(new URL('./slot-acquisition-trace.mjs', import.meta.url).href)};
 const root=${JSON.stringify(root)}, id=${JSON.stringify(id)};
 const config=${JSON.stringify(config(root, { maxConcurrency: 1 }))};
 const store=new CouncilStore(config.stateDir);
+const slotPhases=traceSlotAcquisition(store,admissionRefusalOrigin);
 store.registerInstance(id,process.pid);
 const input={mode:'delegate',task:'Offline concurrency check.',agents:['codex'],permission:'read'};
 const now=new Date().toISOString();
@@ -465,8 +468,10 @@ store.saveRun({id,input,status:'queued',createdAt:now,updatedAt:now,steps:[]});s
 writeFileSync(join(root,id+'.ready'),'ready');
 while(!existsSync(join(root,'dispatch.ready')))await delay(10);
 const runner={doctor:async()=>[],run:async request=>{appendFileSync(join(root,'calls.log'),'start '+id+'\\n');await delay(80);appendFileSync(join(root,'calls.log'),'end '+id+'\\n');return {agent:request.agent,status:'completed',output:'offline done',durationMs:80};}};
-const result=await new WorkflowEngine(config,runner,store,{instanceId:id}).run(input,{id});
-if(result.status!=='completed')throw new Error(result.error);
+try{
+ const result=await new WorkflowEngine(config,runner,store,{instanceId:id}).run(input,{id});
+ if(result.status!=='completed')throw new Error(result.error);
+}finally{const metadata=slotPhases();if(metadata.records.length||metadata.omitted)process.stderr.write(JSON.stringify({councilSlotAcquisition:metadata})+'\\n');}
 store.unregisterInstance(id);store.close();
 `;
   const jobs = []; let dispatchReleased = false, observedFailure, setupError;

@@ -13,6 +13,8 @@ type Connection = {
 };
 export declare function admissionConnection(db: DatabaseSync, role: Connection['role']): AdmissionConnection;
 export declare function newAdmissionAttempt(room: AdmissionConnection, state: AdmissionConnection, guard: () => void): AdmissionAttempt;
+/** A single call-slot admission needs only its exact state connection. */
+export declare function newStateAdmissionAttempt(state: AdmissionConnection, guard: () => void): AdmissionAttempt;
 export declare function runAdmissionAttempt<T>(handle: AdmissionAttempt, operation: () => T): T;
 export declare function consumeAdmissionRefusal(handle: AdmissionAttempt, error: unknown): boolean;
 /** Fixed diagnostic metadata only; this never grants retry authority. */

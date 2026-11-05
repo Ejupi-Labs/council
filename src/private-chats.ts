@@ -1,3 +1,4 @@
+import { writeStatement } from './sqlite-write.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -240,7 +241,7 @@ export class PrivateChatManager {
         .get(first, second, input.roomId ?? '') as unknown as ChatRow | undefined;
       if (existing) return metadata(existing);
       const id = randomUUID(), createdAt = new Date().toISOString();
-      this.db.prepare('INSERT INTO private_chats(id,participant_a,participant_b,room_id,created_at) VALUES(?,?,?,?,?)')
+      writeStatement(this.db.prepare('INSERT INTO private_chats(id,participant_a,participant_b,room_id,created_at) VALUES(?,?,?,?,?)'))
         .run(id, first, second, input.roomId ?? '', createdAt);
       return metadata(this.row(id));
     });
@@ -266,12 +267,12 @@ export class PrivateChatManager {
       if (!Number.isSafeInteger(chat.message_count) || chat.message_count >= Number.MAX_SAFE_INTEGER) throw new Error('Private message count space is exhausted.');
       const { idempotencyKey: _, ...details } = input;
       const message: PrivateChatMessage = { ...details, id: randomUUID(), sequence: 0, createdAt: new Date().toISOString() };
-      const inserted = this.db.prepare('INSERT INTO private_messages(id,chat_id,sender,retry_key,document) VALUES(?,?,?,?,?)')
+      const inserted = writeStatement(this.db.prepare('INSERT INTO private_messages(id,chat_id,sender,retry_key,document) VALUES(?,?,?,?,?)'))
         .run(message.id, message.chatId, message.from, input.idempotencyKey ?? null, JSON.stringify(message));
       message.sequence = Number(inserted.lastInsertRowid);
       if (!Number.isSafeInteger(message.sequence)) throw new Error('Private message sequence space is exhausted.');
-      this.db.prepare('UPDATE private_messages SET document=? WHERE id=?').run(JSON.stringify(message), message.id);
-      this.db.prepare('UPDATE private_chats SET last_message_at=?,message_count=?,last_sequence=? WHERE id=?')
+      writeStatement(this.db.prepare('UPDATE private_messages SET document=? WHERE id=?')).run(JSON.stringify(message), message.id);
+      writeStatement(this.db.prepare('UPDATE private_chats SET last_message_at=?,message_count=?,last_sequence=? WHERE id=?'))
         .run(message.createdAt, chat.message_count + 1, message.sequence, chat.id);
       return message;
     });

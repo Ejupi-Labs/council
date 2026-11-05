@@ -21,4 +21,5 @@ process.on('message', value => {
     writeFileSync(process.argv[3], JSON.stringify({ accepted: true }));
   }
 });
+if (process.argv[4]) writeFileSync(process.argv[4], JSON.stringify({ locked: true }));
 process.send?.({ type: 'locked' });

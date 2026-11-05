@@ -1,3 +1,4 @@
+import { writeStatement } from './sqlite-write.js';
 import { chmodSync, mkdirSync, realpathSync, existsSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -99,9 +100,9 @@ export class BillingManager {
                 const accounts = this.db.prepare('SELECT account_id,document FROM billing_accounts').all() as Array<{ account_id: string; document: string }>;
                 for (const row of accounts) {
                   const account = JSON.parse(row.document) as Account & { prices?: BillingPrices | null };
-                  this.db.prepare('UPDATE billing_aliases SET prices=? WHERE account_id=?').run(account.prices ? json(account.prices) : null, row.account_id);
+                  writeStatement(this.db.prepare('UPDATE billing_aliases SET prices=? WHERE account_id=?')).run(account.prices ? json(account.prices) : null, row.account_id);
                   delete account.prices;
-                  this.db.prepare('UPDATE billing_accounts SET document=? WHERE account_id=?').run(json(account), row.account_id);
+                  writeStatement(this.db.prepare('UPDATE billing_accounts SET document=? WHERE account_id=?')).run(json(account), row.account_id);
                 }
               }
               this.db.exec('ALTER TABLE billing_aliases ADD COLUMN stop_at_subscription_limit INTEGER NOT NULL DEFAULT 0; ALTER TABLE billing_aliases ADD COLUMN subscription_window_ids TEXT; PRAGMA user_version=3;');
@@ -209,8 +210,8 @@ export class BillingManager {
       for (const field of fields) (account as unknown as Record<string, unknown>)[field] = input[field];
       if (fields.length && !Object.hasOwn(input, 'source')) account.source = { kind: reported ? 'reported' : 'manual', label: reported ? 'Reported snapshot' : 'Manual entry' };
       this.updateExhaustion(account);
-      this.db.prepare('INSERT INTO billing_accounts(account_id,document) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET document=excluded.document').run(id, json(account));
-      if (fields.length) this.db.prepare('UPDATE billing_aliases SET revision=revision+1 WHERE account_id=?').run(id);
+      writeStatement(this.db.prepare('INSERT INTO billing_accounts(account_id,document) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET document=excluded.document')).run(id, json(account));
+      if (fields.length) writeStatement(this.db.prepare('UPDATE billing_aliases SET revision=revision+1 WHERE account_id=?')).run(id);
       const existing = this.row(alias);
       const revision = existing && existing.account_id === id && fields.length ? existing.revision : (existing?.revision ?? 0) + 1;
       const routing = Object.hasOwn(input, 'routing') ? input.routing === null ? null : json(input.routing) : existing?.routing ?? null;
@@ -219,9 +220,9 @@ export class BillingManager {
         : json({ currency: null, inputPerMillion: null, outputPerMillion: null, ...(existing?.prices ? JSON.parse(existing.prices) as BillingPrices : {}), ...input.prices }) : existing?.prices ?? null;
       const stop = input.stopAtSubscriptionLimit === undefined ? existing?.stop_at_subscription_limit ?? 0 : Number(input.stopAtSubscriptionLimit);
       const windowIds = input.subscriptionWindowIds === undefined ? existing?.subscription_window_ids ?? null : input.subscriptionWindowIds === null ? null : json(input.subscriptionWindowIds);
-      this.db.prepare('INSERT INTO billing_aliases(alias,revision,account_id,routing,skills,prices,stop_at_subscription_limit,subscription_window_ids) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(alias) DO UPDATE SET revision=excluded.revision,account_id=excluded.account_id,routing=excluded.routing,skills=excluded.skills,prices=excluded.prices,stop_at_subscription_limit=excluded.stop_at_subscription_limit,subscription_window_ids=excluded.subscription_window_ids')
+      writeStatement(this.db.prepare('INSERT INTO billing_aliases(alias,revision,account_id,routing,skills,prices,stop_at_subscription_limit,subscription_window_ids) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(alias) DO UPDATE SET revision=excluded.revision,account_id=excluded.account_id,routing=excluded.routing,skills=excluded.skills,prices=excluded.prices,stop_at_subscription_limit=excluded.stop_at_subscription_limit,subscription_window_ids=excluded.subscription_window_ids'))
         .run(alias, revision, id, routing, skills, prices, stop, windowIds);
-      if (previous?.account_id && previous.account_id !== id) this.db.prepare('DELETE FROM billing_accounts WHERE account_id=? AND NOT EXISTS(SELECT 1 FROM billing_aliases WHERE account_id=?)').run(previous.account_id, previous.account_id);
+      if (previous?.account_id && previous.account_id !== id) writeStatement(this.db.prepare('DELETE FROM billing_accounts WHERE account_id=? AND NOT EXISTS(SELECT 1 FROM billing_aliases WHERE account_id=?)')).run(previous.account_id, previous.account_id);
       return this.get(alias);
     });
   }
@@ -232,13 +233,13 @@ export class BillingManager {
       const row = this.row(alias); this.revision(expectedRevision, row?.revision ?? 0);
       const protectedAccount = row?.stop_at_subscription_limit ? this.account(row.account_id ?? `agent:${alias}`) : undefined;
       if (protectedAccount) this.updateExhaustion(protectedAccount);
-      this.db.prepare('INSERT INTO billing_aliases(alias,revision,account_id,routing,skills,prices) VALUES(?,?,NULL,NULL,NULL,NULL) ON CONFLICT(alias) DO UPDATE SET revision=excluded.revision,account_id=NULL,routing=NULL,skills=NULL,prices=NULL').run(alias, (row?.revision ?? 0) + 1);
+      writeStatement(this.db.prepare('INSERT INTO billing_aliases(alias,revision,account_id,routing,skills,prices) VALUES(?,?,NULL,NULL,NULL,NULL) ON CONFLICT(alias) DO UPDATE SET revision=excluded.revision,account_id=NULL,routing=NULL,skills=NULL,prices=NULL')).run(alias, (row?.revision ?? 0) + 1);
       // A detached alias must not accidentally rediscover its previous private quota.
       for (const account of new Set([`agent:${alias}`, ...(row?.account_id ? [row.account_id] : [])])) {
-        this.db.prepare('DELETE FROM billing_accounts WHERE account_id=? AND NOT EXISTS(SELECT 1 FROM billing_aliases WHERE account_id=?)').run(account, account);
+        writeStatement(this.db.prepare('DELETE FROM billing_accounts WHERE account_id=? AND NOT EXISTS(SELECT 1 FROM billing_aliases WHERE account_id=?)')).run(account, account);
       }
       if (protectedAccount && Object.keys(protectedAccount.subscriptionExhausted ?? {}).length) {
-        this.db.prepare('INSERT INTO billing_accounts(account_id,document) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET document=excluded.document')
+        writeStatement(this.db.prepare('INSERT INTO billing_accounts(account_id,document) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET document=excluded.document'))
           .run(`agent:${alias}`, json({ ...emptyAccount(), subscriptionExhausted: protectedAccount.subscriptionExhausted }));
       }
       return this.get(alias);
