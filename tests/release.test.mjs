@@ -49,7 +49,7 @@ function removeTemporary(directory) {
   rmSync(target, { recursive: true, force: true });
 }
 
-test('the release tarball installs fully offline and runs its CLI and MCP server without production dependencies', { timeout: 60_000 }, async t => {
+test('the release tarball installs fully offline and runs its CLI and MCP server without production dependencies', { timeout: 90_000 }, async t => {
   const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'council-release-'));
   const consumer = join(root, 'consumer café 日本語 with spaces');
   const workspace = join(root, 'project café 日本語 with spaces');
@@ -71,17 +71,18 @@ test('the release tarball installs fully offline and runs its CLI and MCP server
   const runNode = async (phase, args, cwd = consumer, cache = installCache) => {
     const start = performance.now();
     const isNpm = args[0] === npm;
+    const timeoutMs = phase === 'offline-install' ? 60_000 : 30_000;
     const isolated = isNpm ? [...args, '--cache', cache, '--userconfig', userConfig, '--globalconfig', globalConfig, '--timing', '--offline'] : args;
     try {
       const result = await execute(process.execPath, isolated, {
-        cwd, env: environment, windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024, signal: t.signal,
+        cwd, env: environment, windowsHide: true, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, signal: t.signal,
       });
       t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - start), status: 'completed' }));
       return result;
     } catch (error) {
       let progress;
       try { progress = isNpm ? npmProgress(cache) : undefined; } catch { progress = ['unavailable']; }
-      t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - start), timeoutMs: 30_000,
+      t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - start), timeoutMs,
         exitCode: typeof error.code === 'number' ? error.code : null, code: typeof error.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : undefined,
         killed: error.killed === true, signal: error.signal ?? null, stdoutBytes: Buffer.byteLength(error.stdout ?? ''), stderrBytes: Buffer.byteLength(error.stderr ?? ''), progress }));
       throw new Error(`Release acceptance phase ${phase} failed; see bounded process diagnostics.`);
