@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 5 November 2026
+
+Council 1.3 brings project rooms, private peer exchanges, human delegation, model routing and read-only advisors into one local workflow. Rooms execute approved tasks in dependency order and retain evidence and isolated patches for review. Shared scheduling, persistence, backups and cleanup recovery have also been strengthened.
 
 - Serialize workflow snapshots, events and finalization; retry only verified state write-BEGIN refusals within five seconds per operation. Drain queued sibling evidence after the first persistence fault without model replay, recheck controls before dispatch and await worktree preparation intent before filesystem changes.
 

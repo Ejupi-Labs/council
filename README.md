@@ -1,6 +1,8 @@
-# Council 1.3 development
+# Council 1.3
 
 A local collaboration plugin for **Codex, Claude Code, DeepSeek Harness, Junie and Antigravity**.
+
+Use project rooms to turn a discussion into an approved plan and execute tasks in dependency order, or choose a collaboration mode directly. Select models suited to the work, consult read-only advisors and coordinate overlaps in private peer chats. Review complete results and history alongside isolated worktree patches before accepting changes.
 
 Council has **zero production npm dependencies**. It requires Node.js 24.18.1 or newer with SQLite 3.51.3 or newer, speaks MCP over stdio, and coordinates native agent CLIs or ACP agents. It provides six collaboration modes, workspace-wide call limits, durable results, peer messages, project notes, file leases and isolated Git worktrees.
 
@@ -17,7 +19,7 @@ node dist/cli.js doctor --workspace /absolute/path/to/project
 The demo runs all six modes with mock agents and makes no model calls. For npm installation, install the local release tarball:
 
 ```sh
-npm install --global ./council-ai-plugin-1.3.0-dev.10.tgz
+npm install --global ./council-ai-plugin-1.3.0.tgz
 council demo
 council doctor --workspace /absolute/path/to/project
 ```

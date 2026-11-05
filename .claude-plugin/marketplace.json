@@ -8,7 +8,7 @@
       "name": "council",
       "source": "./",
       "description": "Collaboration for coding agents",
-      "version": "1.3.0-dev.10"
+      "version": "1.3.0"
     }
   ]
 }
