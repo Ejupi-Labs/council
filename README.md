@@ -11,9 +11,9 @@ main remains unchanged.
 Preview **2.0.0-dev.4** implements economical routing across native Codex and Claude Code in
 isolated managed workspaces. The Ejupi Labs UI and CLI share original instructions, literal pins,
 captured routing decisions, task budgets, exact output, source-relative candidates, history,
-Stop and recovery incidents. Feature 004 remains subject to its independent review and acceptance
-gates; this README does not declare it accepted. The accepted 003 baseline passed all six native
-platform jobs plus Linux race checks at `ce8aaa7`.
+Stop and recovery incidents. Feature004 passed independent review, all six native platform jobs
+and Linux race checks at `3f4a18e` in [run42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
+Later workflow features remain under development.
 
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly

@@ -1,8 +1,9 @@
 # Economical routing acceptance evidence
 
-Status: local qualification and independent correction review passed. The implementation commit
-and six native platform jobs plus Linux race qualification remain pending. This is not live
-provider qualification or acceptance of the full rebuild.
+Status: ACCEPTED for the specified offline native scope on 6 November 2026. Source is committed
+and pushed as `3f4a18e11de495f7b3138d61e030525a018868a5`. All six native platform jobs plus
+Linux race passed in [run 42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
+Live provider qualification and the full rebuild remain incomplete.
 
 Design/specification/task gate: `e9b37ad` on `refactor`; runtime edits followed that commit.
 The corrected source review is [review.md](review.md). All tests below use local fixtures and
@@ -27,6 +28,8 @@ private disposable state. No real account, quota, cost saving or provider access
 Raw local command logs and disposable render artifacts are private under `.council/refactor/` and
 excluded from Git and release packages. Public evidence must name the final checked source and
 actual terminal hosted jobs before acceptance. A path or authored fixture is not a passing check.
+The final staging check removed only redundant blank EOF lines in the frozen schema3 SQL fixture;
+its SQL statements are unchanged, and the full store suite passed again in 4.183s.
 
 ## Target and account identities
 
@@ -35,6 +38,30 @@ selector and declared account association from native reported identity. Fixed c
 Codex and Claude; labels/links do not create logins, quota or parallel workers. Actual account and
 native model can remain unknown. Native internal fallback, overage and billing are outside an
 enforceable Council financial cap. The normal default requires no reports, prices or account form.
+
+## Hosted native qualification
+
+The actual runtime source is `3f4a18e11de495f7b3138d61e030525a018868a5` on `refactor`, attempt1
+of [run 42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
+These are actual native runtime jobs. All seven reached terminal success:
+
+| Job | Actual job ID | Terminal result |
+| --- | --- | --- |
+| Native Windows AMD64 | 127743890527 | PASS |
+| Native Windows ARM64 | 127743890322 | PASS |
+| Native macOS AMD64 | 127743890308 | PASS |
+| Native macOS ARM64 | 127743890268 | PASS |
+| Native Linux AMD64 | 127743890352 | PASS |
+| Native Linux ARM64 | 127743890513 | PASS |
+| Linux AMD64 native race checks | 127743890097 | PASS |
+
+Each native job passed build, all Go tests, 39/39 browser tests, 1/1 extracted-package test,
+check, committed embedded asset comparison and archive generation. The independent native/CLI
+reviewer fetched all seven actual logs and confirmed the toolchain/OS/architecture, zero browser
+and package failures/cancellations/skips and clean generated assets. Root independently confirmed
+the exact source and all seven terminal jobs; Root also inspected three complete native logs.
+The race log records the actual race-enabled Go suite. No live vendor task or authentication
+probe is part of this workflow. The final Windows AMD64 job completed at 06:21:38 UTC.
 
 ## Budgets and continuation
 
@@ -49,13 +76,14 @@ unknown cleanup/evidence, Stop, old owner epochs and persistence uncertainty nev
 fallback worker. Task usage subtotals describe returned attempts and separate nonoverlapping
 scopes, estimates, reference prices and unknown charges.
 
-## Remaining acceptance work
+## Acceptance closure
 
 The [38-row evidence matrix](evidence-matrix.md) maps every RTE and SC to concrete source and
 observed local tests. Raw final logs are `004-test-final.log` and `004-check-final.log`; visual
 evidence is `screenshots/004-economical-routing/capture-evidence.json`, all private under
-`.council/refactor/`. The immutable implementation revision and seven terminal hosted jobs must
-still be recorded before acceptance. No live provider result is established here.
+`.council/refactor/`. Exact source, seven terminal hosted jobs, reviewed corrections and complete
+local evidence close the 004 gate. There are no open P1/P2 findings. Feature005 may begin its
+Specify workflow. No live provider result or completion of features005–012 is established here.
 
 ## Suitable economy selection
 
@@ -95,9 +123,10 @@ unsupported. RTE-010/011 and SC-005 record the supported boundary.
 
 ## Payment path authorization
 
-FR-019 is satisfied here by having no Council-managed paid API executor and rejecting unsupported
-paid/account/spending guarantees. This does not positively qualify future paid execution or cap
-native vendor billing; a future executor needs its own configured account and budget qualification.
+FR-019's native subscription-only guard is qualified: unsupported paid/account/spending guarantees
+are rejected and no Council-managed paid API executor exists. The parent requirement remains
+partial for positive configured paid execution. This does not cap native vendor billing; a future
+paid executor needs its own configured account and budget qualification.
 
 ## Usage and cost provenance
 

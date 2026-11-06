@@ -4,7 +4,7 @@
 [data-model.md](data-model.md), [contracts/routing.md](contracts/routing.md) and
 [quickstart.md](quickstart.md).
 **Branch**: `refactor`; feature context is separate from Git branching.
-**Status**: Implementation, independent correction review and final local checks passed; immutable source/native/race acceptance gates remain open.
+**Status**: ACCEPTED at source3f4a18e; all local checks, independent reviews and six native plus Linux race jobs passed. See acceptance.md and evidence-matrix.md.
 
 Tests are explicitly required by all four stories and RTE-028. Write meaningful failing cases
 before enabling the corresponding behavior; retain the existing accepted 001–003 regressions.
@@ -175,9 +175,9 @@ fake response, client estimate, declared tier or page subtotal into acceptance, 
 - [x] T059 [P] Reconcile user-facing setup/commands/capability limits and RTE/SC evidence links in `README.md`, `docs/refactor/traceability.md`, `docs/refactor/delivery-plan.md` and `specs/004-economical-routing/quickstart.md`; state A-only continuation, six-profile assumptions, no direct paid executor, unknown live access and no measured savings without changing approved brand notices.
 - [x] T060 Regenerate the embedded browser output including `internal/webui/dist/index.html` with `npm run build`, check it matches `ui/src/` and current metadata/package declarations, and retain native binaries/private screenshots only as ignored outputs; rebuild again after any later source correction that changes shipped assets.
 - [x] T061 Obtain independent source/failure-path/UI review against all four stories and the constitution, record concrete inspected revisions/findings in `specs/004-economical-routing/review.md`, correct every blocker in its owned source/test paths, rerun affected checks and obtain closure before final source freeze.
-- [ ] T062 Run final `npm run build`, `npm test` and `npm run check` serially against the reviewed source and matching `internal/webui/dist/`, including all offline Go/browser/extracted-package regressions; commit the reviewed implementation/assets on `refactor` and record the exact checked implementation revision in `specs/004-economical-routing/acceptance.md` without claiming live provider qualification.
-- [ ] T063 Qualify that implementation revision through all six actual Windows/macOS/Linux AMD64/ARM64 jobs and supported Linux AMD64 race job in `.github/workflows/verify.yml`, record terminal job/commit evidence in `specs/004-economical-routing/acceptance.md`, and correct/re-review/requalify real failures without skips, compile-only/native equivalence claims or automatic vendor calls.
-- [ ] T064 Close all 28 RTE and ten SC mappings with actual scenario/test/review/native evidence in `specs/004-economical-routing/acceptance.md`, `specs/004-economical-routing/review.md` and `docs/refactor/traceability.md`, update parent delivery status and commit the acceptance records; keep feature005 implementation closed until every required gate and finding is resolved.
+- [x] T062 Run final `npm run build`, `npm test` and `npm run check` serially against the reviewed source and matching `internal/webui/dist/`, including all offline Go/browser/extracted-package regressions; commit the reviewed implementation/assets on `refactor` and record the exact checked implementation revision in `specs/004-economical-routing/acceptance.md` without claiming live provider qualification.
+- [x] T063 Qualify that implementation revision through all six actual Windows/macOS/Linux AMD64/ARM64 jobs and supported Linux AMD64 race job in `.github/workflows/verify.yml`, record terminal job/commit evidence in `specs/004-economical-routing/acceptance.md`, and correct/re-review/requalify real failures without skips, compile-only/native equivalence claims or automatic vendor calls.
+- [x] T064 Close all 28 RTE and ten SC mappings with actual scenario/test/review/native evidence in `specs/004-economical-routing/acceptance.md`, `specs/004-economical-routing/review.md` and `docs/refactor/traceability.md`, update parent delivery status and commit the acceptance records; keep feature005 implementation closed until every required gate and finding is resolved.
 
 ## Dependencies and execution order
 

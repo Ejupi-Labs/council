@@ -1,7 +1,7 @@
 # Economical routing implementation review
 
-Status: independent source/correction review and final local qualification closed. Hosted native
-and race qualification remain required. This is not completion of the rebuild goal.
+Status: CLOSED — independent source/correction review, local qualification and all six native
+plus Linux race jobs passed at the exact source below. This is not completion of the rebuild goal.
 
 The design gate was committed at `e9b37ad` before runtime changes. Reviews below inspected that
 baseline plus the working implementation. The accepted 003 source remains `ce8aaa7`. No vendor
@@ -81,6 +81,9 @@ alternative, then checks no admission/budget/ledger effect. Allowed equal/lower 
 blanket-denial false passes. Captured-price and explicit-Start controls were also inspected.
 No P1/P2 remained; this review claims store authority coverage, not native execution by that test.
 
-Still required: immutable implementation commit, all six actual native platform jobs and Linux
-race qualification, and final acceptance reconciliation of the 38-row evidence matrix. Features
-005–012 remain outside this implementation.
+The reviewed source is committed as `3f4a18e11de495f7b3138d61e030525a018868a5`, including matching
+embedded assets. All six actual native platform jobs and Linux race qualification passed in
+run 42172669381; Root confirmed exact source/terminal jobs and the independent native/CLI reviewer
+read all seven logs. Each native log reports browser39/39 and package1/1 with no failures,
+cancellations or skips, plus clean generated assets. The 38-row matrix and acceptance.md close
+the feature gate without a live-provider claim. Features005–012 remain outside this implementation.

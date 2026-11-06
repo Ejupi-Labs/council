@@ -2,8 +2,9 @@
 
 Qualification checkpoint: 6 November 2026, API1 / execution004-v1 / schema4. This maps the
 [28 requirements and ten success criteria](spec.md) to actual source and test identifiers.
-It is an evidence index, not acceptance or independent approval by its domain/store author.
-The design gate was `e9b37ad`; final implementation commit/native qualification remain pending.
+It is the evidence index for acceptance.md; the domain/store author does not approve their own source.
+The design gate was `e9b37ad`; implementation is `3f4a18e11de495f7b3138d61e030525a018868a5`.
+All six native platform jobs and Linux race passed in run 42172669381; acceptance.md records exact job IDs and independent log review.
 
 ## Observed checks and limits
 
@@ -40,11 +41,7 @@ Private log names resolve under `.council/refactor/`, outside Git and release ar
   no horizontal overflow, visible focus, reduced-motion checks and matching source/dist/served
   SHA256 values. Root reports opening **eight** captures; this author did not view the images
   and does not claim all 28 received visual inspection.
-- **HOSTED GATES PENDING:** final `npm test` rebuilt the embedded UI/native binary and passed;
-  final `npm run check` also exited 0 (`004-check-final.log`). Independent source/correction
-  review is closed in review.md. Immutable implementation commit, six native platform jobs and
-  Linux race qualification remain required. No hosted004 qualification or feature acceptance
-  is claimed.
+- **ALL GATES PASSED:** final local build/test/check passed. Source is the immutable commit above; all six actual native jobs and Linux race passed in run42172669381. Each native job passed browser39/39, package1/1, check, generated asset comparison and archive creation. Independent source/correction and seven-log review are closed in review.md; acceptance.md records all job identities. This is offline qualification, with no live-provider claim.
 
 Browser keys below name exact cases, not inferred coverage:
 
@@ -76,7 +73,7 @@ Browser keys below name exact cases, not inferred coverage:
 ## Requirement mapping
 
 Tests linked here are present in the actual files. C1–C5 identify observed local execution;
-the final complete-source gates above remain pending. Shared003 lifecycle tests below also ran
+the final complete-source gates above have passed. Shared003 lifecycle tests below also ran
 in C3's Go stage; local fake execution is never live provider qualification.
 
 | Requirement | Implementation and concrete evidence |
@@ -108,7 +105,7 @@ in C3's Go stage; local fake execution is never live provider qualification.
 | RTE-025 — shared source/isolation/lifecycle, no inferred acceptance | [run lifecycle](../../internal/engine/results.go), [workspace capture](../../internal/workspace/capture.go); [TestInteropClaudeCapturedInstructionsAndCandidatePreserveOriginalEditsIndexBranch](../../internal/engine/interop_workspace_test.go), [TestRoutingProjectReplacementAfterInitialIdentityCheckBlocksBeforePreparation](../../internal/engine/routing_admission_test.go), [TestInteropClaudeResponsePublicationFaultCannotBecomeCandidateSuccess](../../internal/engine/interop_results_test.go). C2/C3. |
 | RTE-026 — identity, keyboard, compact 360px flow | [markup](../../ui/src/index.html), [styles](../../ui/src/style.css), [routing UI](../../ui/src/routing.ts); B1/B2 plus C5's actual renders, focus/reduced-motion and ten asset hashes. Root opened eight images; no blanket visual approval by this author. |
 | RTE-027 — bounded zero-model observation and named limits | [bounded reads](../../internal/store/routing_reads.go), [source assessor](../../internal/routing/assess.go); [TestRoutingReadsDefaultThirtyAndKeepCursorHighWater](../../internal/engine/routing_reads_test.go), [TestRoutingReadRejectsMalformedIdentitiesFiltersAndLimits](../../internal/engine/routing_reads_test.go), [TestRoutingUsageWholeItemBudgetStableCursorAndExactPageSubtotal](../../internal/store/routing_usage_test.go). C1/C3. |
-| RTE-028 — fake development, independent review and gates | [review record](review.md), [package test](../../scripts/package.test.mjs), C1–C5. Shared actual owners/contained fake workers and labelled synthetic usage exercised; no vendor authentication/usage measured. Final developer gates passed; commit/native/race gates and acceptance **PENDING**. |
+| RTE-028 — fake development, independent review and gates | [review record](review.md), [package test](../../scripts/package.test.mjs), C1–C5. Shared actual owners/contained fake workers and labelled synthetic usage exercised; no vendor authentication/usage measured. Final developer/native/race gates passed at the named source; acceptance is closed for this scope. |
 
 ## Success-criterion mapping
 
@@ -122,9 +119,9 @@ in C3's Go stage; local fake execution is never live provider qualification.
 | SC-006 | [TestRoutingBudgetCountsReplayAndExplicitAdditionalAuthority](../../internal/store/routing_budget_test.go), [TestRoutingContinuationRequiresCapturedReplacementAndEscalationAuthority](../../internal/store/routing_authority_test.go), [TestRoutingKnownNonEscalatingReplacementRemainsUsable](../../internal/store/routing_authority_test.go), [TestRoutingCurrentPriceCannotRewriteCapturedEscalationBasis](../../internal/store/routing_authority_test.go), B4/B11. C1–C3; final authority subcases passed 0.445s. |
 | SC-007 | [TestRoutingStopBetweenSettlementAndContinuationPreservesTerminalAndPreventsSuccessor](../../internal/engine/routing_continuation_test.go), [TestRoutingNewOwnerCannotRearmRetainedPrelaunchProof](../../internal/engine/routing_continuation_test.go), [TestInteropClaudeRunningDeadlinePreservesFailureAndVerifiedCleanup](../../internal/engine/interop_control_test.go), [TestInteropClaudeResponsePublicationFaultCannotBecomeCandidateSuccess](../../internal/engine/interop_results_test.go). C2/C3. |
 | SC-008 | [TestUsageSumsExactScopesOnceAndKeepsMissingFakeAndEstimatesSeparate](../../internal/routing/usage_test.go), [TestRoutingUsageWholeItemBudgetStableCursorAndExactPageSubtotal](../../internal/store/routing_usage_test.go), B7/B8; C1/C3. All-outcome query is retained; controlled counts/estimates are not real provider telemetry. |
-| SC-009 | Frozen003 migration/adoption tests and schema1/2 CLI check in RTE-024; B5/B6/B7/B9/B10/B12; [TestKnown003MaintenanceCannotGrant004ExecutionOrRouting](../../internal/cli/routing_test.go); C3/C5. Old history remains old history; final full local suite passed, native/commit gates remain pending. |
-| SC-010 | This 38-row index and [review.md](review.md) identify source, tests, corrections and qualification limits. C1–C5 and final build/test/check are observed local evidence; independent source review is closed. The immutable checked commit and all six native plus Linux race jobs are **PENDING**; the criterion is not yet fully satisfied. |
+| SC-009 | Frozen003 migration/adoption tests and schema1/2 CLI check in RTE-024; B5/B6/B7/B9/B10/B12; [TestKnown003MaintenanceCannotGrant004ExecutionOrRouting](../../internal/cli/routing_test.go); C3/C5. Old history remains old history; final local/native suites and immutable-source qualification passed. |
+| SC-010 | This 38-row index and [review.md](review.md) identify source, tests, corrections and qualification limits. C1–C5 and final build/test/check are observed local evidence; independent source review is closed. The exact checked commit and all six native plus Linux race jobs passed; acceptance.md records final independent review and job evidence. The criterion is satisfied for the specified offline scope. |
 
 No live provider task, account-switching qualification, financial-cap enforcement, direct paid
 executor, model-quality benchmark, automatic review/integration or feature005 implementation is
-established by this matrix. Root owns final review and acceptance after the remaining gates.
+established by this matrix. Root records final review and acceptance in the linked records, with the limits above retained.
