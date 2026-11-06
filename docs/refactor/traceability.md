@@ -1,10 +1,10 @@
 # Council rebuild requirements traceability
 
-Status: feature001 foundation is accepted on all six native targets at93c8c25. Feature002 managed
-execution is implemented, independently reviewed and accepted on all six native targets plus Linux
-AMD64 race checks at f5edd96 in run42140818152. Other parent requirements remain partial or not
-implemented as marked. Feature 003 has reviewed design and implementation records; its integrated
-qualification is in progress and does not yet change accepted parent status. Date: 6 November 2026.
+Status: features 001–003 are accepted. Foundation qualified on all six native targets at `93c8c25`;
+managed Codex execution qualified on six targets plus Linux AMD64 race at `f5edd96` in run 42140818152.
+Claude interoperability qualified on all seven jobs at `ce8aaa7` in
+[run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
+Other parent requirements remain partial or not implemented as marked. Date: 6 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
 [the delivery plan](delivery-plan.md). It does not credit the legacy runtime at
@@ -19,8 +19,8 @@ This is not permission to postpone foundational controls: task ownership, bounde
 failure/cancellation precedence, complete evidence, isolation and fail-closed cleanup exist from
 002. Slice 007 adds deliberate recovery and retention operations to that established base.
 
-Feature001 and feature002 acceptance.md and review.md records include their actual hosted
-qualification. Feature 003 records its current local evidence and pending qualification separately.
+Features 001–003 acceptance.md and review.md records include their actual hosted qualification,
+independent review/corrections and separately unperformed live-provider qualification.
 Evidence paths for features 004–012 are **planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
@@ -38,11 +38,11 @@ single status cannot hide an unmet claim.
 
 | Requirement | Acceptance responsibility | Primary slice | Supporting slices | Planned acceptance evidence | Current status |
 | --- | --- | --- | --- | --- | --- |
-| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — six native platform jobs passed at93c8c25 |
-| FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — Codex native contract/fake qualification accepted; other adapters and live qualification remain separate |
-| FR-003 | Reuse vendor-owned authentication without accessing credentials or changing global settings | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — native Codex delegates authentication without credential/global-setting access; live and other-harness qualification remain separate |
+| FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — six native platform jobs passed at 93c8c25 |
+| FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — Codex and Claude native contracts/fake qualification accepted; remaining adapters and live qualification remain separate |
+| FR-003 | Reuse vendor-owned authentication without accessing credentials or changing global settings | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — native Codex and Claude delegate authentication without credential/global-setting access; live and remaining-harness qualification remain separate |
 | FR-004 | Keep provider, account, harness and model identities distinct; link shared accounts | 004 | 002, 003, 009–012 | `specs/004-economical-routing/acceptance.md#target-and-account-identities` | NOT IMPLEMENTED |
-| FR-005 | Supply all five core lifecycle adapters with truthful optional capabilities and qualification | 012 | 002, 003, 009, 010, 011 | `specs/012-release-qualification/acceptance.md#adapter-capability-matrix` | NOT IMPLEMENTED |
+| FR-005 | Supply all five core lifecycle adapters with truthful optional capabilities and qualification | 012 | 002, 003, 009, 010, 011 | `specs/012-release-qualification/acceptance.md#adapter-capability-matrix` | PARTIAL — Codex and Claude native lifecycles accepted with truthful limitations; DeepSeek Harness, Junie and Antigravity remain planned |
 | FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary-and-authority` | IMPLEMENTED — six-platform foundation; later records repeat exclusion checks |
 | FR-007 | Admit tasks with project/task and Auto defaults, preserving resolved choices | 002 | 001, 004, 005, 012 | `specs/002-managed-execution/acceptance.md#task-admission-defaults` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
@@ -85,7 +85,7 @@ single status cannot hide an unmet claim.
 | FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing and MCP remain planned |
 | FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — task/draft/control/acceptance replay and stale clients accepted on six targets at f5edd96 |
 | FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation and native Codex fake journeys accepted on six targets; complete multi-adapter release remains planned |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — features001–002 specified, independently reviewed, corrected and accepted; features003–012 remain planned |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — features 001–003 specified, independently reviewed, corrected and accepted; features 004–012 remain planned |
 
 ## Per-feature review and fix gates
 
@@ -96,9 +96,9 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 
 | Slice | Planned context | Planned independent review/fix record | Gate status |
 | --- | --- | --- | --- |
-| 001 | `specs/001-workspace-foundation/` | `specs/001-workspace-foundation/review.md` | NOT IMPLEMENTED; gate open |
-| 002 | `specs/002-managed-execution/` | `specs/002-managed-execution/review.md` | NOT IMPLEMENTED; gate open |
-| 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | NOT IMPLEMENTED; gate open |
+| 001 | `specs/001-workspace-foundation/` | `specs/001-workspace-foundation/review.md` | ACCEPTED — six native targets at 93c8c25 |
+| 002 | `specs/002-managed-execution/` | `specs/002-managed-execution/review.md` | ACCEPTED — six native targets plus race at f5edd96 |
+| 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | ACCEPTED — six native targets plus race at ce8aaa7; all six implementation findings closed |
 | 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | NOT IMPLEMENTED; gate open |
 | 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | NOT IMPLEMENTED; gate open |
 | 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | NOT IMPLEMENTED; gate open |

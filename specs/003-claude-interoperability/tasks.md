@@ -73,9 +73,9 @@ new execution and unknown takeover.
 - [x] T027 Inspect desktop/360px target/progress/result/error/Stop/version/session/usage renders, keyboard focus, reduced motion and approved asset hashes; record actual screenshots and findings in specs/003-claude-interoperability/acceptance.md.
 - [x] T028 Extend scripts/package.test.mjs and scripts/packagearchive/README.md with extracted explicit Claude fake execution/evidence and003 metadata; preserve exact allowlist/notices/checksums, empty-PATH foundation startup and no Node/npm/Go runtime requirement.
 - [x] T029 Run npm run build, npm test and npm run check against final source, recording actual Go/SQLite/Node/browser versions and outcomes in specs/003-claude-interoperability/acceptance.md; commit matching internal/webui/dist output.
-- [ ] T030 Qualify all six actual native platform jobs and supported Linux AMD64 race checks via .github/workflows/verify.yml against the implementation commit; distinguish runtime from compilation and unperformed live provider qualification.
+- [x] T030 Qualify all six actual native platform jobs and supported Linux AMD64 race checks via .github/workflows/verify.yml against the implementation commit; distinguish runtime from compilation and unperformed live provider qualification.
 - [x] T031 Obtain independent source/contract/failure-path review in specs/003-claude-interoperability/review.md, correct blocking findings and recheck affected behavior before acceptance.
-- [ ] T032 Complete CLA-001–021 and SC-001–008 observed evidence mapping, update docs/refactor/traceability.md, delivery-plan.md and README.md honestly, mark tasks from actual checks and commit reviewed source/embedded assets before feature004.
+- [x] T032 Complete CLA-001–021 and SC-001–008 observed evidence mapping, update docs/refactor/traceability.md, delivery-plan.md and README.md honestly, mark tasks from actual checks and commit reviewed source/embedded assets before feature004.
 
 ## Dependencies and parallel ownership
 
@@ -115,7 +115,7 @@ older-owner fixture definitions are independent; their integration follows the m
 
 The first usable increment is a labelled Claude fake through the existing authoring path, with
 truthful result/candidate and ownership facts. It is not accepted implementation, live account
-qualification or economical routing. Tasks are checked only against observed evidence. T030 and T032 remain open until hosted qualification and final acceptance reconciliation are complete.
+qualification or economical routing. All 32 tasks are checked against observed evidence. Corrected implementation ce8aaa7 passed all seven hosted native/race jobs in run 42153455521; acceptance/review/evidence-matrix records retain earlier failures and unperformed live qualification.
 Use Specify analyze read-only for the final artifact gate, separately apply authorized corrections,
 and commit the design/task artifacts before application implementation. No extension or automatic
 Git branching hooks are configured. Development authorizes no vendor/model call.

@@ -9,9 +9,9 @@ main remains unchanged.
 ## Current preview
 
 Preview **2.0.0-dev.3** adds explicitly selected native Claude Code alongside Codex in managed
-isolated workspaces, with one shared execution slot. Claude interoperability has passed focused local
-checks and independent review; full platform qualification is in progress. The accepted baseline is
-feature 002. The Ejupi Labs UI and CLI share
+isolated workspaces, with one shared execution slot. This feature passed independent review,
+complete developer checks and all six native platform jobs plus Linux race checks at `ce8aaa7`.
+The Ejupi Labs UI and CLI share
 versioned instructions, exact output, source-relative candidates, history, Stop and recovery
 incidents. A response-only result can be explicitly accepted after review; authored changes remain
 verification pending. Work is never automatically replayed, merged or published by this slice.
@@ -34,6 +34,7 @@ council drafts create --project PROJECT_ID --task "Describe the work"
 council drafts list --json
 council policy get --json
 council tasks start --project PROJECT_ID --task "Describe the work" --json
+council tasks start --project PROJECT_ID --task "Describe the work" --harness claude-code --json
 council tasks start --project PROJECT_ID --task "Local fixture" --fake --json
 council attempts get ATTEMPT_ID --json
 council attempts stop ATTEMPT_ID --json
