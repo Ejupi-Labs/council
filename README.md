@@ -131,6 +131,8 @@ Platform runtime evidence and cross-compilation evidence are reported separately
 - [Claude interoperability specification](specs/003-claude-interoperability/spec.md)
 - [Economical routing specification](specs/004-economical-routing/spec.md)
 - [Economical routing quickstart](specs/004-economical-routing/quickstart.md)
+- [Verified delivery specification — design stage](specs/005-verified-delivery/spec.md)
+- [Verified delivery design quickstart](specs/005-verified-delivery/quickstart.md)
 
 Each feature follows Specify specification → design → tasks → implementation → independent review
 → corrections and acceptance before the next begins. Technology and limitations are documented in

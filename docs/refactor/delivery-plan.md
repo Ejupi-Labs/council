@@ -5,7 +5,8 @@ six-platform native qualification; features 002–003 also have Linux race quali
 Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
 Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172669381.
-Its 38-row evidence matrix and independent review are closed. Features005–012 remain planned.
+Its 38-row evidence matrix and independent review are closed. Feature005 has reviewed functional
+specification and active technical design/tasks; features006–012 remain planned.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 

@@ -23,7 +23,8 @@ Features 001–003 acceptance.md and review.md records include their actual host
 independent review/corrections and separately unperformed live-provider qualification.
 Feature 004 qualified at3f4a18e in run42172669381 on six native targets plus Linux race; its
 acceptance/review records and 38-row evidence matrix record actual local/native checks and closed review.
-Evidence paths for features 005–012 are **planned and not yet created**; a path alone is not evidence.
+Feature005 has a reviewed functional specification and active design/task analysis; it is not implemented.
+Evidence paths for features006–012 are **planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
@@ -102,7 +103,7 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 | 002 | `specs/002-managed-execution/` | `specs/002-managed-execution/review.md` | ACCEPTED — six native targets plus race at f5edd96 |
 | 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | ACCEPTED — six native targets plus race at ce8aaa7; all six implementation findings closed |
 | 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | ACCEPTED — six native targets plus race at3f4a18e, run42172669381; all independent corrections closed |
-| 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | NOT IMPLEMENTED; gate open |
+| 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | SPECIFIED / DESIGN IN REVIEW — no runtime implementation or acceptance yet |
 | 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | NOT IMPLEMENTED; gate open |
 | 007 | `specs/007-recovery-and-retention/` | `specs/007-recovery-and-retention/review.md` | NOT IMPLEMENTED; gate open |
 | 008 | `specs/008-host-integration/` | `specs/008-host-integration/review.md` | NOT IMPLEMENTED; gate open |
