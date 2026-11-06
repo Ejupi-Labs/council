@@ -148,3 +148,32 @@ MAXIMUM_ALLOWED no-propagation path or fails closed. Do not weaken rooted-handle
 an already-private ACL merely to discover an active owner. The native regression combines a live
 WAL, retained root and actual running owned fake child, then requires ErrLocked without changing
 the database or interrupting that child. Separate inheritance cases verify normalization/blocking.
+
+## Retained response identity across mutable writes
+
+Keep the newly created response file physically open until one matching import consumes its
+reservation or the engine explicitly releases it. A cached device/inode or file ID after closing
+the original object cannot prove identity: the filesystem may reuse that identifier for a new file
+at the same path. Compare the live reserved object with both the path and opened import handle,
+then recheck identity after copying. Native same-object writes remain supported. Import, invalid
+bounds, cancellation, copy/metadata faults, unlaunched preparation and owner shutdown all release
+their owned handles; mismatched attempt IDs cannot consume another attempt's reservation. Close
+faults remain typed durability faults, with raw expected cancellation preserved when no real fault
+coexists. The engine defers idempotent ReleaseOutput immediately after successful reservation.
+
+## macOS signal delivery versus cleanup proof
+
+XNU's killpg1 excludes zombie members and can report EPERM for an existing zombie-only group.
+The original macOS CI failures are consistent with that kernel behavior; their earlier bounded
+messages did not retain errno, so the exact failed syscall category was not directly observed.
+The corrected code retains bounded TERM/KILL categories and does not equate signal delivery with
+group emptiness. Attempt final KILL while the owned guardian is still unreaped, then reap it and
+require an actual signal-0 ESRCH probe. Retry transient EPERM/EACCES observations on the existing
+20 ms ticker within the original deadline, since orphan zombies can remain briefly after guardian
+reap. Persistent denial or another unresolved observation stays unknown. A live, inaccessible or
+reused group never becomes verified from a delivery error, and no nonzero signal is sent after
+reap. Pre-GO abort uses the same ordering.
+
+Primary source: [XNU killpg1 at verified commit f6217f8](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sig.c#L1710).
+Fault-injected native fixtures require actual exit/absence, preserve root observations and reject
+permission-denied probes or skipped reap. Compilation is not macOS/Linux runtime qualification.

@@ -96,6 +96,11 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("evidence_failed", "Cannot prepare a private final response location."), err)
 		return
 	}
+	defer func() {
+		if releaseErr := e.evidence.ReleaseOutput(a.ID, outputPath); releaseErr != nil {
+			e.fence(a.ID, "response_reservation_uncertain", "The private response reservation could not be released cleanly. Preserve its evidence and inspect the retained incident before further dispatch.")
+		}
+	}()
 	resolve := e.config.Resolve
 	if a.ExecutionMode == "fake" {
 		resolve = func(context.Context, domain.ExecutionPins) (string, error) { return os.Executable() }

@@ -30,8 +30,21 @@ func TestMutableResponseImportChecksOwnedIdentityAndBounds(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	os.Remove(path)
-	os.WriteFile(path, []byte("replacement"), 0600)
+	reserved := s.outputs[path].reservation
+	if reserved == nil {
+		t.Fatal("staging physical identity was not reserved")
+	}
+	if e = os.Remove(path); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(path, []byte("replacement"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	oldInfo, oldErr := reserved.Stat()
+	replacementInfo, replacementErr := os.Stat(path)
+	if oldErr != nil || replacementErr != nil || os.SameFile(oldInfo, replacementInfo) {
+		t.Fatalf("replacement did not create a distinct held object: %v %v", oldErr, replacementErr)
+	}
 	if _, e = s.ImportResponse(ctx, attempt, path, 100); !errors.Is(e, ErrCorrupt) {
 		t.Fatalf("replaced staging target: %v", e)
 	}

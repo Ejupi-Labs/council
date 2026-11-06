@@ -20,13 +20,14 @@ import (
 )
 
 type Store struct {
-	lock     *localstate.Lock
-	root     *os.Root
-	sink     Sink
-	outputMu sync.Mutex
-	outputs  map[string]outputReference
-	proofMu  sync.Mutex
-	proofs   map[string]rangeProof
+	lock          *localstate.Lock
+	root          *os.Root
+	sink          Sink
+	outputMu      sync.Mutex
+	outputs       map[string]outputReference
+	outputsClosed bool
+	proofMu       sync.Mutex
+	proofs        map[string]rangeProof
 }
 
 func New(lock *localstate.Lock, sink Sink) (*Store, error) {
@@ -58,7 +59,7 @@ func New(lock *localstate.Lock, sink Sink) (*Store, error) {
 	return &Store{lock: lock, root: r, sink: sink, outputs: map[string]outputReference{}}, nil
 }
 
-func (s *Store) Close() error { return s.root.Close() }
+func (s *Store) Close() error { return errors.Join(s.closeOutputs(), s.root.Close()) }
 
 func NewID() (string, error) {
 	var b [16]byte

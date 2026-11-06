@@ -106,7 +106,7 @@ func prepareNative(ctx context.Context, s NativeSpec, p pipeSet, o *Owned) (nati
 	n := &unixOwner{command: cmd, control: controlW, events: eventR, token: token, pgid: cmd.Process.Pid, waitDone: make(chan struct{})}
 	abort := func() error {
 		n.mu.Lock()
-		killErr := n.signalOwned(unix.SIGKILL)
+		_ = n.signalOwned(unix.SIGKILL)
 		n.finalSent = true
 		n.mu.Unlock()
 		n.beginWait()
@@ -116,7 +116,9 @@ func prepareNative(ctx context.Context, s NativeSpec, p pipeSet, o *Owned) (nati
 		case <-n.waitDone:
 			probe := n.signalOwned(0)
 			n.close()
-			if (killErr == nil || errors.Is(killErr, unix.ESRCH)) && errors.Is(probe, unix.ESRCH) {
+			// Delivery can fail for a zombie-only group on Darwin. Verified
+			// absence after final-attempt-before-reap is the cleanup proof.
+			if errors.Is(probe, unix.ESRCH) {
 				return nil
 			}
 		case <-timer.C:
@@ -209,9 +211,10 @@ func (n *unixOwner) cleanup(ctx context.Context) (bool, string, string) {
 	}
 	termErr := n.signalOwned(unix.SIGTERM)
 	n.mu.Unlock()
-	if termErr != nil && !errors.Is(termErr, unix.ESRCH) {
-		return false, scope, "The owned process group could not receive its graceful signal."
-	}
+	// Darwin's killpg1 excludes zombies and can return EPERM for an existing
+	// zombie-only group. A delivery error proves neither liveness nor absence.
+	// Always attempt the final signal while the guardian remains unreaped, then
+	// require guardian reap and an ESRCH group probe before verifying cleanup.
 	timer := time.NewTimer(GracePeriod)
 	select {
 	case <-timer.C:
@@ -227,33 +230,64 @@ func (n *unixOwner) cleanup(ctx context.Context) (bool, string, string) {
 	killErr := n.signalOwned(unix.SIGKILL)
 	n.finalSent = true
 	n.mu.Unlock()
-	if killErr != nil && !errors.Is(killErr, unix.ESRCH) {
-		return false, scope, "The owned process group could not receive its final signal."
-	}
+	delivery := " Signal attempts: TERM=" + signalStatus(termErr) + ", KILL=" + signalStatus(killErr) + "."
 	n.beginWait()
 	select {
 	case <-n.waitDone:
 	case <-ctx.Done():
-		return false, scope, "The guardian exit could not be observed before the cleanup deadline."
+		return false, scope, "The guardian exit could not be observed before the cleanup deadline." + delivery
 	}
 	// A cached PGID is only probed after reaping. Reuse can conservatively block, never kill.
+	// Darwin may still report EPERM for orphan zombies awaiting their parent's
+	// reap. Retry permission-denied observations under this original deadline;
+	// neither a permission error nor an accepted zero signal proves absence.
+	lastProbe := "not_observed"
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return false, scope, "Managed group absence was not proved before the cleanup deadline. Last group probe: " + lastProbe + "." + delivery
+		}
 		err := n.signalOwned(0)
 		if errors.Is(err, unix.ESRCH) {
-			return true, scope, "The managed process group was observed empty after the final signal and guardian reap."
+			return true, scope, "The managed process group was observed empty after the final signal attempt and guardian reap." + delivery
 		}
-		if err != nil {
-			return false, scope, "The managed process group could not be probed."
+		if err != nil && !errors.Is(err, unix.EPERM) && !errors.Is(err, unix.EACCES) {
+			return false, scope, "The managed process group could not be probed (" + signalStatus(err) + ")." + delivery
+		}
+		lastProbe = signalStatus(err)
+		if err == nil {
+			lastProbe = "present"
 		}
 		select {
 		case <-ctx.Done():
-			return false, scope, "Managed group members remain or absence could not be proved before the cleanup deadline."
+			return false, scope, "Managed group absence was not proved before the cleanup deadline. Last group probe: " + lastProbe + "." + delivery
 		case <-ticker.C:
 		}
 	}
 }
+
+// signalStatus retains bounded native error categories without exposing paths or
+// arbitrary error text in persisted cleanup observations.
+func signalStatus(err error) string {
+	switch {
+	case err == nil:
+		return "accepted"
+	case errors.Is(err, unix.ESRCH):
+		return "ESRCH"
+	case errors.Is(err, unix.EPERM):
+		return "EPERM"
+	case errors.Is(err, unix.EACCES):
+		return "EACCES"
+	case errors.Is(err, unix.EINVAL):
+		return "EINVAL"
+	case errors.Is(err, unix.EINTR):
+		return "EINTR"
+	default:
+		return "other_error"
+	}
+}
+
 func (n *unixOwner) close() error {
 	n.closeOnce.Do(func() {
 		n.mu.Lock()

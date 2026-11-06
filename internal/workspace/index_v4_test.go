@@ -19,6 +19,7 @@ func TestActualGitV4PrefixCompressionAndOptionalHash(t *testing.T) {
 				t.Helper()
 				c := exec.Command("git", args...)
 				c.Dir = repo
+				c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 				if b, err := c.CombinedOutput(); err != nil {
 					t.Fatalf("%v %s", err, b)
 				}
@@ -26,6 +27,9 @@ func TestActualGitV4PrefixCompressionAndOptionalHash(t *testing.T) {
 			git("init", "--quiet")
 			git("config", "index.version", "4")
 			git("config", "index.skipHash", skipHash)
+			// Keep the multi-byte v4 prefix even under long Windows runner temp
+			// paths, without depending on a developer-global Git preference.
+			git("config", "core.longpaths", "true")
 			long := strings.Repeat("a", 150)
 			if err := os.Mkdir(filepath.Join(repo, long), 0700); err != nil {
 				t.Fatal(err)

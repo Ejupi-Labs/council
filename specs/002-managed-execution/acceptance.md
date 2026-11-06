@@ -19,7 +19,7 @@ use explicitly selected local fakes and owned native process fixtures, with zero
 | Independent immutable final-publication, acknowledgement-loss and cancellation checks | Passed; six focused cases, 0.197s |
 | Admission acknowledgement loss, joined faults, pre-preparation Stop and exact-owner shutdown | Passed; five engine tests, 3.755s |
 | Actual concurrent starts from two independent CLI processes | Passed; native Windows ARM64, 25.012s package run, one owner/slot and ordered Stop-driven worker transfer |
-| npm test against final source | Passed: all Go packages, fourteen real Chromium cases and the extracted native preview; CLI 56.155s, engine 59.065s, browser 59.331s and package 10.027s |
+| npm test against final source | Passed: all Go packages, fourteen real Chromium cases and the extracted native preview; CLI 56.765s, engine 55.437s, browser 60.394s and package 10.146s |
 | npm run check against final source | Passed: go vet, strict authored TypeScript and non-mutating Go format validation |
 | Actual execution desktop and 360px renders | Passed; eighteen inspected captures, six transition renders rechecked after correction |
 | actionlint .github/workflows/verify.yml | Passed |
@@ -35,6 +35,23 @@ explicitly. The final complete run includes that correction and the actual concu
 Earlier complete browser/package runs and intermediate failed runs are diagnostic history, not
 substitutes for the final gates. Raw local logs, diagnostic benchmark results and screenshots are
 kept under ignored .council/refactor/. Tests and the substantive review findings are versioned.
+
+## Hosted qualification history
+
+[Run 42138479256](https://github.com/Ejupi-Labs/council/actions/runs/42138479256) tested
+implementation 6dffccf293ecf26846c39268704f2ed257780ea9. All seven jobs completed with failures:
+Linux AMD64/ARM64 and the race job exposed mutable-response file-identity reuse; both macOS
+architectures exposed guardian cleanup proof failures; both Windows architectures exposed the
+150-character Git-v4 fixture's dependence on a developer long-path setting. These are actual
+runtime failures, not successful cross-compilation evidence.
+
+The corrections retain response file handles until import/release, require actual post-reap group
+absence independently of signal-delivery status, and explicitly enable long paths only in the
+isolated Git fixture. Independent source review found no remaining blocking issue. Evidence and
+process test binaries compile for all four Unix targets; this is compile-only. The Windows Git
+fixture passed with a deliberately longer temporary root (0.667s). The corrected complete Windows
+ARM64 regression passed, including all fourteen browser cases and extraction. A new hosted run
+against the corrected commit remains required; the failed run does not qualify it.
 
 ## Task admission defaults
 
