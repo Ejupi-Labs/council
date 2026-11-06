@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 test('guidance creates a current version without running or accepting the historical response', { timeout: 90000 }, async () => {
   const f = await fixture(); let owner;
@@ -8,7 +8,7 @@ test('guidance creates a current version without running or accepting the histor
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await legacyExecution(page); await page.locator('#task-deliverable').selectOption('response_only');
     let starts = 0;
     page.on('request', r => { if (r.method() === 'POST' && /\/tasks(?:\/[a-f0-9]+\/attempts)?$/.test(new URL(r.url()).pathname)) starts++; });
     await page.locator('#task-text').fill('Keep the original intent verbatim.'); await page.locator('#start-task').click();

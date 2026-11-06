@@ -506,6 +506,8 @@ type ContinuationProof struct {
 }
 
 type UsageItem struct {
+	ExecutorKind        string                   `json:"executorKind,omitzero"`
+	Role                string                   `json:"role,omitzero"`
 	AttemptID           string                   `json:"attemptId"`
 	AttemptSequence     string                   `json:"attemptSequence"`
 	ExecutionMode       string                   `json:"executionMode"`
@@ -535,11 +537,12 @@ type UsageSubtotal struct {
 	ByUsageScope UsageScopeSubtotals `json:"byUsageScope"`
 }
 type UsageCoverage struct {
-	Scope                  string   `json:"scope"`
-	Status                 string   `json:"status"`
-	IncludedAttemptIDs     []string `json:"includedAttemptIds"`
-	UnknownAttemptIDs      []string `json:"unknownAttemptIds"`
-	ExcludedFakeAttemptIDs []string `json:"excludedFakeAttemptIds"`
+	ExcludedLocalAttemptIDs []string `json:"excludedLocalAttemptIds,omitzero"`
+	Scope                   string   `json:"scope"`
+	Status                  string   `json:"status"`
+	IncludedAttemptIDs      []string `json:"includedAttemptIds"`
+	UnknownAttemptIDs       []string `json:"unknownAttemptIds"`
+	ExcludedFakeAttemptIDs  []string `json:"excludedFakeAttemptIds"`
 }
 type EstimateItem struct {
 	AttemptID           string   `json:"attemptId"`

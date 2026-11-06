@@ -32,6 +32,9 @@ type routingSchema3IDs struct {
 // routingSchema3Database uses frozen accepted DDL and direct old records, never
 // the current Open/CreateTask defaults. All metadata is local fixture data.
 func routingSchema3Database(t *testing.T, path, selectedPath string, full bool) (*sql.DB, routingSchema3IDs) {
+	return routingLegacyDatabase(t, path, selectedPath, full, acceptedRoutingSchema3)
+}
+func routingLegacyDatabase(t *testing.T, path, selectedPath string, full bool, ddl string) (*sql.DB, routingSchema3IDs) {
 	t.Helper()
 	dsn, e := sqliteDSN(path)
 	if e != nil {
@@ -43,7 +46,7 @@ func routingSchema3Database(t *testing.T, path, selectedPath string, full bool) 
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	if _, e = db.Exec(acceptedRoutingSchema3); e != nil {
+	if _, e = db.Exec(ddl); e != nil {
 		db.Close()
 		t.Fatal(e)
 	}

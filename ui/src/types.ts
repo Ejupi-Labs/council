@@ -53,6 +53,7 @@ export interface Meta {
   managedExecution: 'not_implemented' | 'native_codex' | 'native_codex_claude';
   capabilities?: string[];
   executionContract?: string;
+  workflowContract?: string;
   maintenanceContract?: string;
   capacity?: { resourceId?: string; connectionId?: string; limit: number; activeAttemptId: string | null };
   admission?: { state: string; incidentId: string | null; incident?: { code: string; message: string } };

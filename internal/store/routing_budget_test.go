@@ -13,6 +13,7 @@ import (
 func TestRoutingBudgetCountsReplayAndExplicitAdditionalAuthority(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
+	routingSavedTwoPolicyFixture(t, s)
 	p := openFixture(t, s, "budget")
 	owner := domain.NewID()
 	in := taskInput(p.ID)
@@ -151,6 +152,7 @@ func TestRoutingNewWindowCannotPassRetainedFence(t *testing.T) {
 func TestRoutingGuidanceContinuationUsesExistingGrantWithoutRefill(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
+	routingSavedTwoPolicyFixture(t, s)
 	p := openFixture(t, s, "guidance-authority")
 	in := taskInput(p.ID)
 	in.Routing = &domain.RoutingOptions{Budget: &domain.RoutingBudgetInput{AdmissionLimit: "4"}}

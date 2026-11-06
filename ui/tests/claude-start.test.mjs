@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 async function open(f, owner) {
   const page = await f.browser.newPage(); await page.goto(owner.url);
@@ -15,7 +15,7 @@ test('optional Claude Agents action starts one captured fake without a connectio
     owner = await f.start(); const page = await open(f, owner);
     await page.getByTestId('agent-claude-code').getByRole('button', { name: 'Use Claude Code for next task' }).click();
     assert.equal(await page.locator('#task-harness').inputValue(), 'claude-code');
-    await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+    await page.locator('#task-fake').check(); await legacyExecution(page); await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-model').fill('haiku');
     const original = 'Use the explicitly selected Claude fixture. Grüße 🙂\nPreserve the complete original intent.';
     await page.locator('#task-text').fill(original);
@@ -53,7 +53,7 @@ test('omitted economical Auto resolves unknown work conservatively without inser
     owner = await f.start(); const page = await open(f, owner);
     assert.equal(await page.locator('#task-harness').inputValue(), '');
     assert.match(await page.locator('#composer-target').textContent(), /Auto.*economical routing/);
-    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check();
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await legacyExecution(page);
     await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-text').fill('Keep the existing Auto meaning for this saved draft.');
     await page.locator('#save-draft').click(); await page.locator('#draft-status').filter({ hasText: 'Saved revision 1' }).waitFor();
@@ -71,7 +71,7 @@ test('a supervised Claude request blocks without another target or automatic fal
     owner = await f.start(); const page = await open(f, owner);
     await page.locator('#policy-mode').selectOption('supervised'); await page.locator('#save-policy').click();
     await page.locator('#policy-status').filter({ hasText: 'Saved requested preference: Supervised' }).waitFor();
-    await page.locator('#execution-options > summary').click(); await page.locator('#task-harness').selectOption('claude-code'); await page.locator('#task-fake').check();
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-harness').selectOption('claude-code'); await page.locator('#task-fake').check(); await legacyExecution(page);
     await page.locator('#task-text').fill('Keep this unsupported explicit request and report the limitation.');
     let starts = 0; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/tasks') starts++; });
     const returned = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/tasks');

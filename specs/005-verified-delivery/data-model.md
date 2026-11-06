@@ -211,15 +211,21 @@ binding; historical selectors never grant authority or permit historical mutatio
 ## Candidate revision and applicability
 
 Reuse `Candidate`, its source snapshot, full manifest, delta and index evidence. New candidates
-add optional `workflowId`, `predecessorCandidateId`, `createdByStepId`, `conditionsSHA256` and
-`completeness` (`complete`, `partial`, `uncertain`). The initial candidate has no predecessor;
+add optional `workflowId`, `predecessorCandidateId`, `createdByStepId`, `conditionsSHA256`,
+`rootSourceSnapshotId` and `completeness` (`complete`, `partial`, `uncertain`). The initial candidate has no predecessor;
 correction or a source-modifying check records a new revision with the exact predecessor. A
 live workspace path alone never identifies the accepted bytes. Existing candidate `verification`
 and `integration` values are historical creation facts; qualified current results come from the
 workflow receipts/projection, without editing old candidate JSON.
 
-`CandidateBinding` identifies `{candidateId, sourceSnapshotId, manifestArtifactId,
-manifestSHA256, indexArtifactId, indexSHA256, conditionsSHA256}`. Complete source/index bytes
+`CandidateBinding` identifies `{candidateId, rootSourceSnapshotId, sourceSnapshotId,
+manifestArtifactId, manifestSHA256, indexArtifactId, indexSHA256, conditionsSHA256}`.
+For new workflow candidates the root source is inherited from the selected predecessor;
+the first author binds its own source. Historical candidates are read with their own source
+as the legacy root interpretation, without rewriting original JSON. Final application and
+cumulative change reads compare the root source to the selected full manifest. An immediate
+correction delta never replaces this cumulative basis. The selected manifest/file artifacts
+belong to the actual selected producer, which can differ from the root source owner. Complete source/index bytes
 and project/control identity must be available. A partial or uncertain candidate can remain useful
 but cannot satisfy acceptance or local integration. A fresh controller verification proves
 registered artifact identity, length and hash before review/check materialization or delivery.
@@ -404,7 +410,10 @@ The complete candidate is retained with `application_unsupported` and the precis
 1. **Preflight and retained basis.** Under the owned application stage, freshly verify its exact
    candidate/evidence/conditions, captured scope, current controls/window, selected project/repo/
    branch/control identity and all affected path/type/content/index entries. Compare against the
-   captured source, including pre-existing dirty bytes. Unrelated files/index entries are not
+   first author's root source, including pre-existing dirty bytes, against the selected full
+   manifest. Do not apply only the latest correction's relative delta. The selected candidate
+   and its producer own the selected manifest binding independently of the root source.
+   Unrelated files/index entries are not
    rewritten. Record complete before/after destination manifests, expected contents and metadata
    as immutable artifacts. A known conflict at this point causes no destination move.
 2. **Private same-filesystem preparation.** Stage intended after files and a unique quarantine
@@ -419,8 +428,18 @@ The complete candidate is retained with `application_unsupported` and the precis
    destination metadata rule. Moving a staged Windows file does not acquire the prior target's
    inherited ACL. A publisher that cannot preserve the applicable owner/DACL or unsupported
    alternate streams must reject the operation, not substitute Council-private ACLs, normalize
-   the user target or silently lose metadata. The same rule covers unsupported Unix ACL/extended
-   metadata. Native qualification must prove both the supported case and the named refusal.
+   the user target or silently lose metadata. Require descriptor-bound absence of native query-visible
+   EAs and explicit integrity labels on affected files and destination parents; successful queried
+   descriptors with no SACL are explicit label absence. Do not infer EA absence from
+   FILE_NO_EA_KNOWLEDGE or request privileged audit-SACL access. The same rule covers unsupported Unix ACL/extended
+   metadata. On Windows, prepare/query a protected temporary effective-ACL clone while
+   staging under the private parent. Following its exclusive move, restore the original
+   owner/DACL/protection/inheritance semantics and query exact equality within the **same
+   permitted publication action**. Stop cannot skip that restore after the move; failure
+   leaves explicit partial/uncertain effects, never a protected final substitute or automatic
+   rollback. Capture/recheck the destination parent's metadata, and qualify new-file metadata
+   against the explicit native destination-parent/token rule. Do not normalize the original.
+   Native qualification must prove both the supported case and the named refusal.
 4. **Write-ahead path actions.** For each affected path in captured stable order, recheck current
    Stop/owner/control/deadline and the anchored parent/leaf basis. Append and commit a per-path
    intent before its next native move. `kind` is `add`, `replace` or `delete`; `action` distinguishes
@@ -457,21 +476,39 @@ The complete candidate is retained with `application_unsupported` and the precis
    metadata and unchanged required index basis. Append the exact observed path result, then
    advance only after its durable acknowledgement and all required path results. Unsupported
    namespace durability is explicit; neither a rename nor SQLite alone is a universal power-loss
-   transaction across filesystem and database. Any ambiguous move/sync/commit acknowledgement
+   transaction across filesystem and database. Record namespace durability separately:
+   `pending` before actual Unix directory synchronization, `directory_fsync_observed` only
+   after successful sync, and `not_available` on Windows. A before/intended manifest cannot
+   attest final namespace synchronization. File/evidence/journal durability still applies.
+   Any ambiguous move/sync/commit acknowledgement
    is uncertain, fences unsafe progress and permits no automatic effect retry.
 
 Use native exclusive primitives anchored to retained checked objects/directories: Windows
-`SetFileInformationByHandle(FileRenameInfo)` with `ReplaceIfExists=false`, a checked source
-handle and relative name under the verified destination `RootDirectory`; Linux
+`NtSetInformationFile(FileRenameInformation)` (class 10) with `ReplaceIfExists=false`,
+a checked source handle with DELETE access and one relative leaf under the verified
+`RootDirectory`; Linux
 `renameat2(..., RENAME_NOREPLACE)` and macOS `renameatx_np(..., RENAME_EXCL)` with retained
 directory descriptors. Path-only rename is not an anchored fallback when a redirect race cannot
 be excluded. Exclusive rename support depends on the filesystem; no unsafe fallback is allowed.
 The Windows handle-relative/no-replace contract is documented in
-[FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).
+[NtSetInformationFile](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile)
+and [FILE_RENAME_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+The controlled Windows ARM64 prerequisite rejected the earlier Win32 relative wrapper
+with `ERROR_INVALID_PARAMETER`; the documented native API substitution passed. This does
+not qualify every filesystem or replace the pending six-native runtime gate.
 The additional same-volume/no-copy/no-replace boundaries are documented by
 [Microsoft](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw),
 [Linux](https://man7.org/linux/man-pages/man2/rename.2.html) and
 [Apple](https://developer.apple.com/documentation/foundation/urlresourcevalues/volumesupportsexclusiverenaming).
+
+Darwin metadata eligibility uses only the retained-FD public libSystem `fgetattrlist`
+API, strict `ATTR_CMN_EXTENDED_SECURITY` plus `FSOPT_REPORT_FULLSIZE`, without
+returned-attribute/default packing. Valid reported absence/NOACL is supported; an actual
+empty/populated ACL, unsupported/error response or malformed returned blob is not. The
+boundary is metadata **as reported by that public OS API**, not detection of hidden corrupt
+raw security records that XNU can ignore. No root/private entitlement or deprecated direct
+kernel trap is required. See the pinned [Apple public contract](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/man/man2/getattrlist.2)
+and [packing source](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/vfs/vfs_attrlist.c#L2051).
 
 Displaced originals remain live quarantined objects, with immutable before/after snapshots as
 observed at their recorded times. Existing external handles can continue to refer to a moved

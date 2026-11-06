@@ -1,10 +1,14 @@
-# Council managed execution preview
+# Council verified workflow preview
 
-Version 2.0.0-dev.4. This native preview opens local Git projects and runs native
-Codex or Claude Code authoring in isolated managed workspaces. Auto uses a published
-economical routing policy, with optional user-reported capacity and declared account
-associations. Both connections share one managed worker slot. Exact output,
-source-relative candidates, cancellation and recovery evidence remain available.
+Version 2.0.0-dev.5. Feature 005 implementation is under qualification; acceptance
+and its six-native-target/race gate are not yet claimed. Features 001–004 remain
+accepted; features 006–012 remain planned. This preview opens local Git projects
+and runs native Codex or Claude Code in isolated managed workspaces. Auto connects
+authoring, proportionate checks, necessary independent review, bounded correction
+and captured delivery. Economical routing uses optional user-reported capacity
+and declared account associations. Both connections share one managed worker slot.
+Exact output, source-relative candidates, stage lineage, cancellation and recovery
+evidence remain available.
 Live provider compatibility remains separately unqualified for both connections;
 the included fixed fake mode uses only local processes and is labelled throughout.
 
@@ -50,14 +54,19 @@ it cannot select the native authenticated account. Optional reports can exclude 
 exhausted or denied capacity. Missing observations remain unknown, and unresolved
 exhaustion needs an explicit correction.
 
-New tasks default to two managed attempt admissions within one shared 30-minute
-wall-clock window from their first admission. Queue, preparation, execution and
-settlement share that window; cleanup may continue after a deadline requests Stop.
-Explicit grants add authority without launching work. Automatic continuation is OFF
-by default. A finite opt-in supports only affirmative pre-launch ineligibility before
-any native process preparation/creation; generic native failures, rate-limit prose
-and terminal-transient continuation are unsupported triggers. Native internal model
-calls, retries and fallback are outside Council's managed admission count.
+Fresh 005 homes default to four managed model admissions in one shared 30-minute
+wall-clock window from the first admission. Every saved existing default, including
+two, is preserved. Task grants, consumed units and deadlines are never refilled by
+an upgrade or saved-default change. Author/reviewer/corrector processes consume model
+units; local checks/application do not supply model token measurements or consume
+model units. Queue, preparation, execution and required settlement share the window;
+cleanup may continue after expiry. Explicit grants add authority without launching
+work or re-arming old results. Routing continuation is OFF by default; its finite
+opt-in supports only proven pre-launch ineligibility before native preparation.
+Auto correction separately allows at most one captured cycle for an actual review
+blocker or observed required-check failure within remaining authority. Generic
+native errors, prose and uncertainty authorize neither retry nor correction.
+Native internal calls, retries and fallback are outside the managed admission count.
 
 Usage views separate known sourced counters, missing coverage, fake work, dated
 reference prices and native client estimates. Estimates are not billed charges;
@@ -65,16 +74,35 @@ unknown charges or allowance never mean zero. Actual-account pins, Council-manag
 paid API execution, hard spending caps and exact effective-model guarantees are
 unsupported. A native session ID does not imply resume or Council conversation history.
 
-Candidates remain verification pending; independent verification/integration is
-reserved for feature 005. This preview does not merge or publish changes. Private
-records, workspaces and evidence live under `<user-home>/.council/v2/`, separate from
-legacy state. Existing task instructions, history and exact receipts are retained.
-A legacy task needs explicit budget adoption before another new attempt; adoption
-does not launch it. Current execution requires dev.4/004-v1. Accepted dev.2/dev.3
-owners support only the exact maintenance Stop compatibility path, not 004 execution.
+Start needs only a project, task and saved operating preference. A recognized literal
+document replacement can use one author and a sufficient observed builtin proof;
+other work retains necessary review/check gaps. Agent claims never become check
+receipts. Delivery starts as review only; old autonomous permission is not local
+delivery consent. Choose prospective verified-local scope once for compatible future
+tasks. Ordinary single-link text add/replace/delete under existing parents can then
+apply within captured scope while unrelated edits/index remain intact. Unsupported
+index, mode, type, symlink or cross-volume changes retain a named gap. Destination
+conflicts retain candidate and user work. Immutable candidate creation status is
+separate from current workflow qualification and delivery.
 
-Inspect `--help` for reports, task routing, budgets, usage, history, guidance, Stop,
-artifact reads and exact request retries. `tasks start --fake --fake-scenario response`
+Commit, push and publication/deployment require explicit external task scope. The
+supported external basis is captured command completion, not remote attestation.
+Plain response-only work keeps exact explicit user acceptance and replay; supporting
+review does not replace the author's answer. Optional `--workflow author_only`
+retains standalone authoring without automatic workflow qualification.
+
+Private records, workspaces and evidence live under `<user-home>/.council/v2/`,
+separate from legacy state. Existing instructions/history/receipts retain their
+meaning. Explicitly adopt missing budget authority before new work; workflow adoption
+separately creates a new version and starts no work. Use Run task for the adopted
+first author, then advance eligible existing stages. Current execution requires
+dev.5 with execution/workflow contracts 005-v1 and current capabilities. Known
+dev.2/dev.3/dev.4 owners support only their exact maintenance Stop compatibility
+path, not current execution.
+
+Inspect `--help` for workflow preferences, stages, reviews, checks, findings, deliveries,
+routing, budgets, usage, history, guidance, Stop, full artifact reads and exact retries.
+`tasks start --fake --fake-scenario response`
 explicitly invokes a local fixture; it never falls back to a vendor or establishes
 subscription savings.
 

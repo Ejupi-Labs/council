@@ -19,6 +19,7 @@ func (m *Manager) git(ctx context.Context, dir string, input []byte, args ...str
 	argv := []string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + m.hooks, "-c", "diff.external=", "-c", "core.attributesFile=/dev/null", "-c", "core.quotePath=false"}
 	argv = append(argv, args...)
 	c := exec.CommandContext(ctx, "git", argv...)
+	configureGitCommand(c)
 	c.Dir = dir
 	c.Stdin = bytes.NewReader(input)
 	for _, v := range os.Environ() {

@@ -21,6 +21,12 @@ func TestMain(m *testing.M) {
 	if handled, code := process.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if handled, code := handleWorkflowMutatingCheck(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	if handled, code := fixture.HandleWorkflowInternal(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	if handled, code := fixture.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}
@@ -90,7 +96,7 @@ func testEngine(t *testing.T) (*Engine, string, string) {
 
 func admit(t *testing.T, e *Engine, project, scenario string) domain.Admission {
 	t.Helper()
-	result := e.StartTask(context.Background(), domain.StartTaskInput{RequestID: domain.NewID(), ProjectID: project, OriginalText: "Perform the explicit local fixture task.", ExecutionMode: "fake", FakeScenario: scenario, Acceptance: &domain.AcceptanceInput{Deliverable: "response_only"}})
+	result := e.StartTask(context.Background(), domain.StartTaskInput{RequestID: domain.NewID(), ProjectID: project, OriginalText: "Perform the explicit local fixture task.", ExecutionMode: "fake", FakeScenario: scenario, Workflow: &domain.WorkflowInput{Mode: "author_only"}, Acceptance: &domain.AcceptanceInput{Deliverable: "response_only"}})
 	if result.Envelope.Error != nil {
 		t.Fatal(result.Envelope.Error)
 	}

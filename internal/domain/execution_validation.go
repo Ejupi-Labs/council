@@ -118,7 +118,7 @@ func ValidateExecutionMode(mode, scenario string) *Error {
 			return Invalid("fakeScenario only in fake mode")
 		}
 		switch scenario {
-		case "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown",
+		case "workflow-document", "workflow-defect", "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown",
 			"trailing_observation", "malformed", "missing_result", "repeated_result", "trailing_error", "success_error", "model_usage", "empty_response", "empty_candidate":
 		default:
 			return Invalid("fakeScenario")
@@ -136,7 +136,7 @@ func CheckExecutionScenario(pins ExecutionPins, mode, scenario string) *Error {
 		return nil
 	}
 	switch scenario {
-	case "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown":
+	case "workflow-document", "workflow-defect", "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown":
 		return nil
 	}
 	connectionID, err := ResolveConnectionID(pins)
@@ -149,6 +149,9 @@ func CheckExecutionScenario(pins ExecutionPins, mode, scenario string) *Error {
 	return nil
 }
 func ValidateStartTask(in StartTaskInput) *Error {
+	if err := ValidateWorkflowInput(in.Workflow); err != nil {
+		return err
+	}
 	if err := ValidateRoutingOptions(in.Routing, "start"); err != nil {
 		return err
 	}
@@ -195,6 +198,9 @@ func ValidateVersionOptions(pins *ExecutionPins, override string, acceptance *Ac
 	return nil
 }
 func ValidateGuidance(in GuidanceInput) *Error {
+	if e := ValidateWorkflowInput(in.Workflow); e != nil {
+		return e
+	}
 	if err := ValidateRoutingOptions(in.Routing, "guidance"); err != nil {
 		return err
 	}
@@ -269,6 +275,9 @@ func CheckAuthoringCapability(v TaskVersion) *Error {
 func Decimal(n int64) string { return strconv.FormatInt(n, 10) }
 
 func executionPresence(target any, members map[string]jsontext.Value) *Error {
+	if e := workflowPresence(target, members); e != nil {
+		return e
+	}
 	if e := routingPresence(target, members); e != nil {
 		return e
 	}

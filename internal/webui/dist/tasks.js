@@ -5,7 +5,7 @@ const checked = (id) => element(id).checked;
 function composerHarnessName(id) { return id ? harnessName(id) : 'Auto · economical routing'; }
 function label(attempt) {
     if (attempt.outcome === 'succeeded')
-        return 'Verification pending';
+        return attempt.workflowId ? 'Stage succeeded' : 'Verification pending';
     return attempt.outcome ?? attempt.phase;
 }
 function row(list, title, action) {
@@ -20,6 +20,7 @@ function row(list, title, action) {
 export class TasksView {
     drafts;
     routing;
+    workflow;
     projectId = null;
     policy = null;
     available = false;
@@ -30,9 +31,12 @@ export class TasksView {
     detailGeneration = 0;
     attemptGeneration = 0;
     artifactGeneration = 0;
+    evidenceSelection = 0;
     listGeneration = 0;
     detail = null;
     attempt = null;
+    explicitAttempt = null;
+    attemptSelection = 0;
     selectedTaskId = null;
     tasks = [];
     attempts = [];
@@ -50,9 +54,10 @@ export class TasksView {
     guidanceEdited = false;
     guidanceEditors = readSession('taskGuidanceEditors') ?? {};
     guidanceHarnessEditors = readSession('taskGuidanceHarnessEditors') ?? {};
-    constructor(drafts, routing) {
+    constructor(drafts, routing, workflow) {
         this.drafts = drafts;
         this.routing = routing;
+        this.workflow = workflow;
         const responseArea = element('response-area');
         const readButtonRow = element('read-response').parentElement;
         for (const node of [readButtonRow, element('artifact-status'), element('artifact-output'), element('response-acceptance')])
@@ -126,7 +131,7 @@ export class TasksView {
         if (meta.admission && meta.admission.state !== 'open')
             feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
         if (!this.available)
-            feedback('execution-status', 'This owner does not advertise managed execution 004-v1. Reopen with a compatible Council owner.', 'error');
+            feedback('execution-status', 'This owner does not advertise verified delivery 005-v1. Reopen with a compatible Council owner.', 'error');
         this.controls();
         if (this.available && this.projectId)
             void this.refreshTasks();
@@ -147,6 +152,8 @@ export class TasksView {
         this.tasks = [];
         this.taskCursor = null;
         this.routing?.clearTask();
+        this.workflow?.clearTask();
+        this.explicitAttempt = null;
         element('task-detail').hidden = true;
         element('execution-link').hidden = true;
         element('task-list').replaceChildren();
@@ -160,20 +167,76 @@ export class TasksView {
         start.textContent = this.busy ? 'Starting…' : this.pendingStart ? 'Retry pending start' : 'Start';
         const a = this.attempt;
         const current = !!a && a.taskVersion === this.detail?.task.currentVersion;
-        const stopKey = a ? 'stop:' + a.id : '';
+        const stop = this.stopSelection();
         const runKey = this.detail ? 'run:' + this.detail.task.id : '';
-        element('stop-attempt').disabled = !this.available || !a || (!!a.settledAt && !this.pending[stopKey]) || this.mutationBusy.has(stopKey);
-        element('stop-attempt').textContent = this.pending[stopKey] ? 'Retry pending Stop' : a?.stop ? 'Stop accepted · refresh cleanup' : 'Stop';
-        element('run-attempt').disabled = !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey] || !!this.detail && this.routing?.requiresAdoption(this.detail.task.id) === true && !this.pending[runKey];
-        element('run-attempt').textContent = this.pending[runKey] ? 'Retry pending execution' : this.detail && this.routing?.requiresAdoption(this.detail.task.id) ? 'Adopt budget before new execution' : 'Start another execution';
+        const currentWorkflow = this.workflow?.workflow;
+        const startAuthor = this.workflow?.authorStartReady === true;
+        element('stop-attempt').disabled = !this.available || !stop || (!!stop.attempt?.settledAt && !this.pending[stop.key]) || !!stop && this.mutationBusy.has(stop.key);
+        element('stop-attempt').textContent = stop && this.pending[stop.key] ? 'Retry pending Stop · ' + stop.id.slice(0, 8) : stop?.attempt?.stop ? 'Stop accepted · refresh cleanup' : currentWorkflow ? 'Stop current workflow stage' : 'Stop';
+        element('run-attempt').disabled = !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey] || !!this.detail && this.routing?.requiresAdoption(this.detail.task.id) === true && !this.pending[runKey] || !!currentWorkflow && !startAuthor && !this.pending[runKey];
+        element('run-attempt').textContent = this.pending[runKey] ? 'Retry pending execution' : startAuthor ? 'Run task' : currentWorkflow ? 'Use current workflow control above' : this.detail && this.routing?.requiresAdoption(this.detail.task.id) ? 'Adopt budget before new execution' : 'Start another execution';
         element('save-guidance').textContent = this.detail && this.pending['guidance:' + this.detail.task.id] ? 'Retry pending guidance save' : 'Save guidance';
         element('save-guidance').disabled = !this.available || !this.detail || this.mutationBusy.has('guidance:' + this.detail.task.id);
         element('read-response').disabled = !a?.responseArtifactId;
         const v = this.detail?.version;
         const response = this.readArtifact;
-        const eligible = !!a && current && a.id === this.detail?.task.latestAttemptId && a.outcome === 'succeeded' && a.cleanup.state === 'verified' && a.evidenceStatus === 'complete' && !a.authoredDelta && v?.acceptance.deliverable === 'response_only' && v.acceptance.requiredEvidence.length === 0 && response?.id === a.responseArtifactId && response.closed && response.completeness === 'complete' && !!response.sha256 && !this.detail?.acceptance;
+        const workflow = this.workflow?.workflow;
+        const binding = this.workflow?.responseBinding;
+        const subjectEligible = workflow ? workflow.taskVersion === this.detail?.task.currentVersion && !workflow.hasTaskDelta && !workflow.hasTaskIndexDelta && this.workflow?.responseAcceptanceReady && binding?.producerAttemptId === a?.id && binding?.responseArtifactId === response?.id && binding?.responseSha256 === response?.sha256 : a?.id === this.detail?.task.latestAttemptId && v?.acceptance.requiredEvidence.length === 0;
+        const eligible = !!a && current && !!subjectEligible && a.outcome === 'succeeded' && a.cleanup.state === 'verified' && a.evidenceStatus === 'complete' && !a.authoredDelta && v?.acceptance.deliverable === 'response_only' && response?.id === a.responseArtifactId && response.closed && response.completeness === 'complete' && !!response.sha256 && !this.detail?.acceptance;
         element('response-acceptance').hidden = !eligible;
         element('accept-response').disabled = !this.available || !eligible || !checked('reviewed-response') || this.mutationBusy.has('accept:' + a?.id);
+    }
+    stopSelection() {
+        const taskId = this.selectedTaskId;
+        if (!taskId)
+            return null;
+        const candidates = [...this.attempts, ...(this.attempt ? [this.attempt] : []), ...(this.detail?.latestAttempt ? [this.detail.latestAttempt] : [])];
+        const pending = Object.entries(this.pending).find(([key, operation]) => key.startsWith('stop:') && (operation.taskId === taskId || !operation.taskId && candidates.some(attempt => key === 'stop:' + attempt.id && attempt.taskId === taskId)));
+        if (pending) {
+            const id = pending[0].slice(5);
+            return { id, key: pending[0], attempt: candidates.find(attempt => attempt.id === id) ?? null };
+        }
+        const attempt = this.workflow?.workflow ? this.detail?.latestAttempt ?? this.attempt : this.attempt;
+        return attempt ? { id: attempt.id, key: 'stop:' + attempt.id, attempt } : null;
+    }
+    async inspectAttempt(id) {
+        const selection = ++this.attemptSelection;
+        const taskId = this.selectedTaskId;
+        const generation = this.detailGeneration;
+        if (!taskId)
+            return;
+        try {
+            const { data } = await api('/attempts/' + id);
+            if (taskId !== this.selectedTaskId || generation !== this.detailGeneration || selection !== this.attemptSelection || data.taskId !== taskId)
+                return;
+            await this.selectAttempt(data, true);
+        }
+        catch (error) {
+            if (generation === this.detailGeneration)
+                feedback('attempt-status', errorMessage(error), 'error');
+        }
+    }
+    async openEvidence(id) {
+        const selection = ++this.attemptSelection;
+        const evidence = ++this.evidenceSelection;
+        const taskId = this.selectedTaskId;
+        const generation = this.detailGeneration;
+        if (!taskId)
+            return;
+        try {
+            const { data: artifact } = await api('/artifacts/' + id);
+            const { data: attempt } = await api('/attempts/' + artifact.attemptId);
+            if (taskId !== this.selectedTaskId || generation !== this.detailGeneration || selection !== this.attemptSelection || evidence !== this.evidenceSelection || attempt.taskId !== taskId)
+                return;
+            await this.selectAttempt(attempt, true);
+            if (generation === this.detailGeneration && selection + 1 === this.attemptSelection && evidence === this.evidenceSelection && this.attempt?.id === attempt.id)
+                await this.readBytes(id);
+        }
+        catch (error) {
+            if (generation === this.detailGeneration)
+                feedback('artifact-status', errorMessage(error) + ' Existing evidence remains retained.', 'error');
+        }
     }
     startOptions() {
         const timeout = input('task-timeout');
@@ -183,7 +246,9 @@ export class TasksView {
         if (required.some(v => !['check', 'independent_review', 'local_integration', 'external_delivery'].includes(v)) || new Set(required).size !== required.length)
             throw new ApiError('invalid_input', 'Required evidence entries are unique values: check, independent_review, local_integration, external_delivery.');
         const routing = this.routing?.composerOptions();
+        const workflow = this.workflow?.composerOptions();
         return {
+            ...(workflow ? { workflow } : {}),
             ...(routing ? { routing } : {}),
             ...(input('task-harness') || input('task-model') ? { pins: { ...(input('task-harness') ? { harnessId: input('task-harness') } : {}), ...(input('task-model') ? { model: input('task-model') } : {}) } } : {}),
             ...(timeout ? { timeoutSeconds: Number(timeout) } : {}),
@@ -210,6 +275,7 @@ export class TasksView {
         const detailGeneration = this.detailGeneration;
         const projectGeneration = this.projectGeneration;
         const selectedTaskId = this.selectedTaskId;
+        const attemptSelection = this.attemptSelection;
         pending.unresolved = true;
         this.busy = true;
         this.controls();
@@ -228,11 +294,11 @@ export class TasksView {
             const { data } = await api('/tasks', 'POST', pending.body);
             this.pendingStart = null;
             writeSession('pendingExecutionStart', null);
-            feedback('execution-status', 'Admitted task ' + data.task.id + ' · ' + data.attempt.phase + '. One explicit worker; completion is not yet accepted.', 'success');
+            feedback('execution-status', 'Admitted task ' + data.task.id + ' · ' + data.attempt.phase + '. Captured workflow authority determines later stages; completion requires its retained evidence.', 'success');
             if (data.task.projectId === this.projectId) {
                 await this.refreshTasks();
                 // A late acknowledgement must not replace a selection made during admission or refresh.
-                if (detailGeneration === this.detailGeneration && projectGeneration === this.projectGeneration && selectedTaskId === this.selectedTaskId)
+                if (detailGeneration === this.detailGeneration && projectGeneration === this.projectGeneration && selectedTaskId === this.selectedTaskId && attemptSelection === this.attemptSelection)
                     await this.openTask(data.task.id);
             }
         }
@@ -256,7 +322,7 @@ export class TasksView {
         const projectGeneration = this.projectGeneration;
         await this.refreshTasks();
         if (this.selectedTaskId === id && generation === this.detailGeneration && projectGeneration === this.projectGeneration)
-            await this.openTask(id);
+            await this.openTask(id, true);
     }
     async refreshTasks(append = false) {
         const project = this.projectId;
@@ -281,18 +347,24 @@ export class TasksView {
                 feedback('task-list-status', errorMessage(e) + ' Retained work is not replayed.', 'error');
         }
     }
-    async openTask(id) {
+    async openTask(id, keepAttempt = false) {
         const generation = ++this.detailGeneration;
         const projectGeneration = this.projectGeneration;
         const changed = id !== this.selectedTaskId;
+        if (!keepAttempt || changed)
+            this.explicitAttempt = null;
+        const selection = this.attemptSelection;
         if (changed) {
             this.routing?.clearTask();
+            this.workflow?.clearTask();
             this.selectedTaskId = id;
             this.attemptGeneration++;
             this.clearArtifact();
             this.guidanceEdited = false;
             this.detail = null;
             this.attempt = null;
+            this.attempts = [];
+            element('attempt-list').replaceChildren();
             element('task-detail').hidden = true;
             element('execution-link').hidden = true;
             this.controls();
@@ -306,11 +378,22 @@ export class TasksView {
             element('execution-link').hidden = false;
             element('task-detail-heading').textContent = 'Task ' + id.slice(0, 8) + ' · version ' + data.task.currentVersion;
             this.renderTaskFacts(data);
-            if (data.latestAttempt)
-                void this.selectAttempt(data.latestAttempt);
-            else {
-                this.attempt = null;
-                this.controls();
+            await this.workflow?.setTask(data);
+            if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId)
+                return;
+            let selected = data.latestAttempt;
+            const producerId = this.explicitAttempt ?? await this.workflow?.producerAttemptId();
+            if (producerId && producerId !== selected?.id)
+                selected = (await api('/attempts/' + producerId)).data;
+            if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId)
+                return;
+            if (selection === this.attemptSelection) {
+                if (selected && selected.taskId === id)
+                    void this.selectAttempt(selected);
+                else if (!selected) {
+                    this.attempt = null;
+                    this.controls();
+                }
             }
             try {
                 await this.loadAttempts();
@@ -337,7 +420,7 @@ export class TasksView {
         addFact(facts, 'Current task version', data.task.currentVersion);
         element('guidance-keep-target').textContent = 'Keep captured target · ' + harnessName(data.version.pins.harnessId);
         element('guidance-harness').value = this.guidanceHarnessEditors[data.task.id] ?? 'keep';
-        addFact(facts, 'Acceptance', data.acceptance ? 'Reviewed response accepted · ' + timeLabel(data.acceptance.acceptedAt) : 'Not accepted');
+        addFact(facts, 'Response acceptance', data.acceptance ? 'Reviewed response accepted · ' + timeLabel(data.acceptance.acceptedAt) : 'Not accepted');
         void this.routing?.setTask(data);
         element('task-original').textContent = data.task.originalText;
         element('task-conditions-view').textContent = data.version.acceptance.conditionsText + (data.version.acceptance.requiredEvidence.length ? '\nRequired evidence: ' + data.version.acceptance.requiredEvidence.join(', ') : '');
@@ -362,7 +445,10 @@ export class TasksView {
         let total = 0n;
         let unknown = false;
         for (const attempt of this.attempts) {
-            row(list, attempt.id.slice(0, 8) + ' · task version ' + attempt.taskVersion + ' · ' + label(attempt) + ' · ' + (attempt.executionMode === 'fake' ? 'Local fake · ' : '') + attempt.connectionId, () => { void this.selectAttempt(attempt); });
+            const local = !!attempt.executorKind && attempt.executorKind !== 'native';
+            row(list, attempt.id.slice(0, 8) + ' · task version ' + attempt.taskVersion + ' · ' + label(attempt) + ' · ' + (local ? 'Local executor · ' + attempt.executorKind + ' · ' + attempt.role : (attempt.executionMode === 'fake' ? 'Local fake · ' : '') + attempt.connectionId), () => { void this.selectAttempt(attempt, true); });
+            if (local)
+                continue;
             const usage = attempt.targetObservations.usage;
             for (const count of [usage.inputTokens, usage.outputTokens]) {
                 if (count !== null && /^\d+$/.test(count))
@@ -378,7 +464,13 @@ export class TasksView {
         }
         element('usage-total').textContent = 'Reported input + output across loaded executions (native scopes may differ): ' + total + ' tokens.' + (unknown ? ' Some usage is unknown.' : '') + (this.attemptCursor ? ' More history is available.' : '') + ' Cached input is not added twice. Whole-tree previews are not added to these counters. Native call counts, cost and allowance remain unknown.';
     }
-    async selectAttempt(attempt) {
+    async selectAttempt(attempt, explicit = false) {
+        if (attempt.taskId !== this.selectedTaskId)
+            return;
+        if (explicit) {
+            this.explicitAttempt = attempt.id;
+            this.attemptSelection++;
+        }
         if (attempt.id === this.attempt?.id && BigInt(attempt.revision) < BigInt(this.attempt.revision))
             return;
         const changed = attempt.id !== this.attempt?.id;
@@ -399,15 +491,19 @@ export class TasksView {
         if (!a)
             return;
         const usage = a.targetObservations.usage;
-        feedback('attempt-status', (a.executionMode === 'fake' ? 'LOCAL FAKE · ' : '') + label(a) + (a.taskVersion !== this.detail?.task.currentVersion ? ' · Historical task version; current guidance needs an explicit new execution.' : '')
+        const local = !!a.executorKind && a.executorKind !== 'native';
+        const reportedUsage = local ? 'Not applicable to managed native-model counters · local executor' : usageLabel(usage);
+        feedback('attempt-status', (local ? 'LOCAL EXECUTOR · ' + a.executorKind + ' · ' : a.executionMode === 'fake' ? 'LOCAL FAKE · ' : '') + label(a) + (a.taskVersion !== this.detail?.task.currentVersion ? ' · Historical task version; current guidance needs an explicit new execution.' : '')
             + (a.primaryFailure ? ' · ' + a.primaryFailure.code + ': ' + a.primaryFailure.message : '') + (a.stop ? ' · Stop accepted; cleanup remains ' + a.cleanup.state + '.' : '')
-            + (a.candidateId && a.authoredDelta ? ' · Candidate retained. Verification pending; integration not performed.' : a.candidateId ? ' · No authored source or staging changes.' : ''), a.primaryFailure || a.cleanup.state === 'unknown' ? 'error' : 'neutral');
+            + (a.candidateId && a.authoredDelta ? a.workflowId ? ' · Candidate retained; current qualification and delivery are shown above.' : ' · Candidate retained. Verification pending; integration not performed.' : a.candidateId ? a.workflowId ? ' · This stage added no source or staging delta; complete task scope is shown above.' : ' · No authored source or staging changes.' : ''), a.primaryFailure || a.cleanup.state === 'unknown' ? 'error' : 'neutral');
         const summary = element('attempt-summary');
         summary.replaceChildren();
         addFact(summary, 'Cleanup and evidence', a.cleanup.state.replaceAll('_', ' ') + ' · ' + a.evidenceStatus);
         addFact(summary, 'Deadline', timeLabel(a.deadlineAt) + ' · ' + a.remainingSeconds + ' seconds remaining at ' + timeLabel(a.observedAt));
-        addFact(summary, 'Captured connection', a.connectionId + ' · ' + (a.executionMode === 'fake' ? 'Local fake' : 'Native execution'));
-        addFact(summary, 'Reported usage', usageLabel(usage));
+        addFact(summary, 'Captured connection', local ? 'Local executor · no native model connection' : a.connectionId + ' · ' + (a.executionMode === 'fake' ? 'Local fake' : 'Native execution'));
+        addFact(summary, 'Reported usage', reportedUsage);
+        if (a.workflowId)
+            addFact(summary, 'Workflow stage', (a.role ?? 'Unknown role') + ' · ' + a.executorKind + ' · step ' + a.stepId);
         const facts = element('attempt-facts');
         facts.replaceChildren();
         addFact(facts, 'Execution identity', a.id);
@@ -441,8 +537,8 @@ export class TasksView {
         }
         if (a.candidate) {
             addFact(facts, 'Retained managed workspace', a.candidate.workspaceRef);
-            addFact(facts, 'Candidate changes', a.candidate.hasDelta ? 'Authored changes retained.' + (a.candidate.hasIndexDelta ? ' Staged index changes are included.' : '') : 'No authored source or staging changes.');
-            addFact(facts, 'Candidate verification and integration', a.candidate.verification.replaceAll('_', ' ') + ' · ' + a.candidate.integration.replaceAll('_', ' '));
+            addFact(facts, 'Candidate changes at creation', a.candidate.hasDelta ? 'Authored changes retained.' + (a.candidate.hasIndexDelta ? ' Staged index changes are included.' : '') : 'No authored source or staging changes.');
+            addFact(facts, 'Candidate status at creation', 'Verification ' + a.candidate.verification.replaceAll('_', ' ') + ' · integration ' + a.candidate.integration.replaceAll('_', ' ') + '. Immutable creation facts.' + (a.workflowId ? ' Current task qualification and delivery are shown in Verified workflow above.' : ' Later qualification and delivery require separate evidence.'));
         }
         if (a.incident)
             addFact(facts, 'Retained incident', a.incident.code + ': ' + a.incident.message + ' Preserve this workspace and evidence. Inspect the incident before an explicit recovery; this preview does not repair uncertain ownership or replay work.');
@@ -450,7 +546,7 @@ export class TasksView {
         addFact(facts, 'Permissions', 'Requested ' + permissions.requestedMode + ' · configured ' + (permissions.configuredMode ?? 'unknown') + ' · native reported ' + (permissions.nativeReportedMode ?? 'unknown'));
         if (permissions.limitations.length)
             addFact(facts, 'Permission scope', permissions.limitations.join(' '));
-        addFact(facts, 'Reported usage', usageLabel(usage));
+        addFact(facts, 'Reported usage', reportedUsage);
         addFact(facts, 'Usage and billing limits', 'Top-level counters and whole-tree model previews have separate scopes. Native client estimates are not billed charges, subscription allowance or an independent accounting receipt.');
         this.controls();
     }
@@ -469,15 +565,21 @@ export class TasksView {
                     await Promise.allSettled([this.loadEvents(), this.loadArtifacts()]);
                 if (data.attempt.settledAt) {
                     await this.loadAttempts();
+                    const detailGeneration = this.detailGeneration;
+                    const projectGeneration = this.projectGeneration;
                     const { data: detail } = await api('/tasks/' + data.attempt.taskId);
-                    if (generation !== this.attemptGeneration || this.selectedTaskId !== detail.task.id)
+                    if (generation !== this.attemptGeneration || detailGeneration !== this.detailGeneration || projectGeneration !== this.projectGeneration || this.selectedTaskId !== detail.task.id || this.detail?.task.id === detail.task.id && BigInt(detail.task.currentVersion) < BigInt(this.detail.task.currentVersion))
                         return;
+                    // This terminal read cannot replace a newer detail request or version.
                     // Current-version metadata refresh does not rewrite the guidance editor.
                     this.detail = detail;
                     this.renderTaskFacts(detail);
                     this.renderAttempt();
+                    await this.workflow?.setTask(detail);
+                    if (generation !== this.attemptGeneration || detailGeneration !== this.detailGeneration || projectGeneration !== this.projectGeneration || this.selectedTaskId !== detail.task.id)
+                        return;
                     const { data: meta } = await api('/meta');
-                    if (generation === this.attemptGeneration)
+                    if (generation === this.attemptGeneration && detailGeneration === this.detailGeneration && projectGeneration === this.projectGeneration && this.selectedTaskId === detail.task.id)
                         this.setOwner(meta);
                     void this.refreshTasks();
                     return;
@@ -550,6 +652,7 @@ export class TasksView {
         element('reviewed-response').checked = false;
     }
     async readBytes(id) {
+        this.evidenceSelection++;
         this.clearArtifact();
         const generation = this.artifactGeneration;
         const attemptId = this.attempt?.id;
@@ -599,7 +702,7 @@ export class TasksView {
     async mutate(key, path, body) {
         if (!this.available || this.mutationBusy.has(key))
             return null;
-        const pending = this.pending[key] ?? { path, method: 'POST', body };
+        const pending = this.pending[key] ?? { path, method: 'POST', body, ...(this.selectedTaskId ? { taskId: this.selectedTaskId } : {}) };
         const wasUnresolved = pending.unresolved === true;
         pending.unresolved = true;
         this.pending[key] = pending;
@@ -624,28 +727,40 @@ export class TasksView {
         }
     }
     async stop() {
-        const a = this.attempt;
-        if (!a)
+        const target = this.stopSelection();
+        const taskId = this.selectedTaskId;
+        if (!target || !taskId)
             return;
-        const result = await this.mutate('stop:' + a.id, '/attempts/' + a.id + '/stop', { requestId: requestId() });
-        if (!result || a.id !== this.attempt?.id)
+        const result = await this.mutate(target.key, '/attempts/' + target.id + '/stop', { requestId: requestId() });
+        if (!result || taskId !== this.selectedTaskId)
             return;
-        feedback('attempt-status', result.stopAccepted ? 'Stop accepted. Waiting for actual process, output and cleanup settlement.' : 'Execution was already settled. Its outcome is retained.');
+        feedback('attempt-status', result.stopAccepted ? 'Stop accepted for captured stage ' + target.id + '. Waiting for actual process, output and cleanup settlement.' : 'Captured execution ' + target.id + ' was already settled. Its outcome is retained; this acknowledgement does not retarget another stage.');
         try {
-            const { data } = await api('/attempts/' + a.id);
-            if (a.id === this.attempt?.id)
+            const { data } = await api('/attempts/' + target.id);
+            if (taskId !== this.selectedTaskId)
+                return;
+            if (this.detail?.latestAttempt?.id === data.id)
+                this.detail.latestAttempt = data;
+            if (data.id === this.attempt?.id)
                 void this.selectAttempt(data);
+            else
+                await this.refreshAfterRoutingMutation(taskId);
         }
         catch (error) {
-            feedback('attempt-status', errorMessage(error) + ' The Stop acknowledgement is retained; refresh to observe actual cleanup.', 'error');
+            if (taskId === this.selectedTaskId)
+                feedback('attempt-status', errorMessage(error) + ' The exact Stop acknowledgement is retained; refresh to observe actual cleanup.', 'error');
         }
     }
     async run() {
         const detail = this.detail;
         if (!detail)
             return;
-        const result = await this.mutate('run:' + detail.task.id, '/tasks/' + detail.task.id + '/attempts', { requestId: requestId(), expectedRevision: detail.task.revision, taskVersion: detail.task.currentVersion,
-            ...(checked('task-fake') ? { executionMode: 'fake', fakeScenario: input('task-fake-scenario') } : {}) });
+        const workflow = this.workflow?.workflow;
+        const key = 'run:' + detail.task.id;
+        if (workflow && !this.workflow?.authorStartReady && !this.pending[key])
+            return;
+        const execution = workflow ? { executionMode: workflow.authority.executionMode, ...(workflow.authority.fakeScenario ? { fakeScenario: workflow.authority.fakeScenario } : {}) } : checked('task-fake') ? { executionMode: 'fake', fakeScenario: input('task-fake-scenario') } : {};
+        const result = await this.mutate(key, '/tasks/' + detail.task.id + '/attempts', { requestId: requestId(), expectedRevision: detail.task.revision, taskVersion: detail.task.currentVersion, ...execution });
         if (result && this.selectedTaskId === detail.task.id)
             await this.openTask(detail.task.id);
     }

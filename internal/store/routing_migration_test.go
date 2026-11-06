@@ -33,7 +33,7 @@ func TestRoutingMigrationPreservesAcceptedSchema3WithoutGrantingAuthority(t *tes
 	s.db.QueryRow("SELECT count(*) FROM task_budgets").Scan(&budgets)
 	s.db.QueryRow("SELECT count(*) FROM task_routing_versions").Scan(&authorities)
 	s.db.QueryRow("SELECT attempt_id FROM capacity_claims").Scan(&claim)
-	if version != 4 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
+	if version != 5 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
 		t.Fatal("migration granted work or released ownership", version, budgets, authorities, claim)
 	}
 	replayed := s.CreateTask(context.Background(), "66666666666666666666666666666666", ids.Input)
@@ -132,11 +132,10 @@ func TestRoutingSchema4UnknownObjectsAndMissingSeedsRefuseWithoutReset(t *testin
 	for _, change := range []string{"CREATE INDEX unknown_budget_index ON budget_ledger(task_id)", "DELETE FROM routing_profiles WHERE id=\x27claude-haiku-economy\x27"} {
 		t.Run(change, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "schema4.db")
-			s, e := Open(path)
-			if e != nil {
+			fixture, _ := workflowSchema4Database(t, path, "", false)
+			if e := fixture.Close(); e != nil {
 				t.Fatal(e)
 			}
-			s.Close()
 			dsn, e := sqliteDSN(path)
 			if e != nil {
 				t.Fatal(e)

@@ -96,22 +96,37 @@ export async function api<T>(path: string, method = 'GET', body?: object): Promi
 }
 
 export function supportsManagedExecution(meta: Meta): boolean {
-  return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.4' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
+  return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.5' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
     && meta.scope === 'managed_execution' && meta.managedExecution === 'native_codex_claude'
-    && meta.executionContract === '004-v1' && meta.maintenanceContract === 'owner-stop/1'
-    && Array.isArray(meta.capabilities) && meta.capabilities.includes('workspace_foundation') && meta.capabilities.includes('managed_execution') && meta.capabilities.includes('economical_routing')
+    && meta.executionContract === '005-v1' && meta.workflowContract === '005-v1' && meta.maintenanceContract === 'owner-stop/1'
+    && Array.isArray(meta.capabilities) && ['workspace_foundation', 'managed_execution', 'economical_routing', 'verified_delivery'].every(capability => meta.capabilities!.includes(capability))
     && !!meta.admission && ['open', 'closing', 'fenced'].includes(meta.admission.state)
-    && meta.capacity?.resourceId === 'managed-native' && meta.capacity.limit === 1
+    && (meta.admission.incidentId === null || /^[a-f0-9]{32}$/.test(meta.admission.incidentId))
+    && meta.capacity?.resourceId === 'managed-native' && !meta.capacity.connectionId && meta.capacity.limit === 1
     && (meta.capacity.activeAttemptId === null || /^[a-f0-9]{32}$/.test(meta.capacity.activeAttemptId));
+}
+
+export function supportsOwnerStop(meta: Meta): boolean {
+  if (supportsManagedExecution(meta)) return true;
+  const validId = (value: unknown): boolean => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+  if (meta.apiVersion !== 1 || !validId(meta.ownerInstanceId) || meta.scope !== 'managed_execution'
+    || !Array.isArray(meta.capabilities) || !['workspace_foundation', 'managed_execution'].every(capability => meta.capabilities!.includes(capability))
+    || !meta.admission || !['open', 'closing', 'fenced'].includes(meta.admission.state)
+    || meta.admission.incidentId !== null && !validId(meta.admission.incidentId)
+    || !meta.capacity || meta.capacity.limit !== 1 || meta.capacity.activeAttemptId !== null && !validId(meta.capacity.activeAttemptId)) return false;
+  if (meta.appVersion === '2.0.0-dev.2') return meta.executionContract === '002-v1' && meta.managedExecution === 'native_codex'
+    && !meta.maintenanceContract && meta.capacity.connectionId === 'codex-native' && !meta.capacity.resourceId;
+  return (meta.appVersion === '2.0.0-dev.3' && meta.executionContract === '003-v1'
+    || meta.appVersion === '2.0.0-dev.4' && meta.executionContract === '004-v1')
+    && meta.managedExecution === 'native_codex_claude' && meta.maintenanceContract === 'owner-stop/1'
+    && meta.capacity.resourceId === 'managed-native' && !meta.capacity.connectionId;
 }
 
 export async function verifyOwner(): Promise<Meta> {
   verified = false;
   const { data } = await api<Meta>('/meta');
-  const foundation = data.scope === 'workspace_foundation' && data.managedExecution === 'not_implemented';
-  const execution = supportsManagedExecution(data);
-  if (data.apiVersion !== 1 || (!foundation && !execution)) {
-    throw new ApiError('incompatible_owner', 'Open this workspace with a compatible Council owner.');
+  if (!supportsManagedExecution(data)) {
+    throw new ApiError('incompatible_owner', 'Open this workspace with the current Council 005 owner. Older owners require their exact maintenance Stop command before reopening.');
   }
   verified = true;
   return data;

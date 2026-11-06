@@ -99,7 +99,7 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			var previous domain.Attempt
 			var args []string
 			if version == 2 {
-				args = []string{"tasks", "start", "--project", opened.Project.ID, "--task", "Preserve previous native Codex history", "--harness", "codex", "--deliverable", "response_only", "--fake", "--request-id", domain.NewID()}
+				args = []string{"tasks", "start", "--project", opened.Project.ID, "--task", "Preserve previous native Codex history", "--workflow", "author_only", "--harness", "codex", "--deliverable", "response_only", "--fake", "--request-id", domain.NewID()}
 				first = f.run(args...)
 				decodeCLIData(t, first, &original)
 				previous = f.settled(original.Attempt.ID)
@@ -121,8 +121,8 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			db.SetMaxOpenConns(1)
 			t.Cleanup(func() { _ = db.Close(); _ = lock.Close() })
 			var currentSchema int
-			if err = db.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 4 {
-				t.Fatal("prior-schema fixture must start from its own known schema4 state", currentSchema, err)
+			if err = db.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 5 {
+				t.Fatal("prior-schema fixture must start from its own known schema5 state", currentSchema, err)
 			}
 			if _, err = db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 				t.Fatal(err)
@@ -133,10 +133,14 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			}
 			defer tx.Rollback()
 			// This disposable fixture starts with current shared APIs. Remove every
-			// known004 child table before restoring its frozen historical DDL; a
+			// known005 and004 child table before restoring its frozen historical DDL; a
 			// schema2/version marker beside routing tables is rightly refused by the
 			// production migrator. Keep retained history/receipt bytes unchanged.
 			statements := []string{
+				"DROP TABLE delivery_effects", "DROP TABLE delivery_operations",
+				"DROP TABLE workflow_acceptances", "DROP TABLE workflow_resolutions",
+				"DROP TABLE workflow_checks", "DROP TABLE workflow_reviews",
+				"DROP TABLE workflow_steps", "DROP TABLE workflows", "DROP TABLE delivery_preferences",
 				"DROP TABLE budget_ledger", "DROP TABLE budget_amendments",
 				"DROP TABLE routing_continuation_proofs", "DROP TABLE routing_decisions",
 				"DROP TABLE task_budgets", "DROP TABLE task_routing_versions",

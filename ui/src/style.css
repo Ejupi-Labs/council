@@ -155,3 +155,13 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: .85rem; }
 .pending-summary:empty { display: none; }
 #routing-policy-summary { margin-top: 16px; }
 @media (max-width: 560px) { .routing-panel .option-grid { grid-template-columns: minmax(0, 1fr); } .routing-panel textarea { min-height: 120px; } .routing-summary .facts { grid-template-columns: minmax(0, 1fr); } }
+
+.workflow-panel { margin-block: 20px; border-block: 1px solid var(--line); padding-block: 16px; min-width: 0; }
+.workflow-panel h4 { margin-top: 0; }
+.workflow-panel .facts { margin-block: 16px; }
+.workflow-panel .routing-evidence-list > li { padding-block: 12px; }
+.workflow-panel .routing-evidence-list p { overflow-wrap: anywhere; }
+.delivery-preferences { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; max-width: 700px; }
+.delivery-preferences > summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; color: var(--lilac); }
+.delivery-preferences .button-row { margin-top: 12px; }
+@media (max-width: 560px) { .workflow-panel .option-grid, .workflow-options { grid-template-columns: minmax(0, 1fr); } #workflow-declarations textarea { min-height: 120px; } }

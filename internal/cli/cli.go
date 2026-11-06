@@ -15,6 +15,7 @@ import (
 
 	"github.com/Ejupi-Labs/council/v2/internal/app"
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
+	"github.com/Ejupi-Labs/council/v2/internal/fixture"
 	"github.com/Ejupi-Labs/council/v2/internal/localstate"
 	"github.com/Ejupi-Labs/council/v2/internal/owner"
 	"github.com/Ejupi-Labs/council/v2/internal/store"
@@ -34,9 +35,12 @@ const help = `Council — managed local workspace
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
 Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
-` + executionHelp + routingHelp
+` + executionHelp + routingHelp + workflowHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
+	if handled, code := fixture.HandleWorkflowInternal(args); handled {
+		return code
+	}
 	c, err := parse(args, stdin)
 	if err != nil {
 		return emit(stdout, stderr, c.json, domain.Failure(domain.NewID(), err))

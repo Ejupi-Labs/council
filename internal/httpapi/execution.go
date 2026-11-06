@@ -3,6 +3,9 @@ package httpapi
 import "strings"
 
 func executionRoute(p, verb string) (op, id, methods string, queries []string) {
+	if workflowOp, workflowID, workflowMethods, workflowQueries := workflowRoute(p, verb); workflowOp != "" {
+		return workflowOp, workflowID, workflowMethods, workflowQueries
+	}
 	if routedOp, routedID, routedMethods, routedQueries := routingRoute(p, verb); routedOp != "" {
 		return routedOp, routedID, routedMethods, routedQueries
 	}

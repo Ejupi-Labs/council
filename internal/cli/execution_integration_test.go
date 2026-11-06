@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 	if handled, code := process.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if handled, code := fixture.HandleWorkflowInternal(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	if handled, code := fixture.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}

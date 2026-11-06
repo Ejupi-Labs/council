@@ -1,13 +1,17 @@
 # Verified task delivery acceptance quickstart
 
-**Status**: Planned functional demonstration and qualification procedure. This document claims
-no feature-005 implementation, command execution, render, test pass or live-provider qualification.
+**Status**: Dev.5 implementation under qualification, after design commit `24b0cf1`. The current
+execution/workflow contracts are `005-v1`. This is the functional demonstration and qualification
+procedure, not a completed acceptance report. Observed checks and remaining work belong in
+[acceptance.md](acceptance.md); 005 acceptance and its six-native-target/race gate are not yet
+claimed. Features 006–012 remain planned.
 
 Follow [spec.md](spec.md), [contracts/workflow.md](contracts/workflow.md) and
 [data-model.md](data-model.md). The accepted prerequisite is feature 004 at
 `3f4a18e11de495f7b3138d61e030525a018868a5`, qualified in seven actual native/race jobs in run
-`42172669381`; its acceptance commit is `5671fac`. Run these journeys only after the 005 design
-is reviewed and committed and the implementation is ready. Keep the physical branch `refactor`.
+`42172669381`; its acceptance commit is `5671fac`. Those earlier results do not qualify the 005
+change. Run these journeys against the matching current binary and compiled UI through the
+shared execution queue. Keep the physical branch `refactor`.
 
 Use disposable projects and private temporary homes with labelled local author, reviewer,
 corrector, verifier and publisher fixtures. No vendor executable, version/auth/login probe,
@@ -19,9 +23,9 @@ fixture writing to a disposable sink, not a live deployment or remote-service qu
 The normal entry remains a project, task and saved operating preference. Existing project/task,
 routing/budget, full-evidence and exact-owner Stop commands retain their accepted meanings.
 
-The command names and fixed fixtures below follow the 005 design contract; they are not
-implemented or executed by this document. No example creates an executable, publisher action or
-authorization by itself.
+The command names and fixed fixtures below follow the implemented 005 contract. Listing an
+example does not claim that it has run or passed. No example creates an executable, publisher
+action or authorization by itself.
 
 | Journey | Contract operation and inspection |
 | --- | --- |
@@ -35,6 +39,7 @@ authorization by itself.
 | Explicitly recheck a captured definition | `tasks check TASK_ID --check-id CHECK_DEFINITION_ID --expected-revision R --workflow-revision W --task-version V --request-id ID`; recheck the current selected candidate under its captured definition. |
 | Inspect delivery | `tasks deliveries TASK_ID`; captured action/destination, basis, receipt and actual effects, conflict or uncertainty. Necessary authorized delivery advances within the workflow. |
 | Adopt a prior task into 005 authority | `tasks workflow-adopt TASK_ID --expected-revision R --task-version V --delivery DELIVERY_MODE --request-id ID`; explicit new-version/workflow authority, no automatic work or budget refill. |
+| Start the adopted first author | Read the new task/version, then `tasks run TASK_ID --expected-revision R --task-version V --request-id ID` when the workflow reports `start_author`. UI: **Run task**. Advance/recheck require an existing stage and subject. |
 | Qualify a scoped publisher | `tasks start ... --delivery-file FILE`; the explicit bounded `WorkflowDeliveryInput` declares `localMode` and any supported external action/destination/command before work. There is no standalone publisher command. |
 
 Start may optionally supply `--delivery review_only` or `--delivery apply_verified_local`;
@@ -90,7 +95,7 @@ council tasks budget-ledger TASK_ID --json
 ```
 
 The task quotation works in PowerShell and POSIX shells; other callers use an argument array or
-their shell's quoting to preserve the original text verbatim. The fixed public Start scenarios are
+their shell's quoting to preserve the original text verbatim. The workflow-specific public Start scenarios are
 `workflow-document` and `workflow-defect`, always selected with `--fake`. They use the current
 Council executable's native-protocol child and never an installed vendor. A scenario string cannot
 select an arbitrary stage or supply approval/authority.
@@ -98,9 +103,12 @@ select an arbitrary stage or supply approval/authority.
 The controller alone selects internal `workflow-review-blocking`, `workflow-correction` and
 `workflow-review-clean` role fixtures. They consume the selected candidate and current supplied
 review/finding bindings. They are not public review/approval commands or extra Start selectors.
-The fixed local child commands are the same executable's `__fixture check` and
-`__fixture publish --destination ABSOLUTE_FIXTURE_PATH`. The verifier uses its explicitly captured
-managed-relative file/rule and observes actual bad/corrected bytes. The publisher writes only one
+The fixed local child commands are the same executable's
+`__fixture check --case workflow-validation` and
+`__fixture publish --case workflow-publication --destination ABSOLUTE_FIXTURE_PATH`.
+The verifier observes the actual controlled `council-workflow.txt` INVALID/VALID bytes. Its explicit
+declaration uses an unreserved key such as `controlled-validation`; the child fixture case name
+stays `workflow-validation`. The publisher writes only one
 attributable effect in the disposable authorized sink with `command_completion` basis and labelled
 output. Extracted-package qualification resolves these children to the extracted binary, with no
 Node/npm/Go runtime prerequisite and no vendor fallback.
@@ -124,7 +132,7 @@ review must apply to that exact response; corrected text invalidates the old res
 even when no file changes. Show the producer's answer rather than the latest review report.
 After qualification, use the same response acceptance action and retain
 `response_only_user_review_with_evidence` lineage. Old standalone acceptance fingerprints and
-response JSON remain unchanged. Planned cases must also cover eligible human acceptance after
+response JSON remain unchanged. Also qualify eligible human acceptance after
 the work window expires, without launching work, and prevent authored/index changes or an
 unmet local-integration requirement from entering this response-only branch.
 
@@ -216,6 +224,32 @@ the budget automatically.
 Use public `--fake --fake-scenario workflow-defect` for the controlled review/blocker journey;
 the controller selects the internal role fixtures against its actual retained candidate.
 
+For the four-native-stage qualification, set `--review required` and supply this strict
+`--checks-file` array with the actual absolute Council fixture executable. Its native arguments
+are not a shell command, and the local check consumes no managed model unit:
+
+```json
+[
+  {
+    "key": "controlled-validation",
+    "executable": "/absolute/path/to/council",
+    "arguments": ["__fixture", "check", "--case", "workflow-validation"],
+    "relativeWorkingDirectory": ".",
+    "timeoutSeconds": 30,
+    "successExitCodes": [0],
+    "required": true
+  }
+]
+```
+
+Use a native absolute path such as `C:\\fixture\\council.exe` in Windows JSON. Keep the absolute
+path in the explicit declaration; no executable or vendor fallback is inferred. Required fresh
+review observes candidate A before the first required command check in this controlled path.
+The failed required check still runs before correction; then candidate B receives the affected
+check and fresh clean review. Review record outcome `changes_required` is distinct from finding
+severity `blocking`. At two consumed units, wait for actual user-owned `budget_exhausted` and the
+settled required-check receipt, rather than a transient Council-owned settled transition.
+
 For the controlled case that has spent two units on author/reviewer and needs two more, the
 accepted budget grant and explicit continuation have this shape:
 
@@ -278,6 +312,14 @@ Qualify each boundary separately with controlled barriers rather than timing ass
   established, retain an uncertain operation and evidence. Missing acknowledgement proves
   neither success, rollback nor that no write happened; no automatic re-execution follows.
 
+Native application holds exclusive destination/quarantine handles through Close. While a
+controlled application barrier is held, inspect its complete registered observed
+`destination_file` artifact and hash rather than reopening a live path. Compare destination and
+private quarantine bytes after actual Close/settlement. Also let required settlement cross the
+real captured common deadline after an already completed/recorded publication: retain the actual
+applied result and bytes while the task fails without acceptance. Do not describe this as a
+native rename completing after expiry or infer rollback from the failed task outcome.
+
 The result separately states what was authored, reviewed, checked, delivered, applied locally
 and externally performed. Current required evidence, resolved blockers, known settlement and the
 captured deliverable/delivery must all qualify before acceptance. An earlier failed attempt stays
@@ -325,14 +367,17 @@ following explicit current-next-stage action have their own acknowledgements. Th
 workflow-adoption command creates a new version and starts no work. A standalone old task has
 `workflow: null` until adoption; reads never seed authority. Adoption retains original/guidance/
 conditions and does not turn old author output into qualifying check/review evidence. Re-read
-task/workflow/budget, then use
-the explicitly permitted `tasks advance` or supported Start named by that current view;
-do not infer another operation from a historical stage result.
+task/workflow/budget. An adopted workflow has no current author step and reports `start_author`:
+use UI **Run task** or the existing `tasks run` command with the adopted current task version and
+revision. It must capture that workflow's execution mode/fixture scenario, not a later composer
+choice. Advance and recheck remain unavailable until a current author subject exists. Later use
+`tasks advance` for the eligible current next stage; do not infer another operation from a
+historical stage result.
 None of those acknowledgements can be replaced by an automatic fresh request after a lost reply.
 If an older task also lacks routing/budget authority, perform the existing explicit budget
 adoption first; workflow adoption does not supply that missing authority.
 
-## Actual UI and release qualification after implementation
+## UI and release qualification still to close
 
 Capture and visually inspect real desktop and 360px renders of minimal composition, direct
 verification, pending review, a blocking finding, correction/recheck lineage, reviewable delivery,

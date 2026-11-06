@@ -22,6 +22,7 @@ func makeSchema2(t *testing.T, path string, populated ...bool) (*sql.DB, string,
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close() })
 	ctx := context.Background()
 	project := openFixture(t, s, "migration")
 	projectID := project.ID
@@ -57,9 +58,10 @@ func makeSchema2(t *testing.T, path string, populated ...bool) (*sql.DB, string,
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	// This helper models accepted schema2, so remove only the new004 tables
-	// before restoring frozen claim DDL. Feature004 has its own frozen003 fixture.
-	for _, name := range []string{"budget_ledger", "budget_amendments", "routing_continuation_proofs", "routing_decisions", "task_budgets", "task_routing_versions", "routing_report_bindings", "routing_capacity_reports", "routing_capacity_state", "routing_account_links", "routing_accounts", "routing_profiles", "routing_contexts", "routing_policy"} {
+	// This synthetic fixture owns this disposable current database. Strip only
+	// authored005/004 tables before restoring frozen accepted002 claim DDL.
+	// Frozen accepted003/004 fixtures independently qualify real upgrade shapes.
+	for _, name := range []string{"delivery_effects", "workflow_resolutions", "workflow_acceptances", "delivery_operations", "workflow_reviews", "workflow_checks", "workflow_steps", "workflows", "delivery_preferences", "budget_ledger", "budget_amendments", "routing_continuation_proofs", "routing_decisions", "task_budgets", "task_routing_versions", "routing_report_bindings", "routing_capacity_reports", "routing_capacity_state", "routing_account_links", "routing_accounts", "routing_profiles", "routing_contexts", "routing_policy"} {
 		if _, err = db.Exec("DROP TABLE " + name); err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +118,7 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 	}
 	var version int
 	var resource, claim string
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
 		t.Fatal(version, err)
 	}
 	if err = s.db.QueryRow("SELECT resource_id,attempt_id FROM capacity_claims").Scan(&resource, &claim); err != nil || resource != "managed-native" || claim != attemptID {

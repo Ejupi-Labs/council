@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 async function open(f, owner) {
   const page = await f.browser.newPage(); await page.goto(owner.url);
   await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
   await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-  await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+  await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await legacyExecution(page); await page.locator('#task-deliverable').selectOption('response_only');
   return page;
 }
 

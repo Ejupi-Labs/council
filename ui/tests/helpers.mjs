@@ -28,13 +28,31 @@ export async function ownerAPI(owner, route, method = 'GET', body) {
   return { status: response.status, envelope: await response.json() };
 }
 
-export async function openWorkspace(f, owner, { fake = true } = {}) {
+export async function legacyExecution(page) {
+  // Accepted 001–004 cases intentionally exercise standalone authoring with saved two-unit authority.
+  await page.locator('#task-workflow').selectOption('author_only');
+  const changed = await page.evaluate(async () => {
+    const { api, requestId } = await import('/api.js');
+    const { data: policy } = await api('/routing/policy');
+    if (policy.defaultBudget.admissionLimit === '2') return false;
+    await api('/routing/policy', 'PUT', { requestId: requestId(), expectedRevision: policy.revision, defaultBudget: { admissionLimit: '2' } });
+    return true;
+  });
+  if (changed) {
+    await page.locator('#reconnect').click();
+    await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
+    await page.locator('#routing-policy-summary').filter({ hasText: 'Default budget: 2 ' }).waitFor();
+  }
+}
+
+export async function openWorkspace(f, owner, { fake = true, workflow = 'author_only' } = {}) {
   const page = await f.browser.newPage(); await page.goto(owner.url);
   await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
   await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
   if (fake) {
     await page.locator('#execution-options > summary').click();
     await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+    if (workflow === 'author_only') await legacyExecution(page);
   }
   return page;
 }
@@ -59,7 +77,30 @@ export async function seedSchema3(f) {
   return JSON.parse(await readFile(output, 'utf8'));
 }
 
-export async function fixture(t) {
+export async function pollOwner(owner, route, predicate, { timeoutMs = 30000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    const result = await ownerAPI(owner, route);
+    if (result.status !== 200) throw new Error('Controlled owner observation failed: ' + result.envelope.error?.code);
+    last = result.envelope.data;
+    if (predicate(last)) return last;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Controlled owner observation did not reach the expected state: ' + route);
+}
+
+export async function seedSchema4(f) {
+  const output = path.join(f.home, 'controlled-schema4-identities.json');
+  const env = { ...process.env, COUNCIL_WORKFLOW_SCHEMA4_SEED_PATH: path.join(f.home, '.council', 'v2', 'workspace.sqlite3'), COUNCIL_WORKFLOW_SCHEMA4_PROJECT: f.project, COUNCIL_WORKFLOW_SCHEMA4_SEED_OUTPUT: output };
+  const executable = process.env.COUNCIL_WORKFLOW_STORE_TEST_BINARY || 'go';
+  const args = process.env.COUNCIL_WORKFLOW_STORE_TEST_BINARY ? ['-test.run=^TestWorkflowSchema4SeedChild$', '-test.count=1'] : ['test', './internal/store', '-run', '^TestWorkflowSchema4SeedChild$', '-count=1'];
+  const result = spawnSync(executable, args, { cwd: root, env, encoding: 'utf8', shell: false, timeout: 120000 });
+  if (result.status !== 0) throw new Error('Controlled accepted-schema4 seed failed (exit ' + result.status + ')');
+  return JSON.parse(await readFile(output, 'utf8'));
+}
+
+export async function fixture(t, { files = {} } = {}) {
   const owners = new Set(); let closed = false;
   const home = await mkdtemp(path.join(os.tmpdir(), 'council-foundation-'));
   const project = path.join(home, 'Project café');
@@ -68,7 +109,11 @@ export async function fixture(t) {
   function git(args) { const result = spawnSync('git', args, { cwd: project, env, encoding: 'utf8', shell: false }); if (result.status !== 0) throw new Error('Fixture Git failed'); return result.stdout; }
   git(['init', '-q']);
   await writeFile(path.join(project, 'hello.txt'), 'original\n');
-  git(['add', 'hello.txt']);
+  for (const [relative, contents] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(project, relative)), { recursive: true });
+    await writeFile(path.join(project, relative), contents);
+  }
+  git(['add', 'hello.txt', ...Object.keys(files)]);
   git(['-c', 'user.name=Council Test', '-c', 'user.email=council@example.invalid', 'commit', '-qm', 'fixture']);
   await writeFile(path.join(project, 'hello.txt'), 'staged\n'); git(['add', 'hello.txt']);
   await writeFile(path.join(project, 'hello.txt'), 'unstaged\n');

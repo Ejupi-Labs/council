@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Ejupi-Labs/council/v2/internal/adapters"
+	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/evidence"
 	"github.com/Ejupi-Labs/council/v2/internal/localstate"
 	"github.com/Ejupi-Labs/council/v2/internal/process"
@@ -19,6 +20,11 @@ type Config struct {
 	// Prepare is an internal ownership-preserving seam for local fixture barriers.
 	// Production leaves it nil and uses process.Prepare.
 	Prepare func(context.Context, process.NativeSpec) (*process.Owned, error)
+	// Internal fixture barriers preserve the real native action and durable
+	// permit boundaries. Production leaves them nil; no public setting exposes them.
+	BeforeApplicationReady  func(context.Context, domain.Attempt) error
+	BeforeApplicationAction func(context.Context, domain.Attempt, workspace.ApplyAction)
+	AfterApplicationAction  func(context.Context, domain.Attempt, workspace.ApplyAction, workspace.ApplyResult)
 }
 
 type Engine struct {

@@ -51,13 +51,26 @@ func Usage(taskID string, items []domain.UsageItem, references []domain.UsageRef
 		}
 	}
 	known, complete := 0, len(items) > 0
+	nativeCount := 0
 	seen := map[string]bool{}
+	modelIDs := map[string]bool{}
 	for i := range page.Items {
 		item := &page.Items[i]
 		if !domain.ValidID(item.AttemptID) || seen[item.AttemptID] {
 			return page, domain.Invalid("unique returned attempt identities")
 		}
 		seen[item.AttemptID] = true
+		switch item.ExecutorKind {
+		case "local_check", "local_application", "local_external":
+			item.SelectedUsageScope = "local_not_applicable"
+			page.Coverage.ExcludedLocalAttemptIDs = append(page.Coverage.ExcludedLocalAttemptIDs, item.AttemptID)
+			continue
+		case "", "native":
+			nativeCount++
+			modelIDs[item.AttemptID] = true
+		default:
+			return page, domain.Invalid("known usage executor kind")
+		}
 		if item.ExecutionMode == "fake" {
 			item.SelectedUsageScope = "fake_unmeasured"
 			page.Coverage.ExcludedFakeAttemptIDs = append(page.Coverage.ExcludedFakeAttemptIDs, item.AttemptID)
@@ -110,13 +123,15 @@ func Usage(taskID string, items []domain.UsageItem, references []domain.UsageRef
 			}
 		}
 	}
-	if complete {
+	if nativeCount == 0 && len(page.Coverage.ExcludedLocalAttemptIDs) > 0 {
+		page.Coverage.Status = "not_applicable"
+	} else if complete {
 		page.Coverage.Status = "complete"
 	} else if known > 0 {
 		page.Coverage.Status = "partial"
 	}
 	for _, reference := range references {
-		if seen[reference.AttemptID] {
+		if modelIDs[reference.AttemptID] {
 			reference.ProfileID = copyString(reference.ProfileID)
 			reference.ReferencePrice = *copyProfile(domain.TargetProfile{ReferencePrice: &reference.ReferencePrice}).ReferencePrice
 			page.ReferencePrices = append(page.ReferencePrices, reference)

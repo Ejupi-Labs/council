@@ -10,8 +10,11 @@ import (
 func (s *Store) SourceSnapshot(ctx context.Context, id string) (domain.SourceSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.sourceSnapshot(ctx, s.db, id)
+}
+func (s *Store) sourceSnapshot(ctx context.Context, q queryer, id string) (domain.SourceSnapshot, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, "SELECT data FROM source_snapshots WHERE id=?", id).Scan(&raw)
+	err := q.QueryRowContext(ctx, "SELECT data FROM source_snapshots WHERE id=?", id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SourceSnapshot{}, notFound()
 	}

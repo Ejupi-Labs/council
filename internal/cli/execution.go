@@ -209,6 +209,7 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 		allow("request-id", "project", "task", "task-file", "source-draft", "source-draft-revision", "expected-policy-revision", "fake", "fake-scenario", "budget-admissions", "budget-window-seconds")
 		allow(versionKeys...)
 		allow(taskRoutingFlags...)
+		allow(workflowTaskFlags...)
 	case "tasks list":
 		needsID = false
 		c.op = "tasks.list"
@@ -223,6 +224,7 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 		c.op = "tasks.guidance"
 		c.method = "PUT"
 		allow("request-id", "expected-revision", "guidance", "guidance-file", "use-current-policy", "clear-policy-override", "use-current-routing-policy")
+		allow(workflowTaskFlags...)
 		allow(versionKeys...)
 		allow(taskRoutingFlags...)
 	case "tasks run":
@@ -318,6 +320,10 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 		if err != nil {
 			return c, err
 		}
+		in.Workflow, err = workflowOptions(flags, stdin)
+		if err != nil {
+			return c, err
+		}
 		_, draft := flags["source-draft"]
 		_, revision := flags["source-draft-revision"]
 		if draft != revision {
@@ -357,6 +363,10 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 			return c, err
 		}
 		in := domain.GuidanceInput{RequestID: c.requestID, ExpectedRevision: flags["expected-revision"], GuidanceText: text, UseCurrentPolicy: flags["use-current-policy"] == "true", ClearPolicyOverride: flags["clear-policy-override"] == "true", PolicyOverride: flags["policy"], Pins: pins, Acceptance: acceptance, TimeoutSeconds: timeout}
+		in.Workflow, err = workflowOptions(flags, stdin)
+		if err != nil {
+			return c, err
+		}
 		in.Routing, err = routingOptions(flags, repeated, "guidance")
 		if err != nil {
 			return c, err

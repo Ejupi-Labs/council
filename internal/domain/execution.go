@@ -2,7 +2,7 @@ package domain
 
 import "encoding/json/jsontext"
 
-const ExecutionContract = "004-v1"
+const ExecutionContract = "005-v1"
 const MaxPromptBytes = 256 * 1024
 const MaxEventBytes = 16 * 1024
 
@@ -29,6 +29,7 @@ type TaskAcceptance struct {
 	AllowCandidatePreparation bool     `json:"allowCandidatePreparation"`
 }
 type StartTaskInput struct {
+	Workflow               *WorkflowInput   `json:"workflow,omitzero"`
 	Routing                *RoutingOptions  `json:"routing,omitempty"`
 	RequestID              string           `json:"requestId"`
 	ProjectID              string           `json:"projectId"`
@@ -43,6 +44,7 @@ type StartTaskInput struct {
 	FakeScenario           string           `json:"fakeScenario,omitempty"`
 }
 type GuidanceInput struct {
+	Workflow            *WorkflowInput   `json:"workflow,omitzero"`
 	Routing             *RoutingOptions  `json:"routing,omitempty"`
 	RequestID           string           `json:"requestId"`
 	ExpectedRevision    string           `json:"expectedRevision"`
@@ -121,6 +123,8 @@ type TaskVersionDetail struct {
 	Version      TaskVersion `json:"version"`
 }
 type Admission struct {
+	Workflow        *Workflow        `json:"workflow,omitzero"`
+	Step            *WorkflowStep    `json:"step,omitempty"`
 	RoutingDecision *RoutingDecision `json:"routingDecision,omitempty"`
 	Budget          *TaskBudget      `json:"budget,omitempty"`
 	Task            TaskSummary      `json:"task"`
@@ -204,6 +208,12 @@ type PrimaryFailure struct {
 	EventSequence string `json:"eventSequence"`
 }
 type Attempt struct {
+	WorkflowID         string             `json:"workflowId,omitempty"`
+	StepID             string             `json:"stepId,omitempty"`
+	Role               string             `json:"role,omitempty"`
+	ExecutorKind       string             `json:"executorKind,omitempty"`
+	InputCandidateID   *string            `json:"inputCandidateId,omitempty"`
+	Trigger            string             `json:"trigger,omitempty"`
 	RoutingDecisionID  *string            `json:"routingDecisionId,omitempty"`
 	ResolvedTarget     *ResolvedTarget    `json:"resolvedTarget,omitempty"`
 	ID                 string             `json:"id"`
@@ -275,17 +285,24 @@ type SourceSnapshot struct {
 	CreatedAt            string  `json:"createdAt"`
 }
 type Candidate struct {
-	ID                 string `json:"id"`
-	AttemptID          string `json:"attemptId"`
-	SourceSnapshotID   string `json:"sourceSnapshotId"`
-	ManifestArtifactID string `json:"manifestArtifactId"`
-	DeltaArtifactID    string `json:"deltaArtifactId"`
-	WorkspaceRef       string `json:"workspaceRef"`
-	HasDelta           bool   `json:"hasDelta"`
-	HasIndexDelta      bool   `json:"hasIndexDelta"`
-	Verification       string `json:"verification"`
-	Integration        string `json:"integration"`
-	CreatedAt          string `json:"createdAt"`
+	RootSourceSnapshotID   string  `json:"rootSourceSnapshotId,omitempty"`
+	IndexArtifactID        string  `json:"indexArtifactId,omitempty"`
+	WorkflowID             string  `json:"workflowId,omitempty"`
+	PredecessorCandidateID *string `json:"predecessorCandidateId,omitempty"`
+	CreatedByStepID        string  `json:"createdByStepId,omitempty"`
+	ConditionsSHA256       string  `json:"conditionsSha256,omitempty"`
+	Completeness           string  `json:"completeness,omitempty"`
+	ID                     string  `json:"id"`
+	AttemptID              string  `json:"attemptId"`
+	SourceSnapshotID       string  `json:"sourceSnapshotId"`
+	ManifestArtifactID     string  `json:"manifestArtifactId"`
+	DeltaArtifactID        string  `json:"deltaArtifactId"`
+	WorkspaceRef           string  `json:"workspaceRef"`
+	HasDelta               bool    `json:"hasDelta"`
+	HasIndexDelta          bool    `json:"hasIndexDelta"`
+	Verification           string  `json:"verification"`
+	Integration            string  `json:"integration"`
+	CreatedAt              string  `json:"createdAt"`
 }
 type ResponseAcceptance struct {
 	ID                 string `json:"id"`
@@ -328,6 +345,8 @@ type AttemptUpdate struct {
 	Failure            *PrimaryFailure
 }
 type Settlement struct {
+	BuiltinCompleted bool `json:"builtinCompleted,omitzero"`
+	EffectsKnown     bool `json:"effectsKnown,omitzero"`
 	NoProcessCreated bool
 	Outcome          string
 	Cleanup          Cleanup

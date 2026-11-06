@@ -172,7 +172,7 @@ export class RoutingView {
 
   private renderConfiguration(): void {
     const p = this.policy; if (!p) return;
-    element('routing-policy-summary').textContent = 'Auto prefers suitable economical profiles. Unknown availability: ' + p.unknownAvailability + '. Default budget: ' + p.defaultBudget.admissionLimit + ' admitted attempts / ' + p.defaultBudget.windowSeconds + ' wall-clock seconds. Automatic continuation: ' + (p.continuation.maxAutomaticAdmissions === '0' ? 'OFF' : p.continuation.maxAutomaticAdmissions + ' maximum') + '. Current policy revision ' + p.revision + '. Access and native charges remain unknown.';
+    element('routing-policy-summary').textContent = 'Auto prefers suitable economical profiles. Unknown availability: ' + p.unknownAvailability + '. Default budget: ' + p.defaultBudget.admissionLimit + ' native model admissions / ' + p.defaultBudget.windowSeconds + ' wall-clock seconds. Automatic continuation: ' + (p.continuation.maxAutomaticAdmissions === '0' ? 'OFF' : p.continuation.maxAutomaticAdmissions + ' maximum') + '. Current policy revision ' + p.revision + '. Access and native charges remain unknown.';
     element<HTMLInputElement>('task-budget-admissions').placeholder = p.defaultBudget.admissionLimit;
     element<HTMLInputElement>('task-budget-window').placeholder = String(p.defaultBudget.windowSeconds);
     element<HTMLInputElement>('task-automatic-admissions').placeholder = p.continuation.maxAutomaticAdmissions;
@@ -445,9 +445,13 @@ export class RoutingView {
   private renderUsage(page: UsagePage, list: HTMLElement): void {
     const facts = element('task-usage-summary'); facts.replaceChildren();
     addFact(facts, 'Coverage for returned attempts', page.coverage.status + ' · included ' + page.coverage.includedAttemptIds.join(', ') + ' · unknown ' + (page.coverage.unknownAttemptIds.join(', ') || 'none in this page') + ' · fake unmeasured ' + (page.coverage.excludedFakeAttemptIds.join(', ') || 'none in this page'));
+    if (page.coverage.excludedLocalAttemptIds?.length) addFact(facts, 'Local stages excluded from model coverage', page.coverage.excludedLocalAttemptIds.join(', ') + ' · native token/charge telemetry not applicable');
     addFact(facts, 'Charges', 'Unknown · no native charge receipts. Empty receipts are not zero cost.');
     for (const scope of ['top_level', 'whole_tree'] as const) for (const [counter, subtotal] of Object.entries(page.knownSubtotal.byUsageScope[scope])) addFact(facts, scope + ' ' + counter + ' · returned attempts only', (subtotal.knownValue ?? 'Unknown') + ' · contributors ' + (subtotal.contributingAttemptIds.join(', ') || 'none') + ' · missing ' + (subtotal.missingAttemptIds.join(', ') || 'none'));
-    for (const item of page.items) evidence(list, item.attemptId + ' · ' + item.outcome + ' · ' + item.selectedUsageScope + ' · ' + usageLabel(item.usage), item);
+    for (const item of page.items) {
+      const local = !!item.executorKind && item.executorKind !== 'native';
+      evidence(list, item.attemptId + ' · ' + item.outcome + ' · ' + (local ? (item.role ?? 'local stage') + ' · ' + item.executorKind + ' · model usage not applicable; excluded from native-model coverage' : item.selectedUsageScope + ' · ' + usageLabel(item.usage)), item);
+    }
     for (const estimate of page.estimates) evidence(list, 'Native estimate, not a charge · ' + estimate.value + ' ' + estimate.currency + ' · ' + estimate.model + ' · ' + estimate.scope, estimate);
     for (const price of page.referencePrices) evidence(list, 'Captured user reference price · decision ' + price.decisionId + ' · not a charge or measured saving', price);
   }

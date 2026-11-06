@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 test('controlled UI test data keeps configured, primary, whole-tree and top-level facts separate with exact estimate lexemes', { timeout: 90000 }, async () => {
   const f = await fixture(); let owner;
@@ -9,7 +9,7 @@ test('controlled UI test data keeps configured, primary, whole-tree and top-leve
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
     await page.locator('#execution-options > summary').click(); await page.locator('#task-harness').selectOption('claude-code');
-    await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+    await page.locator('#task-fake').check(); await legacyExecution(page); await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-text').fill('CONTROLLED UI OBSERVATION TEST DATA. No live provider was called.');
     let starts = 0; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/tasks') starts++; });
     const admitted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/tasks');
@@ -75,10 +75,11 @@ test('a controlled earlier-owner metadata shape cannot authorize new Claude exec
     await page.route('**/api/v1/meta', async route => {
       const response = await route.fetch(); const envelope = await response.json();
       envelope.data.appVersion = '2.0.0-dev.2'; envelope.data.managedExecution = 'native_codex'; envelope.data.executionContract = '002-v1';
-      envelope.data.capacity = { connectionId: 'codex-native', limit: 1, activeAttemptId: null }; delete envelope.data.maintenanceContract;
+      envelope.data.capacity = { connectionId: 'codex-native', limit: 1, activeAttemptId: null }; delete envelope.data.maintenanceContract; delete envelope.data.workflowContract;
+      envelope.data.capabilities = ['workspace_foundation', 'managed_execution'];
       await route.fulfill({ response, json: envelope });
     });
-    await page.goto(owner.url); await page.locator('#app-status').filter({ hasText: 'compatible Council owner' }).waitFor();
+    await page.goto(owner.url); await page.locator('#app-status').filter({ hasText: 'Older owners require their exact maintenance Stop command' }).waitFor();
     assert.equal(await page.locator('#start-task').isDisabled(), true); assert.equal(starts, 0);
   } finally { if (owner) await owner.stop(); await f.close(); }
 });

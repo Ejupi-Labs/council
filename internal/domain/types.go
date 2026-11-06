@@ -9,7 +9,7 @@ import (
 )
 
 const APIVersion = 1
-const AppVersion = "2.0.0-dev.4"
+const AppVersion = "2.0.0-dev.5"
 const MaxTextBytes = 4 * 1024 * 1024
 const MaxBodyBytes = 32 * 1024 * 1024
 
@@ -65,15 +65,15 @@ func Status(code string) int {
 		return 404
 	case "method_not_allowed":
 		return 405
-	case "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict":
+	case "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict", "workflow_revision_conflict", "candidate_stale", "integration_conflict":
 		return 409
 	case "input_too_large":
 		return 413
 	case "unsupported_media_type":
 		return 415
-	case "project_unavailable", "not_git_project", "prerequisite_missing", "discovery_unavailable", "capability_unavailable", "pin_unavailable", "permission_unavailable", "source_capture_blocked", "acceptance_unavailable", "evidence_unavailable", "budget_exhausted", "budget_expired", "routing_unavailable":
+	case "project_unavailable", "not_git_project", "prerequisite_missing", "discovery_unavailable", "capability_unavailable", "pin_unavailable", "permission_unavailable", "source_capture_blocked", "acceptance_unavailable", "evidence_unavailable", "budget_exhausted", "budget_expired", "routing_unavailable", "authority_required", "review_unavailable", "check_unavailable", "application_unsupported", "delivery_scope_required", "external_postcondition_unsupported":
 		return 422
-	case "owner_unavailable", "storage_failed", "write_uncertain", "operation_interrupted", "dispatch_fenced", "owner_closing":
+	case "owner_unavailable", "storage_failed", "write_uncertain", "operation_interrupted", "dispatch_fenced", "owner_closing", "effect_uncertain":
 		return 503
 	default:
 		return 500

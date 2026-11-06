@@ -149,6 +149,7 @@ func gitMetadata(ctx context.Context, git, path string, args ...string) (string,
 	defer cancel()
 	all := append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-C", path}, args...)
 	c := exec.CommandContext(ctx, git, all...)
+	configureGitCommand(c)
 	c.Env = cleanGitEnvironment()
 	out := &limitedOutput{limit: 1024 * 1024}
 	c.Stdout = out

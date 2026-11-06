@@ -4,7 +4,9 @@ Status: features 001–004 are accepted. Foundation qualified on all six native 
 managed Codex execution qualified on six targets plus Linux AMD64 race at `f5edd96` in run 42140818152.
 Claude interoperability qualified on all seven jobs at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
-Other parent requirements remain partial or not implemented as marked. Date: 6 November 2026.
+Feature 004 qualified at `3f4a18e` in run `42172669381`. Feature 005 dev.5/005-v1 implementation
+is under qualification, not accepted; its native/race gate remains open. Other parent requirements
+remain partial or not implemented as marked. Date: 6 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
 [the delivery plan](delivery-plan.md). It does not credit the legacy runtime at
@@ -23,7 +25,9 @@ Features 001–003 acceptance.md and review.md records include their actual host
 independent review/corrections and separately unperformed live-provider qualification.
 Feature 004 qualified at3f4a18e in run42172669381 on six native targets plus Linux race; its
 acceptance/review records and 38-row evidence matrix record actual local/native checks and closed review.
-Feature005 has a reviewed functional specification and active design/task analysis; it is not implemented.
+Feature 005 design was committed at `24b0cf1`; implementation and local qualification are active.
+Its [acceptance ledger](../../specs/005-verified-delivery/acceptance.md) records observed work and
+remaining checks. This matrix grants no 005 acceptance or six-target/race qualification yet.
 Evidence paths for features006–012 are **planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
@@ -39,7 +43,7 @@ single status cannot hide an unmet claim.
 
 ## Requirement-to-evidence matrix
 
-| Requirement | Acceptance responsibility | Primary slice | Supporting slices | Planned acceptance evidence | Current status |
+| Requirement | Acceptance responsibility | Primary slice | Supporting slices | Acceptance evidence location | Current status |
 | --- | --- | --- | --- | --- | --- |
 | FR-001 | Open existing projects and reach the composer without transport setup | 001 | 002, 012 | `specs/001-workspace-foundation/acceptance.md#project-opening` | IMPLEMENTED — six native platform jobs passed at 93c8c25 |
 | FR-002 | Separate harness discovery, connection and verified capability status | 001 | 002, 003, 009–012 | `specs/001-workspace-foundation/acceptance.md#harness-readiness-and-authentication-boundary` | PARTIAL — Codex and Claude native contracts/fake qualification accepted; remaining adapters and live qualification remain separate |
@@ -52,7 +56,7 @@ single status cannot hide an unmet claim.
 | FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-010 | Report actual harness policy capabilities and restrictions honestly | 002 | 003, 009–012 | `specs/002-managed-execution/acceptance.md#permission-capabilities-and-limits` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-011 | Validate task data and destination before side effects | 002 | 004, 005, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
-| FR-012 | Select proportionate workflow stages without mandatory model planning, debate or review | 005 | 002, 004, 012 | `specs/005-verified-delivery/acceptance.md#proportionate-workflow` | NOT IMPLEMENTED |
+| FR-012 | Select proportionate workflow stages without mandatory model planning, debate or review | 005 | 002, 004, 012 | `specs/005-verified-delivery/acceptance.md#proportionate-workflow` | PARTIAL — dev.5 Auto/direct-proof implementation under qualification; 005 gate open |
 | FR-013 | Choose the least costly suitably capable configured target deterministically | 004 | 003, 005, 012 | `specs/004-economical-routing/acceptance.md#suitable-economy-selection` | IMPLEMENTED — specified native scope accepted at3f4a18e on six platforms plus race; live provider qualification remains separate |
 | FR-014 | Distinguish Council occupancy, external occupancy, allowance and unknown information | 004 | 002, 012 | `specs/004-economical-routing/acceptance.md#occupancy-and-allowance-states` | IMPLEMENTED — specified native scope accepted at3f4a18e on six platforms plus race; live provider qualification remains separate |
 | FR-015 | Use suitable idle capacity without disrupting native chats or double-counting shared accounts | 004 | 003, 006, 012 | `specs/004-economical-routing/acceptance.md#idle-subscription-routing` | IMPLEMENTED — specified native scope accepted at3f4a18e on six platforms plus race; live provider qualification remains separate |
@@ -61,15 +65,15 @@ single status cannot hide an unmet claim.
 | FR-018 | Honor explicit account/harness/model pins without silent substitution | 004 | 002, 003, 009–012 | `specs/004-economical-routing/acceptance.md#explicit-target-pins` | IMPLEMENTED — specified native scope accepted at3f4a18e on six platforms plus race; live provider qualification remains separate |
 | FR-019 | Require configured paid accounts and applicable budgets for Council-managed paid API paths | 004 | 005, 009–012 | `specs/004-economical-routing/acceptance.md#payment-path-authorization` | PARTIAL — native paid-fallback/guarantee refusal qualified; configured paid API execution remains unsupported |
 | FR-020 | Separate reported actual usage, estimates, reference prices and unknowns | 004 | 003, 009–012 | `specs/004-economical-routing/acceptance.md#usage-and-cost-provenance` | IMPLEMENTED — specified native scope accepted at3f4a18e on six platforms plus race; live provider qualification remains separate |
-| FR-021 | Connect implementation, necessary review, checks and integration with an explicit next owner/action | 005 | 002, 006, 008, 012 | `specs/005-verified-delivery/acceptance.md#workflow-next-action` | NOT IMPLEMENTED |
-| FR-022 | Review the actual candidate and accessible evidence; retain unperformed review/check gaps | 005 | 006, 009–012 | `specs/005-verified-delivery/acceptance.md#independent-review-evidence` | NOT IMPLEMENTED |
-| FR-023 | Link blocking findings to corrections and affected rechecks without replaying unrelated work | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#correction-lineage-and-recheck` | NOT IMPLEMENTED |
-| FR-024 | Bind observed deterministic check receipts to the exact checked change/source | 005 | 002, 006, 012 | `specs/005-verified-delivery/acceptance.md#verifier-receipts-and-staleness` | NOT IMPLEMENTED |
+| FR-021 | Connect implementation, necessary review, checks and integration with an explicit next owner/action | 005 | 002, 006, 008, 012 | `specs/005-verified-delivery/acceptance.md#workflow-next-action` | PARTIAL — captured workflow/stage controls under qualification; adoption requires initial Run, then eligible advance |
+| FR-022 | Review the actual candidate and accessible evidence; retain unperformed review/check gaps | 005 | 006, 009–012 | `specs/005-verified-delivery/acceptance.md#independent-review-evidence` | PARTIAL — fresh review-role subject/evidence records and named gaps under qualification |
+| FR-023 | Link blocking findings to corrections and affected rechecks without replaying unrelated work | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#correction-lineage-and-recheck` | PARTIAL — one captured correction cycle and immutable findings/resolutions under qualification; no task-budget refill |
+| FR-024 | Bind observed deterministic check receipts to the exact checked change/source | 005 | 002, 006, 012 | `specs/005-verified-delivery/acceptance.md#verifier-receipts-and-staleness` | PARTIAL — builtin/direct-command receipts and applicability under qualification; agent claims remain separate |
 | FR-025 | Run independent tasks concurrently within capacity and honor dependencies | 006 | 002, 004, 007, 012 | `specs/006-task-graphs/acceptance.md#parallelism-and-dependencies` | NOT IMPLEMENTED |
 | FR-026 | Give followers the accepted predecessor change/base within their actual access | 006 | 005, 009–012 | `specs/006-task-graphs/acceptance.md#workspace-handoff` | NOT IMPLEMENTED |
 | FR-027 | Retrieve focused context while preserving every applicable original constraint | 006 | 002, 005, 012 | `specs/006-task-graphs/acceptance.md#scoped-context-and-constraints` | NOT IMPLEMENTED |
 | FR-028 | Label derived summaries, retain provenance/originals and handle context capacity explicitly | 006 | 002, 004, 012 | `specs/006-task-graphs/acceptance.md#derived-context-and-capacity` | NOT IMPLEMENTED |
-| FR-029 | Retain complete linked task, attempt, review, verifier and change evidence | 002 | 005, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — complete task/attempt/source/candidate evidence accepted; review/verifier/integration records follow feature005 |
+| FR-029 | Retain complete linked task, attempt, review, verifier and change evidence | 002 | 005, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — accepted task/attempt/source/candidate evidence; 005 review/check/delivery records and bounded full-item reads under qualification |
 | FR-030 | Propagate only relevant authorized context; peer content creates no new authority | 006 | 002, 004, 005, 009–012 | `specs/006-task-graphs/acceptance.md#context-authorization-boundary` | NOT IMPLEMENTED |
 | FR-031 | Observe progress/history/evidence without model calls using bounded metadata and explicit full reads | 002 | 006, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-032 | Preserve distinct lifecycle meanings; timeouts, responses and partial results do not imply acceptance | 002 | 005, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
@@ -79,16 +83,16 @@ single status cannot hide an unmet claim.
 | FR-036 | Coordinate shared host capacity and preserve cancel/failure precedence; fail closed on uncertain cleanup | 002 | 004, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-037 | Settle evidence/process ownership on shutdown and faults without destructive repair or model replay | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-038 | Preserve dirty work and branch; isolate writers and record attributable base/destination | 002 | 005, 006, 007, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
-| FR-039 | Apply verified local results when authorized, otherwise deliver a precise reviewable candidate | 005 | 002, 006, 008, 012 | `specs/005-verified-delivery/acceptance.md#authorized-local-integration` | NOT IMPLEMENTED |
-| FR-040 | Revalidate evidence/destination changes and preserve both candidate and user work on conflict | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#integration-conflicts-and-freshness` | NOT IMPLEMENTED |
-| FR-041 | Require explicit scope for external delivery and reuse existing applicable authorization | 005 | 002, 004, 008, 012 | `specs/005-verified-delivery/acceptance.md#external-delivery-scope` | NOT IMPLEMENTED |
+| FR-039 | Apply verified local results when authorized, otherwise deliver a precise reviewable candidate | 005 | 002, 006, 008, 012 | `specs/005-verified-delivery/acceptance.md#authorized-local-integration` | PARTIAL — review-only/default and prospective scoped text application under qualification; autonomous access alone grants no delivery |
+| FR-040 | Revalidate evidence/destination changes and preserve both candidate and user work on conflict | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#integration-conflicts-and-freshness` | PARTIAL — source/index/destination checks and retained application journal/quarantine under qualification; unsupported states retain named gaps |
+| FR-041 | Require explicit scope for external delivery and reuse existing applicable authorization | 005 | 002, 004, 008, 012 | `specs/005-verified-delivery/acceptance.md#external-delivery-scope` | PARTIAL — explicit captured action/destination/argv under qualification; command completion does not attest remote publication |
 | FR-042 | Export evidence, back up/restore state and clean reviewed artifacts with explicit scope | 007 | 001, 002, 012 | `specs/007-recovery-and-retention/acceptance.md#export-backup-and-cleanup` | NOT IMPLEMENTED |
-| FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — approved composer, execution, evidence and usage views accepted; later workflow views repeat qualification |
-| FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — foundation and authoring copy, keyboard, errors and 360px states accepted; later views remain planned |
+| FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — approved composer/execution/evidence/usage views accepted; 005 minimal Auto/workflow views and unchanged approved assets under qualification |
+| FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — accepted foundation/authoring keyboard/errors/360px scope; 005 workflow state/focus/mobile/render qualification remains open |
 | FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing accepted at3f4a18e; MCP remains planned |
 | FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — task/draft/control/acceptance replay and stale clients accepted on six targets at f5edd96 |
 | FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation and native Codex fake journeys accepted on six targets; complete multi-adapter release remains planned |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — features 001–004 specified, independently reviewed, corrected and accepted; features005–012 remain planned |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — 001–004 accepted; 005 committed design and implementation under qualification; 006–012 planned |
 
 ## Per-feature review and fix gates
 
@@ -103,7 +107,7 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 | 002 | `specs/002-managed-execution/` | `specs/002-managed-execution/review.md` | ACCEPTED — six native targets plus race at f5edd96 |
 | 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | ACCEPTED — six native targets plus race at ce8aaa7; all six implementation findings closed |
 | 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | ACCEPTED — six native targets plus race at3f4a18e, run42172669381; all independent corrections closed |
-| 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | SPECIFIED / DESIGN IN REVIEW — no runtime implementation or acceptance yet |
+| 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | IMPLEMENTATION UNDER QUALIFICATION — dev.5/005-v1 after design 24b0cf1; acceptance, independent closure and native/race gate remain open |
 | 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | NOT IMPLEMENTED; gate open |
 | 007 | `specs/007-recovery-and-retention/` | `specs/007-recovery-and-retention/review.md` | NOT IMPLEMENTED; gate open |
 | 008 | `specs/008-host-integration/` | `specs/008-host-integration/review.md` | NOT IMPLEMENTED; gate open |

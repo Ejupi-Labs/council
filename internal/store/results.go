@@ -21,8 +21,27 @@ func (s *Store) SettleAttempt(ctx context.Context, id string, in domain.Settleme
 	return observe(out), e
 }
 func (s *Store) settle(ctx context.Context, tx *sql.Tx, a domain.Attempt, in domain.Settlement) (domain.Attempt, error) {
+	out, err := s.settleCore(ctx, tx, a, in)
+	if err == nil {
+		err = s.syncWorkflowTerminal(ctx, tx, out)
+	}
+	return out, err
+}
+func (s *Store) settleCore(ctx context.Context, tx *sql.Tx, a domain.Attempt, in domain.Settlement) (domain.Attempt, error) {
+	return s.settleCoreWithRecovery(ctx, tx, a, in, false)
+}
+func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain.Attempt, in domain.Settlement, recovery bool) (domain.Attempt, error) {
 	if a.Phase == "settled" {
 		return a, nil
+	}
+	if !recovery && a.ExecutorKind == "local_application" {
+		var active int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM delivery_operations WHERE attempt_id=? AND active_effect_id IS NOT NULL", a.ID).Scan(&active); err != nil {
+			return a, storageError()
+		}
+		if active != 0 {
+			return a, domain.Fail("effect_uncertain", "A permitted filesystem action remains unresolved; do not release its ownership.")
+		}
 	}
 	switch in.Outcome {
 	case "succeeded", "failed", "blocked", "cancelled", "interrupted":
@@ -46,6 +65,11 @@ func (s *Store) settle(ctx context.Context, tx *sql.Tx, a domain.Attempt, in dom
 	case "complete", "incomplete", "uncertain":
 	default:
 		return a, domain.Invalid("settled evidence status")
+	}
+	if a.ExecutorKind == "local_application" && !in.EffectsKnown {
+		if err := s.markWorkflowEffectsUnknown(ctx, tx, a); err != nil {
+			return a, err
+		}
 	}
 	now := domain.Now()
 	if in.Cleanup.FinishedAt == nil {
@@ -85,7 +109,15 @@ func (s *Store) settle(ctx context.Context, tx *sql.Tx, a domain.Attempt, in dom
 			c, e := s.candidate(ctx, tx, *a.CandidateID)
 			usable = usable || (e == nil && (c.HasDelta || c.HasIndexDelta))
 		}
-		if !a.LaunchIntent || !in.RootTerminal || !in.InputComplete || in.ExitCode == nil || *in.ExitCode != 0 || !in.UsableOutput || !usable || in.EvidenceStatus != "complete" || in.Cleanup.State != "verified" {
+		validSuccess := a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && *in.ExitCode == 0 && in.UsableOutput && usable
+		if a.ExecutorKind == "local_check" {
+			validSuccess = in.BuiltinCompleted && !a.LaunchIntent || a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && in.UsableOutput
+		} else if a.ExecutorKind == "local_application" {
+			validSuccess = in.EffectsKnown && !a.LaunchIntent
+		} else if a.ExecutorKind == "local_external" {
+			validSuccess = a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && *in.ExitCode == 0
+		}
+		if !validSuccess || in.EvidenceStatus != "complete" || in.Cleanup.State != "verified" {
 			outcome = "failed"
 			seq, e := s.appendEvent(ctx, tx, a.ID, "primary_failure", failureMetadata(in.Failure))
 			if e != nil {
@@ -106,7 +138,14 @@ func (s *Store) settle(ctx context.Context, tx *sql.Tx, a domain.Attempt, in dom
 		}
 		a.Cleanup.IncidentID = ptr(incident.ID)
 	}
-	if a.Cleanup.State == "verified" {
+	retainEffectClaim, e := s.workflowEffectUncertain(ctx, tx, a)
+	if e != nil {
+		return a, e
+	}
+	if a.ExecutorKind == "local_application" && !in.EffectsKnown {
+		retainEffectClaim = true
+	}
+	if a.Cleanup.State == "verified" && !retainEffectClaim {
 		if _, e := tx.ExecContext(ctx, "DELETE FROM capacity_claims WHERE attempt_id=?", a.ID); e != nil {
 			return a, storageError()
 		}

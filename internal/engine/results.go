@@ -83,6 +83,11 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, failure, err)
 		return
 	}
+	if a.WorkflowID != "" && a.ExecutorKind != "native" {
+		e.runWorkflowLocal(ctx, a, detail)
+		return
+	}
+	derivedRole := a.Role == "review" || a.Role == "correction"
 	if a.ResolvedTarget == nil || a.RoutingDecisionID == nil || a.ResolvedTarget.ConnectionID != a.ConnectionID {
 		e.settleUnlaunched(a, primary("pin_unavailable", "The captured task target does not match its admitted native connection. No target was substituted."))
 		return
@@ -106,7 +111,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		return
 	}
 	assessment := view.Authority.SuitabilityAssessment
-	if sourceErr := routing.RecheckOriginal(ctx, p.ResolvedPath, assessment); sourceErr != nil {
+	if sourceErr := recheckNativeOriginal(ctx, p.ResolvedPath, assessment, derivedRole); sourceErr != nil {
 		e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
 		return
 	}
@@ -138,7 +143,13 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	if a.ExecutionMode == "fake" {
 		resolve = func(context.Context, domain.ExecutionPins) (string, error) { return os.Executable() }
 	}
-	launch, err := adapters.BuildResolvedNative(ctx, detail.OriginalText, detail.Version, *a.ResolvedTarget, outputPath, resolve)
+	var launch adapters.Launch
+	var stage *workflowNativeContext
+	if derivedRole {
+		launch, stage, err = e.prepareWorkflowNative(ctx, a, detail, outputPath, resolve)
+	} else {
+		launch, err = adapters.BuildResolvedNative(ctx, detail.OriginalText, detail.Version, *a.ResolvedTarget, outputPath, resolve)
+	}
 	if err != nil {
 		e.settleUnlaunched(a, primary(domain.SafeError(err).Code, domain.SafeError(err).Message))
 		return
@@ -148,7 +159,24 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		if a.ConnectionID == "claude-native" {
 			auxiliaryPath = e.lock.Root()
 		}
-		launch.Args, err = fixture.ArgsForHarness(invocationPins.HarnessID, a.FakeScenario, auxiliaryPath)
+		if derivedRole || a.FakeScenario == "workflow-document" || a.FakeScenario == "workflow-defect" {
+			fixtureOutput := outputPath
+			if a.ConnectionID == "claude-native" {
+				fixtureOutput = ""
+			}
+			role, scenario := "author", a.FakeScenario
+			if a.Role == "review" {
+				role, scenario = "review", "workflow-review-blocking"
+				if stage != nil && stage.step.Cycle > 0 {
+					scenario = "workflow-review-clean"
+				}
+			} else if a.Role == "correction" {
+				role, scenario = "correction", "workflow-correction"
+			}
+			launch.Args, err = fixture.WorkflowArgs(invocationPins.HarnessID, scenario, role, fixtureOutput)
+		} else {
+			launch.Args, err = fixture.ArgsForHarness(invocationPins.HarnessID, a.FakeScenario, auxiliaryPath)
+		}
 		if err != nil {
 			e.settleUnlaunched(a, primary("capability_unavailable", "The requested fixed fixture is unsupported."))
 			return
@@ -162,7 +190,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		return
 	}
 	_ = prompt
-	snapshot, err := e.workspace.Capture(ctx, workspace.Request{AttemptID: a.ID, ProjectPath: p.ResolvedPath})
+	var snapshot *workspace.Snapshot
+	if stage != nil {
+		snapshot = stage.snapshot
+	} else {
+		snapshot, err = e.workspace.Capture(ctx, workspace.Request{AttemptID: a.ID, ProjectPath: p.ResolvedPath})
+	}
 	if err != nil {
 		message := "Current source could not be captured faithfully. Inspect source prerequisites and retain the original working tree."
 		if errors.Is(err, workspace.ErrBlocked) && utf8.ValidString(err.Error()) && len(err.Error()) <= 512 {
@@ -175,15 +208,19 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("project_identity_changed", "The saved project identity changed during source capture. No worker was prepared."))
 		return
 	}
-	if sourceErr := routing.RecheckOriginal(ctx, p.ResolvedPath, assessment); sourceErr != nil {
+	if sourceErr := recheckNativeOriginal(ctx, p.ResolvedPath, assessment, derivedRole); sourceErr != nil {
 		e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
 		return
 	}
-	if assessment.SourceProof != nil {
+	if !derivedRole && assessment.SourceProof != nil {
 		if sourceErr := routing.RecheckManaged(ctx, snapshot.ExecutionPath, *assessment.SourceProof); sourceErr != nil {
 			e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
 			return
 		}
+	}
+	if markerErr := e.verifyWorkflowMarkers(ctx, a, snapshot); markerErr != nil {
+		e.settleUnlaunched(a, primary("candidate_stale", "The captured check convention markers changed before native execution."), markerErr)
+		return
 	}
 	manifest, err := e.evidence.VerifyClosed(ctx, snapshot.ManifestArtifactID)
 	if err != nil || manifest.SHA256 == nil {
@@ -220,7 +257,11 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("evidence_failed", "Cannot create the private stderr artifact."), errors.Join(err, closeErr))
 		return
 	}
-	parser, err := adapters.NewParser(a.ConnectionID, invocationPins, out.ID(), func(event adapters.Event) error {
+	parserFactory := adapters.NewParser
+	if a.Role == "review" {
+		parserFactory = adapters.NewReviewParser
+	}
+	parser, err := parserFactory(a.ConnectionID, invocationPins, out.ID(), func(event adapters.Event) error {
 		if err := out.Checkpoint(context.Background()); err != nil {
 			return err
 		}
@@ -262,8 +303,10 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		_, outCloseErr := out.Close(context.Background(), false)
 		_, stderrCloseErr := stderr.Close(context.Background(), false)
 		if errors.Is(err, process.ErrOwnershipUncertain) {
+			settlement := domain.Settlement{Outcome: "blocked", Cleanup: domain.Cleanup{State: "unknown", Scope: cancellationScope()}, EvidenceStatus: "uncertain", Failure: primary("ownership_uncertain", "Native preparation cleanup could not be verified.")}
+			facts := e.workflowFailedSettlementFacts(a, settlement)
 			e.control.Lock()
-			_, _ = e.db.SettleAttempt(context.Background(), a.ID, domain.Settlement{Outcome: "blocked", Cleanup: domain.Cleanup{State: "unknown", Scope: cancellationScope()}, EvidenceStatus: "uncertain", Failure: primary("ownership_uncertain", "Native preparation cleanup could not be verified.")})
+			_ = e.settleExecutionLocked(context.Background(), a, settlement, facts)
 			e.control.Unlock()
 		} else {
 			e.settleUnlaunched(a, primary("launch_failed", "The native process could not be prepared. No automatic retry was made."), errors.Join(err, outCloseErr, stderrCloseErr))
@@ -376,10 +419,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	usable := false
 	retainResponse := clean.Verified
 	if a.ConnectionID == "claude-native" {
-		retainResponse = retainResponse && protocolErr == nil && r.Terminal && r.Succeeded && r.FinalResponse != nil && inputComplete && clean.Root != nil && clean.Root.Known && clean.Root.ExitCode == 0 && evidenceState == "complete"
+		retainResponse = retainResponse && protocolErr == nil && r.Terminal && r.Succeeded && (r.FinalResponse != nil || a.Role == "review" && len(r.StructuredOutput) > 0) && inputComplete && clean.Root != nil && clean.Root.Known && clean.Root.ExitCode == 0 && evidenceState == "complete"
 	}
 	if retainResponse {
-		if a.ConnectionID == "claude-native" {
+		if a.ConnectionID == "claude-native" && a.Role == "review" {
+			response, err = e.evidence.Put(settlementCtx, a.ID, "review_result", r.StructuredOutput)
+		} else if a.ConnectionID == "claude-native" {
 			response, err = e.evidence.Put(settlementCtx, a.ID, "final_response", []byte(*r.FinalResponse))
 		} else {
 			response, err = e.evidence.ImportResponse(settlementCtx, a.ID, outputPath, 64<<20)
@@ -389,6 +434,9 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 			if err == nil {
 				chunk, readErr := e.readResponse(settlementCtx, response)
 				usable = readErr == nil && utf8.Valid(chunk) && strings.TrimSpace(string(chunk)) != ""
+				if readErr == nil && a.Role == "review" && a.ConnectionID == "codex-native" {
+					response, readErr = e.evidence.Put(settlementCtx, a.ID, "review_result", chunk)
+				}
 				if readErr != nil {
 					err = readErr
 				}
@@ -417,15 +465,22 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	if clean.Verified {
 		candidate, err = e.workspace.Candidate(settlementCtx, snapshot)
 		if candidate != nil {
-			hasIndex := false
-			for _, change := range candidate.Changes {
-				if change.BeforeIndex != nil || change.AfterIndex != nil {
-					hasIndex = true
-				}
-			}
+			_, hasIndex := workflowChangeFlags(candidate.Changes)
 			rel, relErr := filepath.Rel(e.lock.Root(), candidate.WorkspacePath)
 			if relErr == nil {
-				relErr = e.db.PutCandidate(context.Background(), domain.Candidate{ID: candidate.ID, AttemptID: a.ID, SourceSnapshotID: snapshot.ID, ManifestArtifactID: candidate.ManifestArtifactID, DeltaArtifactID: candidate.DeltaArtifactID, WorkspaceRef: filepath.ToSlash(rel), HasDelta: len(candidate.Changes) > 0, HasIndexDelta: hasIndex, Verification: "pending", Integration: "not_performed", CreatedAt: domain.Now()})
+				retained := domain.Candidate{ID: candidate.ID, AttemptID: a.ID, SourceSnapshotID: snapshot.ID, ManifestArtifactID: candidate.ManifestArtifactID, DeltaArtifactID: candidate.DeltaArtifactID, WorkspaceRef: filepath.ToSlash(rel), HasDelta: len(candidate.Changes) > 0, HasIndexDelta: hasIndex, Verification: "pending", Integration: "not_performed", CreatedAt: domain.Now()}
+				if a.WorkflowID != "" {
+					retained.Completeness = "complete"
+					if candidate.Partial {
+						retained.Completeness = "partial"
+					}
+					index, indexErr := e.workspace.RetainIndex(settlementCtx, a.ID, snapshot)
+					relErr = indexErr
+					retained.IndexArtifactID = index.ID
+				}
+				if relErr == nil {
+					relErr = e.db.PutCandidate(context.Background(), retained)
+				}
 			}
 			if relErr != nil {
 				err = relErr
@@ -464,8 +519,23 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	if (candidate == nil || err != nil) && evidenceState != "uncertain" {
 		evidenceState = "incomplete"
 	}
+	settlement := domain.Settlement{Outcome: outcome, Cleanup: cleanup, EvidenceStatus: evidenceState, RootTerminal: r.Terminal && r.Succeeded, InputComplete: inputComplete, ExitCode: code, UsableOutput: usable}
+	var workflowFacts domain.WorkflowStepFacts
+	if a.WorkflowID != "" {
+		var factsErr error
+		workflowFacts, factsErr = e.workflowNativeFacts(settlementCtx, a, stage, settlement)
+		if factsErr != nil {
+			failure := domain.SafeError(factsErr)
+			settlement.Failure = primary(failure.Code, failure.Message)
+			settlement.EvidenceStatus = "incomplete"
+			if uncertainEvidence(factsErr) {
+				settlement.EvidenceStatus = "uncertain"
+				e.fence(a.ID, "workflow_evidence_uncertain", "Workflow result integrity or persistence could not be established; no stage is replayed.")
+			}
+		}
+	}
 	e.control.Lock()
-	_, settleErr := e.db.SettleAttempt(context.Background(), a.ID, domain.Settlement{Outcome: outcome, Cleanup: cleanup, EvidenceStatus: evidenceState, RootTerminal: r.Terminal && r.Succeeded, InputComplete: inputComplete, ExitCode: code, UsableOutput: usable})
+	settleErr := e.settleExecutionLocked(context.Background(), a, settlement, workflowFacts)
 	e.control.Unlock()
 	if settleErr != nil {
 		e.fence(a.ID, "storage_failed", "Terminal execution state could not be acknowledged. Retain its evidence and do not replay.")
@@ -509,8 +579,11 @@ func (e *Engine) settleUnlaunched(a domain.Attempt, f *domain.PrimaryFailure, ca
 		f = primary("deadline_exceeded", "The captured execution deadline expired before worker instructions began.")
 		outcome = "failed"
 	}
+	// This helper is used only before any application effect permit is issued.
+	settlement := domain.Settlement{NoProcessCreated: true, EffectsKnown: a.ExecutorKind == "local_application", Outcome: outcome, Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: evidenceState, Failure: f}
+	facts := e.workflowFailedSettlementFacts(a, settlement)
 	e.control.Lock()
-	_, err := e.db.SettleAttempt(context.Background(), a.ID, domain.Settlement{NoProcessCreated: true, Outcome: outcome, Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: evidenceState, Failure: f})
+	err := e.settleExecutionLocked(context.Background(), a, settlement, facts)
 	e.control.Unlock()
 	if err != nil {
 		e.fence(a.ID, "storage_failed", "Preparation could not be settled durably. No automatic retry is permitted.")
@@ -541,7 +614,40 @@ func (e *Engine) AcceptResponse(ctx context.Context, id string, in domain.Respon
 		}
 		return e.failure(in.RequestID, domain.Fail("acceptance_unavailable", "Fresh response verification did not complete or its integrity failed. Preserve its evidence and retry the same acceptance identity after inspection."))
 	}
+	workflowView, workflowErr := e.db.Workflow(ctx, id, domain.WorkflowSelector{})
+	if workflowErr != nil {
+		return e.failure(in.RequestID, workflowErr)
+	}
+	if workflowView.Workflow != nil {
+		progress, progressErr := e.inspectWorkflowProgress(ctx, id, *workflowView.Workflow)
+		if progressErr != nil {
+			return e.failure(in.RequestID, progressErr)
+		}
+		binding := progress.subject.Response
+		if binding == nil || binding.ProducerAttemptID != in.AttemptID || binding.ResponseArtifactID != in.ResponseArtifactID || binding.ResponseSHA256 != in.ResponseSHA256 || progress.version.Version.Version != in.TaskVersion || progress.decision.Action != "response_acceptance_pending" {
+			return e.failure(in.RequestID, domain.Fail("acceptance_unavailable", "Accept the exact current deliverable producer only after every required review, check and scoped action qualifies."))
+		}
+		ids := append(progress.subject.artifactIDs(), progress.artifactIDs...)
+		ids = append(ids, m.ID)
+		proofs, proofErr := e.verifyWorkflowArtifacts(ctx, ids...)
+		if proofErr != nil {
+			return e.failure(in.RequestID, domain.Fail("evidence_unavailable", "The response acceptance evidence could not be verified freshly."))
+		}
+		e.control.Lock()
+		if e.fenced {
+			e.control.Unlock()
+			return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Resolve ownership or persistence uncertainty before accepting the current workflow response."))
+		}
+		result := e.db.AcceptResponseWithWorkflow(ctx, id, in, proofs)
+		e.guardMutationLocked(result)
+		e.control.Unlock()
+		return result
+	}
 	e.control.Lock()
+	if e.fenced {
+		e.control.Unlock()
+		return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Resolve ownership or persistence uncertainty before accepting this response."))
+	}
 	result := e.db.AcceptResponse(ctx, id, in, domain.VerifiedResponse{ArtifactID: m.ID, SHA256: *m.SHA256, PhysicalIdentity: m.Identity, ByteLength: m.ByteLength})
 	e.guardMutationLocked(result)
 	e.control.Unlock()

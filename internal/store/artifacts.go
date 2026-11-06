@@ -40,7 +40,7 @@ func (s *Store) PutArtifact(ctx context.Context, in domain.ArtifactRecord) error
 		return e
 	}
 	switch in.Kind {
-	case "prompt", "stdout", "stderr", "final_response", "source_manifest", "source_file", "index_snapshot", "candidate_manifest", "candidate_delta":
+	case "prompt", "stdout", "stderr", "final_response", "source_manifest", "source_file", "index_snapshot", "candidate_manifest", "candidate_delta", "candidate_index", "destination_manifest", "destination_file", "review_result", "delivery_plan", "review_schema":
 	default:
 		return domain.Invalid("artifact kind")
 	}
@@ -59,6 +59,9 @@ func (s *Store) PutArtifact(ctx context.Context, in domain.ArtifactRecord) error
 		a, e := s.attempt(ctx, tx, in.AttemptID)
 		if e != nil {
 			return e
+		}
+		if in.Kind == "review_schema" && (a.Role != "review" || a.WorkflowID == "") {
+			return domain.Invalid("workflow review schema owner")
 		}
 		old, e := s.artifact(ctx, tx, in.ID)
 		if e != nil {
@@ -196,6 +199,11 @@ func (s *Store) PutCandidate(ctx context.Context, in domain.Candidate) error {
 				return domain.Invalid("closed owned candidate artifacts")
 			}
 		}
+		if a.WorkflowID != "" {
+			if e := s.bindWorkflowCandidate(ctx, tx, a, &in); e != nil {
+				return e
+			}
+		}
 		in.Verification = "pending"
 		in.Integration = "not_performed"
 		if _, e = tx.ExecContext(ctx, "INSERT INTO candidates VALUES(?,?,?,?,?,?,?)", in.ID, in.AttemptID, in.SourceSnapshotID, in.ManifestArtifactID, in.DeltaArtifactID, in.WorkspaceRef, encode(in)); e != nil {
@@ -226,6 +234,9 @@ func (s *Store) candidate(ctx context.Context, q queryer, id string) (domain.Can
 	c, e := decode[domain.Candidate](raw)
 	if e != nil {
 		return c, storageError()
+	}
+	if c.RootSourceSnapshotID == "" {
+		c.RootSourceSnapshotID = c.SourceSnapshotID
 	}
 	return c, nil
 }

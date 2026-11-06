@@ -36,7 +36,10 @@ func (s *Store) initializeSchema(ctx context.Context, foundation bool) error {
 		if err := validateForeignKeys(ctx, tx); err != nil {
 			return err
 		}
-		return initializeRoutingTx(ctx, tx)
+		if err := initializeRoutingWithDefaultTx(ctx, tx, foundation); err != nil {
+			return err
+		}
+		return initializeWorkflowTx(ctx, tx)
 	})
 }
 

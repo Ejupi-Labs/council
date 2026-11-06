@@ -8,12 +8,15 @@ main remains unchanged.
 
 ## Current preview
 
-Preview **2.0.0-dev.4** implements economical routing across native Codex and Claude Code in
-isolated managed workspaces. The Ejupi Labs UI and CLI share original instructions, literal pins,
-captured routing decisions, task budgets, exact output, source-relative candidates, history,
-Stop and recovery incidents. Feature004 passed independent review, all six native platform jobs
-and Linux race checks at `3f4a18e` in [run42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
-Later workflow features remain under development.
+Preview **2.0.0-dev.5** adds verified task workflows to economical routing across native Codex
+and Claude Code in isolated managed workspaces. Auto connects authoring, proportionate checks,
+necessary independent review, bounded correction and the captured delivery scope. The Ejupi Labs
+UI and CLI retain original instructions, literal pins, stage lineage, exact output, history,
+Stop and recovery incidents. **Feature 005 implementation is under qualification; it is not yet
+accepted or qualified on all native targets.** Features 001–004 remain accepted. Feature 004
+passed all six native platform jobs and Linux race checks at `3f4a18e` in
+[run 42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
+Features 006–012 remain planned.
 
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly
@@ -40,13 +43,21 @@ compatibility remains **unqualified** for both connections. Discovery checks fil
 without invoking vendors or inspecting credentials. Fixed fake mode exercises real process
 ownership, workspace and evidence handling with local fixtures; it never falls back to a provider.
 
-New tasks default to **two managed attempt admissions in one shared 30-minute wall-clock window**
-from the first admission, including queue, preparation, execution and settlement. Cleanup can
-continue after a deadline requests Stop. An explicit grant adds authority without starting work.
-Automatic continuation defaults OFF. A bounded opt-in supports only proven pre-launch ineligibility
-before native process preparation/creation. Generic native errors, prose, retry progress and
-terminal-transient continuation do not authorize another attempt. Native internal calls, retries
-and fallback remain outside Council's managed admission count.
+A fresh 005 installation defaults to **four managed model admissions in one shared 30-minute
+wall-clock window** from the first admission. Every existing saved default, including two, stays
+unchanged. Existing task grants, use and deadlines are never refilled by an upgrade or preference
+edit. Author, reviewer and corrector processes consume model admissions; local checks and local
+application do not. Queue, preparation, execution and required settlement share the captured
+window. Cleanup can continue after expiry, and a late applied effect does not turn a failed task
+into success. An explicit grant adds finite authority without starting work or re-arming an old
+automatic result.
+
+Routing continuation defaults OFF; its bounded opt-in supports only proven pre-launch ineligibility
+before native process preparation/creation. Auto workflow correction is separate: at most one
+captured cycle can follow an actual review blocker or observed failed required check within the
+remaining task authority. Generic native errors, prose and uncertain cleanup authorize neither
+retry nor correction. Native internal calls, retries and fallback remain outside Council's
+managed admission count.
 
 Usage views keep known sourced counters, missing coverage, fake work, reference-price declarations
 and native client estimates separate. Declared accounts/links group reports and policy; they do
@@ -54,9 +65,25 @@ not select or attest native login identity. Actual model/account/access/allowanc
 unknown when unreported. Paid API execution, actual-account pins, hard spending caps and exact
 effective-model guarantees are unsupported. No subscription saving is inferred from a fixture.
 
-A response-only result can be explicitly accepted after review. Authored candidates remain
-verification pending for feature 005; this preview does not merge or publish changes. Native
-session IDs are observed identifiers, not resume support or Council conversation history.
+Ordinary Start uses Auto without an account, model or workflow wizard. A narrowly recognized
+literal document replacement can finish with one author and a sufficient observed builtin check.
+Other work retains the necessary check/review gaps and, when authorized, linked correction and
+recheck evidence. Agent claims do not replace observed verifier receipts. Optional
+`--workflow author_only` retains standalone authoring without a qualified Auto workflow result.
+
+Delivery defaults to review only. Saved autonomous full access does not grant local delivery:
+choose the prospective verified-local scope once to authorize compatible future tasks. Under that
+captured scope, ordinary single-link text additions, replacements and deletions under existing
+parents can be applied while preserving unrelated working and staged edits. Unsupported index,
+mode, type, symlink or cross-volume changes remain retained with a named gap; destination conflicts
+preserve the candidate and user work. Candidate creation records stay immutable; current workflow
+evidence and acceptance describe later qualification and delivery.
+
+Commit, push, publication and deployment are not implicit. A supported external command needs an
+explicit task declaration with its action, destination and arguments. Its successful command exit
+does not attest remote publication. Plain response-only work keeps the existing explicit response
+acceptance action and exact replay; supporting review never replaces the selected author's answer.
+Native session IDs are observed identifiers, not resume support or Council conversation history.
 
 ## Run a native preview
 
@@ -74,6 +101,13 @@ council tasks start --project PROJECT_ID --task "Describe the work" --json
 council tasks start --project PROJECT_ID --task "Routine local work" --suitability routine --json
 council tasks start --project PROJECT_ID --task "Describe the work" --harness claude-code --json
 council tasks start --project PROJECT_ID --task "Local fixture" --fake --json
+council workflow preferences get --json
+council tasks workflow TASK_ID --json
+council tasks steps TASK_ID --json
+council tasks checks TASK_ID --json
+council tasks reviews TASK_ID --json
+council tasks findings TASK_ID --json
+council tasks deliveries TASK_ID --json
 council routing contexts --json
 council routing capacity --context codex-native --json
 council tasks routing TASK_ID --json
@@ -88,13 +122,17 @@ On Windows supply a native absolute path, quoting spaces normally. `council ui -
 reports a private local launch URL instead of opening a browser. Keep that URL private. Closing
 the browser ends observation while work continues. Foreground Ctrl+C requests owner shutdown;
 explicit CLI execution starts a continuing owner when needed. `service stop` targets the existing
-owner and settles its work. Current execution requires dev.4/004-v1. The exact known dev.2/dev.3
-maintenance Stop paths remain supported; they do not grant 004 execution compatibility.
+owner and settles its work. Current execution requires dev.5, execution contract `005-v1`, workflow
+contract `005-v1` and the current capabilities. Exact known dev.2/dev.3/dev.4 owners retain only
+their maintenance Stop compatibility path; they do not grant current execution compatibility.
 
 New state lives at `<user-home>/.council/v2/`, separate from legacy collaboration data. Retained task
 instructions/history and acknowledged receipts keep their original meaning. Legacy tasks require
-explicit budget adoption before a new attempt; adoption itself starts no worker. Autonomous full
-access is the requested default and maps to supported native permission controls. Supervised
+explicit budget adoption before a new attempt when that authority is missing. Old tasks remain
+standalone until explicit workflow adoption creates a new captured version. Neither adoption
+starts work: use **Run task** for an adopted workflow's first author; advance only an existing
+eligible workflow stage. Autonomous full access is the requested default and maps to supported
+native permission controls. Supervised
 approval is unavailable, and no universal OS sandbox is promised. Draft updates and routing
 mutations use expected revisions. Preserve `--request-id` when retrying an uncertain mutation.
 
@@ -131,8 +169,8 @@ Platform runtime evidence and cross-compilation evidence are reported separately
 - [Claude interoperability specification](specs/003-claude-interoperability/spec.md)
 - [Economical routing specification](specs/004-economical-routing/spec.md)
 - [Economical routing quickstart](specs/004-economical-routing/quickstart.md)
-- [Verified delivery specification — design stage](specs/005-verified-delivery/spec.md)
-- [Verified delivery design quickstart](specs/005-verified-delivery/quickstart.md)
+- [Verified delivery specification — implementation under qualification](specs/005-verified-delivery/spec.md)
+- [Verified delivery quickstart and qualification procedure](specs/005-verified-delivery/quickstart.md)
 
 Each feature follows Specify specification → design → tasks → implementation → independent review
 → corrections and acceptance before the next begins. Technology and limitations are documented in

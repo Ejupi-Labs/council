@@ -37,7 +37,7 @@ func TestRoutingCLIActualOwnerSelectsReportedContextAndDebitsOnce(t *testing.T) 
 	decodeCLIData(t, f.run("routing", "report", "--context", "claude-native", "--expected-revision", "1", "--dimension", "occupancy", "--state", "available"), &available)
 	decodeCLIData(t, f.run("routing", "report", "--context", "claude-native", "--expected-revision", available.Capacity.Revision, "--dimension", "allowance", "--state", "available"), &available)
 	request := domain.NewID()
-	args := []string{"tasks", "start", "--project", opened.Project.ID, "--task", "\ufeffExactly retained Auto input\r\n東京", "--suitability", "routine", "--deliverable", "response_only", "--fake", "--timeout-seconds", "30", "--request-id", request}
+	args := []string{"tasks", "start", "--project", opened.Project.ID, "--task", "\ufeffExactly retained Auto input\r\n東京", "--suitability", "routine", "--workflow", "author_only", "--budget-admissions", "2", "--deliverable", "response_only", "--fake", "--timeout-seconds", "30", "--request-id", request}
 	first := f.run(args...)
 	var admission domain.Admission
 	decodeCLIData(t, first, &admission)

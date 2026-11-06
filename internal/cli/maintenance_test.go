@@ -16,12 +16,15 @@ import (
 func metadataFixture(ownerID string, old bool) map[string]any {
 	m := map[string]any{"ownerInstanceId": ownerID, "apiVersion": 1, "appVersion": domain.AppVersion,
 		"scope": "managed_execution", "managedExecution": "native_codex_claude", "executionContract": domain.ExecutionContract,
-		"maintenanceContract": "owner-stop/1", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing"},
+		"workflowContract":    domain.WorkflowContract,
+		"maintenanceContract": "owner-stop/1", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery"},
 		"admission": map[string]any{"state": "open", "incidentId": nil},
 		"capacity":  map[string]any{"resourceId": "managed-native", "limit": 1, "activeAttemptId": nil}}
 	if old {
 		m["appVersion"], m["managedExecution"], m["executionContract"] = "2.0.0-dev.2", "native_codex", "002-v1"
 		delete(m, "maintenanceContract")
+		delete(m, "workflowContract")
+		m["capabilities"] = []string{"workspace_foundation", "managed_execution"}
 		m["capacity"] = map[string]any{"connectionId": "codex-native", "limit": 1, "activeAttemptId": nil}
 	}
 	return m

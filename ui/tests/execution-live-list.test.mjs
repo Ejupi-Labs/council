@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 test('task-list phases follow running and Stop without replacing selected work or newer typing', { timeout: 90000 }, async () => {
   const f = await fixture(); let owner;
@@ -8,7 +8,7 @@ test('task-list phases follow running and Stop without replacing selected work o
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check();
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await legacyExecution(page);
     await page.locator('#task-fake-scenario').selectOption('slow');
     const original = 'Observe this exact slow fake task and stop it explicitly.';
     await page.locator('#task-text').fill(original); await page.locator('#start-task').click();

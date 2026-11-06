@@ -67,7 +67,15 @@ func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain
 	} else if previous != nil {
 		return *previous
 	}
-	facts, err := e.startRoutingFacts(ctx, in)
+	routingFacts, err := e.startRoutingFacts(ctx, in)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	acceptance, acceptanceErr := domain.ResolveAcceptance(in.Acceptance)
+	if acceptanceErr != nil {
+		return e.failure(in.RequestID, acceptanceErr)
+	}
+	facts, err := e.captureWorkflow(ctx, in.ProjectID, in.OriginalText, domain.TaskVersion{Acceptance: acceptance}, in.Workflow, in.ExecutionMode, in.FakeScenario, routingFacts)
 	if err != nil {
 		return e.failure(in.RequestID, err)
 	}
@@ -76,7 +84,7 @@ func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain
 		e.control.Unlock()
 		return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Dispatch is fenced by unresolved ownership or persistence. Inspect the retained incident before admitting work."))
 	}
-	result := e.db.CreateTaskWithRouting(ctx, e.config.OwnerInstanceID, in, facts)
+	result := e.db.CreateTaskWithWorkflow(ctx, e.config.OwnerInstanceID, in, facts)
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
@@ -109,10 +117,14 @@ func (e *Engine) Guidance(ctx context.Context, id string, in domain.GuidanceInpu
 			return e.failure(in.RequestID, err)
 		}
 	}
+	workflowFacts, err := e.guidanceWorkflowFacts(ctx, id, in, facts)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
 	e.prepareGate.Lock()
 	defer e.prepareGate.Unlock()
 	e.control.Lock()
-	result := e.db.UpdateGuidanceWithRouting(ctx, id, in, facts)
+	result := e.db.UpdateGuidanceWithWorkflow(ctx, id, in, workflowFacts)
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
@@ -144,7 +156,15 @@ func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAtt
 	if err != nil {
 		return e.failure(in.RequestID, err)
 	}
-	facts, err := e.frozenRoutingFacts(ctx, detail.Task, *view.Authority, in.ExecutionMode)
+	mode := in.ExecutionMode
+	workflowView, err := e.db.Workflow(ctx, id, domain.WorkflowSelector{})
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	if workflowView.Workflow != nil {
+		mode = workflowView.Workflow.Authority.ExecutionMode
+	}
+	facts, err := e.frozenRoutingFacts(ctx, detail.Task, *view.Authority, mode)
 	if err != nil {
 		return e.failure(in.RequestID, err)
 	}
@@ -153,7 +173,7 @@ func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAtt
 		e.control.Unlock()
 		return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Dispatch is fenced by unresolved ownership or persistence. Inspect the retained incident before admitting work."))
 	}
-	result := e.db.StartAttemptWithRouting(ctx, e.config.OwnerInstanceID, id, in, facts)
+	result := e.db.StartAttemptWithWorkflow(ctx, e.config.OwnerInstanceID, id, in, domain.WorkflowAdmissionFacts{Routing: facts})
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
@@ -307,6 +327,7 @@ func (e *Engine) schedule() {
 				}
 				e.control.Unlock()
 				e.continueRouting(a.ID)
+				e.continueWorkflow(a.ID)
 				e.signal()
 			}(claimed)
 		}

@@ -73,13 +73,13 @@ export interface TaskBudgetView { budget: TaskBudget | null; adoptionRequired: b
 export interface BudgetAmendment { id: string; taskId: string; requestId: string; action: string; additionalAdmissions: string; newWindowSeconds: number | null; priorBudget: TaskBudget | null; budget: TaskBudget; authorityId: string | null; taskVersion: string; createdAt: string }
 export interface BudgetAmendmentResult { task: TaskSummary; version?: TaskVersion; amendment: BudgetAmendment; budget: TaskBudget; authority?: TaskRoutingAuthority }
 export interface BudgetLedgerEntry { id: string; sequence: string; taskId: string; budgetRevision: string; kind: string; requestId: string; attemptId: string | null; grantedDelta: string; consumedDelta: string; window: BudgetWindow; createdAt: string }
-export interface UsageItem { attemptId: string; attemptSequence: string; executionMode: 'native' | 'fake'; outcome: string | null; selectedUsageScope: 'top_level' | 'whole_tree' | 'unknown' | 'fake_unmeasured'; usage: UsageObservation; nativeModels: NativeModelsObservation | null; evidenceArtifactIds: string[] }
+export interface UsageItem { executorKind?: string; role?: string; attemptId: string; attemptSequence: string; executionMode: 'native' | 'fake'; outcome: string | null; selectedUsageScope: 'top_level' | 'whole_tree' | 'unknown' | 'fake_unmeasured' | 'local_not_applicable'; usage: UsageObservation; nativeModels: NativeModelsObservation | null; evidenceArtifactIds: string[] }
 export interface CounterSubtotal { knownValue: string | null; contributingAttemptIds: string[]; missingAttemptIds: string[] }
 export interface ScopeSubtotal { inputTokens: CounterSubtotal; outputTokens: CounterSubtotal; cachedInputTokens: CounterSubtotal; cacheCreationInputTokens: CounterSubtotal }
 export interface UsagePage {
   taskId: string; items: UsageItem[]; nextCursor: string | null;
   knownSubtotal: { scope: 'returned_attempts'; byUsageScope: { top_level: ScopeSubtotal; whole_tree: ScopeSubtotal } };
-  coverage: { scope: 'returned_attempts'; status: string; includedAttemptIds: string[]; unknownAttemptIds: string[]; excludedFakeAttemptIds: string[] };
+  coverage: { scope: 'returned_attempts'; status: string; includedAttemptIds: string[]; unknownAttemptIds: string[]; excludedFakeAttemptIds: string[]; excludedLocalAttemptIds?: string[] };
   estimates: { attemptId: string; model: string; currency: string; value: string; scope: string; source: string; observedAt: string; evidenceArtifactIds: string[]; previewCompleteness: string }[];
   referencePrices: { attemptId: string; decisionId: string; profileId: string | null; referencePrice: ReferencePrice }[];
   charges: { status: 'unknown'; items: [] };

@@ -5,8 +5,9 @@ six-platform native qualification; features 002–003 also have Linux race quali
 Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
 Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172669381.
-Its 38-row evidence matrix and independent review are closed. Feature005 has reviewed functional
-specification and active technical design/tasks; features006–012 remain planned.
+Its 38-row evidence matrix and independent review are closed. Feature 005 design was committed
+at `24b0cf1`; dev.5/005-v1 implementation is under qualification. Its independent correction,
+render, package and native/race acceptance gates remain open. Features 006–012 remain planned.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
@@ -76,13 +77,14 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Every slice below has status **NOT IMPLEMENTED**. Its exit describes required future evidence,
-not a result already achieved. The order is sequential; later slices build on accepted earlier
-ones and must preserve their working journeys.
+Features 001–004 are accepted; 005 implementation is under qualification; 006–012 are planned
+and not implemented. The exit descriptions define each slice's acceptance boundary and are not
+pass claims. The order is sequential; later slices build on accepted earlier ones and must
+preserve their working journeys.
 
 ### 001 — Workspace, onboarding and branded foundation
 
-Planned context: `specs/001-workspace-foundation/`.
+Accepted context: `specs/001-workspace-foundation/`.
 
 Deliver a launchable local UI and CLI that open an existing project, retain a task draft and make
 the selected project and setup status clear. The main screen prioritizes the composer, recent
@@ -105,7 +107,7 @@ workspace/setup preparation and must not display a simulated task as a completed
 
 ### 002 — Managed task execution through stable native Codex
 
-Planned context: `specs/002-managed-execution/`.
+Accepted context: `specs/002-managed-execution/`.
 
 Make a bounded task executable and inspectable from UI and CLI using Codex's supported stable
 native interface. Preserve original instructions and versioned guidance, record effective
@@ -147,7 +149,7 @@ authorized live qualification have distinct status; absent live testing is expli
 
 ### 004 — Economical routing, account capacity and observed usage
 
-Planned context: `specs/004-economical-routing/`.
+Accepted context: `specs/004-economical-routing/`.
 
 Add deterministic target selection using suitability, available capability, explicit pins, account
 preferences, declared budgets and payment policy. Prefer a smaller suitable model or appropriate
@@ -168,7 +170,9 @@ and budget; no percentage savings claim is inferred from fake calls or call coun
 
 ### 005 — Review, correction, verifiers and authorized local integration
 
-Planned context: `specs/005-verified-delivery/`.
+Active context: `specs/005-verified-delivery/`. Design commit `24b0cf1`; implementation under
+qualification, not accepted. Current source identifies dev.5 with execution/workflow contracts
+`005-v1`. Earlier six-target/race passes do not qualify this change.
 
 Connect the task outcome to a proportionate executable workflow: implementation, independent
 review when needed, correction, observed deterministic checks and delivery. Review receives the
@@ -187,6 +191,26 @@ implementation, review, a blocking finding, correction, affected verification an
 integration. Another fixture retains a review-only candidate. Stale checks, inaccessible review
 evidence and changed destinations prevent false acceptance or overwrite. Failed attempts remain
 visible in the corrected task's lineage.
+
+The implemented path under qualification keeps ordinary project/task Start as Auto. A recognized
+literal document replacement can use one author and an observed builtin proof; required review
+uses a fresh role context, immutable findings and at most one captured correction cycle followed
+by affected checks/review. Local checks and no-process application are separate history entries,
+not model admissions or measured zero-token calls. Only fresh 005 homes initialize four units;
+all existing saved defaults, including two, and retained task budgets/windows stay unchanged.
+
+Review-only delivery is the default. Saved autonomous full access does not supply local-delivery
+consent. A prospective saved local scope can authorize compatible text add/replace/delete under
+existing parents; unsupported file/index/metadata states and destination conflicts retain a gap
+and preserve evidence. External task declarations authorize only their captured command/action/
+destination; command completion is separate from remote publication attestation. Plain responses
+keep explicit user acceptance, original producer identity and unchanged acknowledgement replay.
+
+Old tasks remain standalone until explicit workflow adoption creates a new version without work
+or budget refill. **Run task** starts that adopted version's first author; advance/recheck require
+an existing stage and subject. UI/CLI expose current next action/owner and complete retained
+evidence without a mandatory account/model/check wizard. Stop and the common clock apply through
+required settlement; a retained applied effect cannot erase a failed/cancelled task outcome.
 
 ### 006 — Dependent and parallel task graphs with scoped handoffs
 

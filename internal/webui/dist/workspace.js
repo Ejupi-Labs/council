@@ -2,6 +2,7 @@ import { AgentsView } from './agents.js';
 import { TasksView } from './tasks.js';
 import { DraftsView } from './drafts.js';
 import { RoutingView } from './routing.js';
+import { WorkflowView } from './workflow.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, verifyOwner, writeSession } from './api.js';
 function isAbsolute(path) {
     return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || /^\\\\[^\\]+\\[^\\]+/.test(path);
@@ -10,7 +11,8 @@ class Workspace {
     projects = new Map();
     drafts = new DraftsView();
     routing = new RoutingView();
-    tasks = new TasksView(this.drafts, this.routing);
+    workflow = new WorkflowView();
+    tasks = new TasksView(this.drafts, this.routing, this.workflow);
     agents = new AgentsView(id => this.tasks.selectHarness(id), capabilities => this.tasks.setCapabilities(capabilities));
     path = element('project-path');
     projectSelect = element('project-select');
@@ -34,6 +36,10 @@ class Workspace {
     constructor() {
         this.routing.onTaskChanged = id => this.tasks.refreshAfterRoutingMutation(id);
         this.routing.onTaskObserved = () => this.tasks.refreshRoutingControls();
+        this.workflow.onTaskChanged = id => this.tasks.refreshAfterRoutingMutation(id);
+        this.workflow.onObserved = () => this.tasks.refreshRoutingControls();
+        this.workflow.onReadArtifact = id => { void this.tasks.openEvidence(id); };
+        this.workflow.onSelectAttempt = id => { void this.tasks.inspectAttempt(id); };
         if (this.pendingOpen)
             this.pendingOpen.unresolved = true;
         if (this.pendingPolicy) {
@@ -80,6 +86,7 @@ class Workspace {
     async connect() {
         const generation = ++this.connectionGeneration;
         this.routing.setReady(false);
+        this.workflow.setReady(false);
         feedback('app-status', 'Verifying access to the local owner…');
         element('reconnect').disabled = true;
         try {
@@ -89,16 +96,18 @@ class Workspace {
             this.ready = true;
             this.updateControls();
             this.routing.setReady(supportsManagedExecution(meta));
+            this.workflow.setReady(supportsManagedExecution(meta));
             this.tasks.setOwner(meta);
-            feedback('app-status', meta.executionContract === '004-v1' ? 'Connected to the local workspace. Economical Auto uses Codex and Claude with one shared managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
+            feedback('app-status', meta.executionContract === '005-v1' ? 'Connected to the local workspace. Auto uses finite verified workflows with one shared managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
             // Recovery never replays a cached mutation automatically; each retry remains explicit.
-            await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh(), this.routing.refresh()]);
+            await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh(), this.routing.refresh(), this.workflow.refreshPreference()]);
         }
         catch (error) {
             if (generation !== this.connectionGeneration)
                 return;
             this.ready = false;
             this.routing.setReady(false);
+            this.workflow.setReady(false);
             this.tasks.disconnect();
             this.updateControls();
             feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');

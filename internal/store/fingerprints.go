@@ -5,6 +5,25 @@ import "github.com/Ejupi-Labs/council/v2/internal/domain"
 func TaskStartFingerprint(in domain.StartTaskInput) string {
 	return Fingerprint("tasks.start", normalizeStart(in))
 }
+func WorkflowAdoptFingerprint(id string, in domain.WorkflowAdoptInput) string {
+	return Fingerprint("tasks.workflow.adopt", struct {
+		TaskID string
+		Input  domain.WorkflowAdoptInput
+	}{id, in})
+}
+func WorkflowAdvanceFingerprint(id string, in domain.WorkflowAdvanceInput) string {
+	return Fingerprint("tasks.workflow.advance", struct {
+		TaskID string
+		Input  domain.WorkflowAdvanceInput
+	}{id, in})
+}
+func WorkflowCheckFingerprint(id string, in domain.WorkflowCheckInput) string {
+	return Fingerprint("tasks.workflow.check", struct {
+		TaskID string
+		Input  domain.WorkflowCheckInput
+	}{id, in})
+}
+
 func GuidanceFingerprint(id string, in domain.GuidanceInput) string {
 	return Fingerprint("tasks.guidance", struct {
 		TaskID string

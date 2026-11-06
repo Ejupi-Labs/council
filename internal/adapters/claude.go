@@ -19,6 +19,7 @@ const nativeLineLimit = 1 << 20
 // ClaudeParser accepts the declared one-prompt native profile. It never extracts
 // response text from assistant prose or treats native prose as orchestration.
 type ClaudeParser struct {
+	reviewProfile    bool
 	mu               sync.Mutex
 	line             []byte
 	result           ProtocolResult
@@ -306,7 +307,16 @@ func (p *ClaudeParser) readResult(object map[string]jsontext.Value) error {
 	if subtype != "success" || isError || stopReason == "refusal" || stopReason == "tool_deferred_unavailable" {
 		p.observeFailure("native_failure", "Native Claude reported an unsuccessful terminal result. Inspect retained output for details.")
 	}
-	if subtype == "success" {
+	if subtype == "success" && p.reviewProfile {
+		structured, present := object["structured_output"]
+		if !present || structured.Kind() != '{' {
+			return p.fail("protocol_invalid", "Native Claude review success has no supported structured output object.")
+		}
+		if p.result.Failure == nil {
+			p.result.StructuredOutput = bytes.Clone(structured)
+			p.terminalOK = true
+		}
+	} else if subtype == "success" {
 		response, ok := nativeText(object["result"])
 		if !ok {
 			return p.fail("protocol_invalid", "Native Claude success result has no supported final-response string.")
@@ -487,6 +497,7 @@ func (p *ClaudeParser) Result() ProtocolResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	result := p.result
+	result.StructuredOutput = bytes.Clone(result.StructuredOutput)
 	result.Observations = cloneObservations(result.Observations)
 	if result.Failure != nil {
 		copy := *result.Failure

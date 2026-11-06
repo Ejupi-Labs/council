@@ -40,6 +40,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	values := map[string]bool{"api-version": true, "request-id": true, "expected-revision": true, "limit": true, "cursor": true, "project": true, "task": true, "task-file": true, "revision": true}
 	addExecutionFlags(bools, values)
 	addRoutingFlags(values)
+	addWorkflowFlags(values)
 	bools["version"] = !taskVersionCommand
 	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
@@ -101,6 +102,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
 	if routingCommand(c.name) {
 		return parseRouting(c, positionals, flags, repeated, stdin)
+	}
+	if workflowCommand(c.name) {
+		return parseWorkflow(c, positionals, flags, stdin)
 	}
 	if executionCommand(c.name) {
 		return parseExecution(c, positionals, flags, repeated, stdin)

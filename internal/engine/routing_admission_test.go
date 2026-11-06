@@ -19,7 +19,8 @@ func TestRoutingProfileLaunchesOwnedClaudeFixtureWithoutChangingIntent(t *testin
 		OriginalText:  "\ufeffKeep the exact task 東京\r\n$(literal text)",
 		ExecutionMode: "fake", FakeScenario: "response",
 		Acceptance: &domain.AcceptanceInput{Deliverable: "response_only"},
-		Routing:    &domain.RoutingOptions{TargetProfileID: "claude-haiku-economy"},
+		Workflow:   &domain.WorkflowInput{Mode: "author_only"},
+		Routing:    &domain.RoutingOptions{TargetProfileID: "claude-haiku-economy", Budget: &domain.RoutingBudgetInput{AdmissionLimit: "2"}},
 	}
 	first := e.StartTask(ctx, in)
 	admission := decodeAdmission(t, first)

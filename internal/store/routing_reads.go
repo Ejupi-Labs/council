@@ -124,7 +124,7 @@ func (s *Store) Usage(ctx context.Context, taskID string, limit int, cursor stri
 			rows.Close()
 			return empty, storageError()
 		}
-		item := domain.UsageItem{AttemptID: a.ID, AttemptSequence: strconv.FormatInt(seq, 10), ExecutionMode: a.ExecutionMode, Outcome: a.Outcome, Usage: a.TargetObservations.Usage, NativeModels: a.TargetObservations.NativeModels, EvidenceArtifactIDs: []string{}}
+		item := domain.UsageItem{ExecutorKind: a.ExecutorKind, Role: a.Role, AttemptID: a.ID, AttemptSequence: strconv.FormatInt(seq, 10), ExecutionMode: a.ExecutionMode, Outcome: a.Outcome, Usage: a.TargetObservations.Usage, NativeModels: a.TargetObservations.NativeModels, EvidenceArtifactIDs: []string{}}
 
 		items = append(items, item)
 		attempts = append(attempts, a)

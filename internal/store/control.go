@@ -20,6 +20,12 @@ func (s *Store) StopAttempt(ctx context.Context, attemptID, requestID string) do
 			if e != nil {
 				return 0, nil, e
 			}
+			if !suppressed {
+				suppressed, e = s.suppressWorkflowAdvance(ctx, tx, a)
+				if e != nil {
+					return 0, nil, e
+				}
+			}
 			data := map[string]any{"attemptId": attemptID, "stopAccepted": false, "reason": "already_settled", "attemptRevision": a.Revision, "cleanupState": a.Cleanup.State}
 			if suppressed {
 				data["continuationSuppressed"] = true

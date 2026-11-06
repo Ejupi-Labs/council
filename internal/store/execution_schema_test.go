@@ -43,7 +43,7 @@ func TestExecutionMigrationRetainsFoundationReceipt(t *testing.T) {
 		t.Fatal("foundation receipt bytes changed", e)
 	}
 	var version int
-	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 4 {
+	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 5 {
 		t.Fatal(version, e)
 	}
 	r, e := s.Replay(context.Background(), id, "policy.set", "original-input")

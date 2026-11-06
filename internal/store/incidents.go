@@ -64,6 +64,9 @@ func (s *Store) RecoverOwner(ctx context.Context, newOwnerID string) error {
 			return storageError()
 		}
 		for _, a := range pending {
+			if e := s.recoverWorkflowDelivery(ctx, tx, a); e != nil {
+				return e
+			}
 			cleanup := domain.Cleanup{State: "verified", Scope: "not_launched"}
 			if a.LaunchIntent {
 				cleanup = domain.Cleanup{State: "unknown", Scope: a.Cleanup.Scope}
@@ -74,9 +77,16 @@ func (s *Store) RecoverOwner(ctx context.Context, newOwnerID string) error {
 					}
 				}
 			}
-			_, e = s.settle(ctx, tx, a, domain.Settlement{Outcome: "interrupted", Cleanup: cleanup, EvidenceStatus: "incomplete", Failure: nil})
-			if e != nil {
-				return e
+			effectsUncertain, err := s.workflowEffectUncertain(ctx, tx, a)
+			if err != nil {
+				return err
+			}
+			settled, err := s.settleCoreWithRecovery(ctx, tx, a, domain.Settlement{Outcome: "interrupted", Cleanup: cleanup, EvidenceStatus: "incomplete", Failure: nil, EffectsKnown: a.ExecutorKind == "local_application" && !effectsUncertain}, true)
+			if err != nil {
+				return err
+			}
+			if err = s.syncWorkflowTerminal(ctx, tx, settled); err != nil {
+				return err
 			}
 		}
 		var incidents, claims int

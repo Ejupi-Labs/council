@@ -167,6 +167,10 @@ func (s *Store) ContinueRouting(ctx context.Context, ownerID, previousID string,
 		if e := checkResolvedScenario(a, a.ExecutionMode, a.FakeScenario); e != nil {
 			return noRoutingContinuation
 		}
+		workflow, step, err := s.bindWorkflowRoutingReplacement(ctx, tx, previous, &a)
+		if err != nil {
+			return err
+		}
 		t.LatestAttemptID = &a.ID
 		t.Revision, e = increment(t.Revision)
 		if e != nil {
@@ -180,13 +184,21 @@ func (s *Store) ContinueRouting(ctx context.Context, ownerID, previousID string,
 		if e = s.insertAttempt(ctx, tx, a); e != nil {
 			return e
 		}
+		if step != nil {
+			if e = insertWorkflowStepTx(ctx, tx, *step); e != nil {
+				return e
+			}
+			if e = saveWorkflow(ctx, tx, *workflow); e != nil {
+				return e
+			}
+		}
 		if e = storeRoutingDecision(ctx, tx, decision); e != nil {
 			return e
 		}
 		if e = saveTask(ctx, tx, t); e != nil {
 			return e
 		}
-		admission := domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: b}
+		admission := domain.Admission{Workflow: workflow, Step: step, Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: b}
 		receipt := domain.Receipt{RequestID: requestID, Operation: "tasks.attempts.start", CommittedAt: domain.Now()}
 		result := domain.Success(201, requestID, admission, &receipt)
 		fingerprint := Fingerprint("tasks.attempts.start", struct{ PreviousAttemptID, OwnerInstanceID, TaskRevision, BudgetRevision string }{previousID, ownerID, proof.TaskRevision, proof.BudgetRevision})

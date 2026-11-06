@@ -43,6 +43,9 @@ func (s *Store) ClaimAttempt(ctx context.Context, id, ownerID string) (domain.At
 			out, e = s.settle(ctx, tx, a, domain.Settlement{Outcome: "failed", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: "incomplete", Failure: &domain.PrimaryFailure{Code: "deadline_exceeded", Message: "The captured deadline expired before dispatch."}})
 			return e
 		}
+		if e = s.workflowAttemptControls(ctx, tx, a); e != nil {
+			return e
+		}
 		if g.ActiveAttemptID != nil {
 			return domain.Fail("attempt_active", "The managed native resource already has an owned attempt. Keep this attempt queued.")
 		}
@@ -54,6 +57,9 @@ func (s *Store) ClaimAttempt(ctx context.Context, id, ownerID string) (domain.At
 			return e
 		}
 		if e = s.bumpState(ctx, tx, &a); e != nil {
+			return e
+		}
+		if e = s.syncWorkflowClaim(ctx, tx, a); e != nil {
 			return e
 		}
 		out = a
@@ -95,8 +101,13 @@ func (s *Store) RecordLaunchIntent(ctx context.Context, id string) (domain.Attem
 		if a.SourceSnapshotID == nil {
 			return domain.Fail("source_capture_blocked", "A durable current-source snapshot is required before launch.")
 		}
-		if _, _, e = s.checkRoutingControls(ctx, tx, a, nil); e != nil {
+		if e = s.workflowAttemptControls(ctx, tx, a); e != nil {
 			return e
+		}
+		if a.ExecutorKind == "" || a.ExecutorKind == "native" {
+			if _, _, e = s.checkRoutingControls(ctx, tx, a, nil); e != nil {
+				return e
+			}
 		}
 		if a.LaunchIntent {
 			out = a
@@ -196,7 +207,8 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, u domain.AttemptUp
 		}
 		if u.ResponseArtifactID != nil {
 			artifact, e := s.artifact(ctx, tx, *u.ResponseArtifactID)
-			if e != nil || artifact.AttemptID != id || artifact.Kind != "final_response" || !artifact.Closed || artifact.Completeness != "complete" {
+			validKind := artifact.Kind == "final_response" || (artifact.Kind == "review_result" && a.Role == "review" && a.WorkflowID != "")
+			if e != nil || artifact.AttemptID != id || !validKind || !artifact.Closed || artifact.Completeness != "complete" {
 				return domain.Invalid("complete registered response for this attempt")
 			}
 			if a.ResponseArtifactID != nil && *a.ResponseArtifactID != *u.ResponseArtifactID {
@@ -383,7 +395,11 @@ func (s *Store) Tasks(ctx context.Context, projectID string, limit int, cursor s
 		if e != nil {
 			return out, e
 		}
-		out.Items = append(out.Items, taskSummary(x.t, v, a, acceptance != nil))
+		summary, e := s.currentTaskSummary(ctx, s.db, x.t, v, a, acceptance != nil)
+		if e != nil {
+			return out, e
+		}
+		out.Items = append(out.Items, summary)
 		last = x.seq
 	}
 	return out, nil

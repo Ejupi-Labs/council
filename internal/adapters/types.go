@@ -39,8 +39,10 @@ type ProtocolResult struct {
 	// FinalResponse is native terminal text; nil is absent, while an empty value
 	// can accompany a useful authored candidate. Codex retains its file import.
 	FinalResponse *string
-	Terminal      bool
-	Succeeded     bool
-	Failure       *domain.PrimaryFailure
-	Observations  domain.TargetObservations
+	// StructuredOutput is the exact native role result object. Author output is unchanged.
+	StructuredOutput []byte
+	Terminal         bool
+	Succeeded        bool
+	Failure          *domain.PrimaryFailure
+	Observations     domain.TargetObservations
 }

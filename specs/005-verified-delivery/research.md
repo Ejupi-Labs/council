@@ -234,6 +234,12 @@ private staging file must not silently install Council-private permissions into 
 user project. Unsupported ACLs, extended attributes or streams block before
 quarantine; this is a bounded eligibility proof, not a generic metadata copier.
 
+The complete application delta is the first author's captured root source manifest
+against the selected full candidate manifest. A correction's immediate-predecessor
+delta can omit earlier authored additions, replacements or deletions and is never
+substituted for this cumulative basis. The selected manifest/file artifacts remain
+bound to their actual producer; the root source owner need not be that producer.
+
 Use native no-replace moves and an append-only delivery journal:
 
 1. Recheck current authority, window, selected candidate/evidence, project/repo/
@@ -260,22 +266,58 @@ replacement's publication needs its own fresh guard and permit after quarantine.
 Retain ownership/claim until in-flight work settles; a deadline does not authorize
 another worker or replay. This is request-based cancellation, not instant rollback.
 
-The Windows primitive is `SetFileInformationByHandle(FileRenameInfo)` on a
-retained checked source handle, with `ReplaceIfExists=false` and a relative name
-under the verified destination directory handle in `RootDirectory`. This binds
-the rename to the checked source and destination objects; path-only rename is not
-an anchored fallback. The equivalent Unix candidates are Linux
+The Windows implementation uses documented native
+`NtSetInformationFile(FileRenameInformation)` (class 10) on a retained checked
+source handle with DELETE access, `ReplaceIfExists=false`, and a single relative
+leaf under the verified destination `RootDirectory` handle. The controlled ARM64
+prerequisite rejected the earlier Win32 `SetFileInformationByHandle(FileRenameInfo)`
+relative request with `ERROR_INVALID_PARAMETER`; the native API prerequisite
+passed. This is an API substitution within the same checked-source/no-replace
+contract, with no path-only fallback. The Unix implementations use Linux
 `renameat2(RENAME_NOREPLACE)` and macOS exclusive renaming with retained directory
 descriptors. Filesystem support must be qualified, with no existence-check plus
 overwriting-rename fallback. Linux and Apple documentation expressly make
 exclusive renaming a filesystem capability. Windows `MoveFileExW` documents the
 same-volume/copy limitation only: copy-allowed moves can become copy/delete, which
 is excluded. These dated API facts do not constitute native qualification.
-[Windows handle-relative rename](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info),
-[SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle),
+[NtSetInformationFile](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile),
+[FILE_RENAME_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information),
 [Windows move/copy limits](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw),
 [Linux no-replace rename](https://man7.org/linux/man-pages/man2/rename.2.html),
 [Apple exclusive-renaming capability](https://developer.apple.com/documentation/foundation/urlresourcevalues/volumesupportsexclusiverenaming).
+
+**Windows metadata qualification**: applying an unprotected target DACL while the
+stage is under Council's private parent inherited the wrong ACEs in the controlled
+negative fixture. Supported publication therefore prepares and queries a protected
+temporary effective-ACL clone on the retained stage, then restores the original
+owner/DACL/protection/inheritance semantics after its handle-relative move. That
+restore and exact readback belong to the **same already permitted publication**;
+Stop cannot skip the restore after the move. A protected substitute is not final
+success for an originally inherited target. Parent metadata is captured/rechecked;
+unsupported metadata fails before effects, while restore failure or a changed
+parent after publication is partial/uncertain, with no next action or automatic
+rollback. New files use a captured destination-parent/token inheritance rule,
+qualified against native creation; no user target ACL is normalized. Descriptor-bound
+FileEaInformation must report zero EA bytes; FILE_NO_EA_KNOWLEDGE alone does not
+exclude optional EAs. A successful LABEL_SECURITY_INFORMATION read must prove
+explicit label absence on affected files and parents (including new-file rules).
+An absent SACL-present bit is explicit absence; nonempty labels and unknown
+metadata are unsupported. The label read uses existing READ_CONTROL, without
+privileged audit-SACL access or production label normalization.
+[SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo),
+[CreatePrivateObjectSecurityEx](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createprivateobjectsecurityex).
+
+**Darwin metadata boundary**: use the retained-FD public libSystem `fgetattrlist`
+API with only `ATTR_CMN_EXTENDED_SECURITY` and `FSOPT_REPORT_FULLSIZE`; do not
+request returned-attribute/default packing. Accept a valid API-reported zero-length
+absence or explicit NOACL sentinel; refuse actual empty/populated ACLs, errors,
+unsupported or malformed returned metadata. This states the OS API's reported
+metadata, without claiming privileged forensic detection of corrupt raw security
+records that XNU can ignore. No root/private entitlement or direct deprecated
+kernel-syscall fallback is added. The cgo-free libSystem bridge adds no dependency.
+The read-date source pin is XNU `f6217f891ac0bb64f3d375211650a4c1ff8ca1ea`;
+[public API contract](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/man/man2/getattrlist.2),
+[ACL packing](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/vfs/vfs_attrlist.c#L2051).
 
 Replacement has a brief missing-name window. A concurrent recreation is preserved
 and publication fails; a last-moment changed original may already have moved to
@@ -290,6 +332,13 @@ multi-file change atomic. Go itself does not promise atomic rename on non-Unix
 systems. Qualify namespace/durability support rather than infer a universal
 power-loss guarantee. Retain precise partial effects, snapshots and live
 quarantine references, fence unsafe progression and replay only known receipts.
+Namespace synchronization is recorded separately: Unix reports an observed
+successful directory fsync only after it completes; Windows records
+`not_available` because the helper has no supported directory-flush guarantee.
+Intended manifests cannot claim an observed synchronization. Files, artifacts
+and journal records are still synchronized/acknowledged under their own contracts.
+Controlled Windows prerequisites and host application tests are evidence for
+those exact cases; actual six-native runtime qualification remains pending.
 There is no automatic quarantine deletion, rollback or effect re-execution in
 005; deliberate recovery/retention tools are later scope.
 [Go 1.27.3 Rename](https://pkg.go.dev/os@go1.27.3#Rename).
@@ -318,6 +367,32 @@ exactly-once service guarantee is inferred.
 as authority; mutating a settled author's evidence; reusing its session as review;
 running arbitrary shell snippets; treating source modification as a passed check;
 silently refilling old budgets; automatic application replay after uncertain effects.
+
+## Observed Windows noninteractive Git launch correction
+
+Actual concurrent Auto-admission qualification exposed Git metadata child exits `0xc0000142`
+with empty stderr on local Windows ARM64. This is process-initialization failure evidence;
+the specific failing DLL and universal causality are not established. Temporary owned-fixture
+error capture was removed before qualification. Metadata/source/index Git commands now use
+`HideWindow` plus `CREATE_NO_WINDOW`, without retries or new console/detached flags, preserving
+argv, sanitized environment, pipes and deadlines. Microsoft documents the flag's console-free
+behavior in [Process creation flags](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags)
+and distinguishes successful creation from later DLL initialization in
+[CreateProcessW](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw).
+The unchanged two-client Auto-admission test passes three runs in22.083s after the correction
+on this host. Six native runtime jobs remain the cross-platform qualification gate.
+
+## Conservative Linux new-file group eligibility
+
+A mount identity alone does not establish the native creation group. Linux ext4 supports
+`grpid`/`bsdgroups`, which can derive a new object's group from its containing directory;
+`sysvgroups` has a different rule. See the [official ext4 mount-option documentation](https://docs.kernel.org/admin-guide/ext4.html#options).
+For an ordinary parent with no setgid bit, differing parent/effective groups therefore produce
+an explicit unsupported-application gap. Matching groups are unambiguous, and a setgid parent
+retains its explicit inherited-group rule. Refusal happens before staged metadata publication
+or destination effects. Darwin keeps its native parent-group rule. Portable typed-fact tests
+establish the conservative decision, not a privileged mount experiment; actual native runtime
+qualification remains a separate required gate.
 
 ## Qualification work carried into design/tasks
 

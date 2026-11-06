@@ -19,6 +19,7 @@ type ownerMetadata struct {
 	ManagedExecution    string   `json:"managedExecution"`
 	Capabilities        []string `json:"capabilities,omitempty"`
 	ExecutionContract   string   `json:"executionContract,omitempty"`
+	WorkflowContract    string   `json:"workflowContract,omitempty"`
 	MaintenanceContract string   `json:"maintenanceContract,omitempty"`
 	Admission           *struct {
 		State      string                    `json:"state"`
@@ -71,7 +72,7 @@ func readMetadata(ctx context.Context, desc localstate.Descriptor, maintenance b
 }
 
 func executionMetadata(m ownerMetadata) bool {
-	return hasCapability(m, "economical_routing") && managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == ""
+	return hasCapability(m, "verified_delivery") && m.WorkflowContract == domain.WorkflowContract && hasCapability(m, "economical_routing") && managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == ""
 }
 
 func hasCapability(m ownerMetadata, value string) bool {
@@ -97,6 +98,9 @@ func managedMetadata(m ownerMetadata) bool {
 
 func maintenanceMetadata(m ownerMetadata) bool {
 	if executionMetadata(m) {
+		return true
+	}
+	if managedMetadata(m) && hasCapability(m, "economical_routing") && m.AppVersion == "2.0.0-dev.4" && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == "004-v1" && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == "" {
 		return true
 	}
 	if managedMetadata(m) && m.AppVersion == "2.0.0-dev.3" && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == "003-v1" && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == "" {

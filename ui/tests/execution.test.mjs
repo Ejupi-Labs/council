@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fixture } from './helpers.mjs';
+import { fixture, legacyExecution } from './helpers.mjs';
 
 async function open(f, owner) {
   const page = await f.browser.newPage();
@@ -13,7 +13,7 @@ async function open(f, owner) {
 }
 async function fakeOptions(page, scenario = 'response', deliverable = 'response_only') {
   await page.locator('#execution-options > summary').click();
-  await page.locator('#task-fake').check(); await page.locator('#task-fake-scenario').selectOption(scenario);
+  await page.locator('#task-fake').check(); await legacyExecution(page); await page.locator('#task-fake-scenario').selectOption(scenario);
   await page.locator('#task-deliverable').selectOption(deliverable);
 }
 

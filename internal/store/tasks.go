@@ -12,6 +12,13 @@ func (s *Store) CreateTask(ctx context.Context, ownerID string, in domain.StartT
 	return s.CreateTaskWithRouting(ctx, ownerID, in, wrapperRoutingFacts(in.ExecutionMode))
 }
 func (s *Store) CreateTaskWithRouting(ctx context.Context, ownerID string, in domain.StartTaskInput, facts domain.RoutingFacts) domain.Result {
+	var capture *domain.WorkflowCapture
+	if in.Workflow != nil && in.Workflow.Mode != "author_only" {
+		capture = &domain.WorkflowCapture{}
+	}
+	return s.createTask(ctx, ownerID, in, facts, capture)
+}
+func (s *Store) createTask(ctx context.Context, ownerID string, in domain.StartTaskInput, facts domain.RoutingFacts, capture *domain.WorkflowCapture) domain.Result {
 	if e := domain.ValidateStartTask(in); e != nil {
 		return domain.Failure(in.RequestID, e)
 	}
@@ -86,19 +93,40 @@ func (s *Store) CreateTaskWithRouting(ctx context.Context, ownerID string, in do
 		if e := checkResolvedScenario(a, in.ExecutionMode, in.FakeScenario); e != nil {
 			return 0, nil, e
 		}
+		var workflow *domain.Workflow
+		var step *domain.WorkflowStep
+		if capture != nil {
+			w, st, err := s.bindInitialWorkflow(ctx, tx, t, v, &a, authority.ID, in, capture)
+			if err != nil {
+				return 0, nil, err
+			}
+			if err = insertWorkflowTx(ctx, tx, w); err != nil {
+				return 0, nil, err
+			}
+			workflow = &w
+			step = &st
+		}
 		if e = s.insertAttempt(ctx, tx, a); e != nil {
 			return 0, nil, e
+		}
+		if step != nil {
+			if e = insertWorkflowStepTx(ctx, tx, *step); e != nil {
+				return 0, nil, e
+			}
 		}
 		if e = storeRoutingDecision(ctx, tx, decision); e != nil {
 			return 0, nil, e
 		}
-		return 201, domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: &budget}, nil
+		return 201, domain.Admission{Workflow: workflow, Step: step, Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: &budget}, nil
 	})
 }
 func (s *Store) UpdateGuidance(ctx context.Context, taskID string, in domain.GuidanceInput) domain.Result {
 	return s.UpdateGuidanceWithRouting(ctx, taskID, in, wrapperRoutingFacts(""))
 }
 func (s *Store) UpdateGuidanceWithRouting(ctx context.Context, taskID string, in domain.GuidanceInput, facts domain.RoutingFacts) domain.Result {
+	return s.updateGuidance(ctx, taskID, in, facts, nil)
+}
+func (s *Store) updateGuidance(ctx context.Context, taskID string, in domain.GuidanceInput, facts domain.RoutingFacts, capture *domain.WorkflowCapture) domain.Result {
 	if !domain.ValidID(taskID) {
 		return domain.Failure(in.RequestID, domain.Invalid("task identity"))
 	}
@@ -117,6 +145,16 @@ func (s *Store) UpdateGuidanceWithRouting(ctx context.Context, taskID string, in
 		v, e := s.version(ctx, tx, taskID, t.CurrentVersion)
 		if e != nil {
 			return 0, nil, e
+		}
+		priorWorkflow, e := s.selectedWorkflow(ctx, tx, taskID, domain.WorkflowSelector{TaskVersion: v.Version})
+		if e != nil {
+			return 0, nil, e
+		}
+		if priorWorkflow.Workflow == nil && in.Workflow != nil && in.Workflow.Mode != "author_only" {
+			return 0, nil, domain.Fail("authority_required", "Adopt workflow authority explicitly before adding it to standalone work.")
+		}
+		if priorWorkflow.Workflow != nil && (in.Workflow == nil || in.Workflow.Mode != "author_only") && capture == nil {
+			return 0, nil, workflowUnavailable()
 		}
 		priorAuthority, e := s.routingAuthority(ctx, tx, taskID, v.Version)
 		if e != nil {
@@ -165,9 +203,29 @@ func (s *Store) UpdateGuidanceWithRouting(ctx context.Context, taskID string, in
 		if _, e = tx.ExecContext(ctx, "INSERT INTO task_versions VALUES(?,?,?)", taskID, intRevision(v.Version), encode(v)); e != nil {
 			return 0, nil, storageError()
 		}
+		var routingID string
 		if priorAuthority != nil {
-			if _, e = s.captureRouting(ctx, tx, t, v, in.Routing, facts, priorAuthority, "user"); e != nil {
-				return 0, nil, e
+			captured, err := s.captureRouting(ctx, tx, t, v, in.Routing, facts, priorAuthority, "user")
+			if err != nil {
+				return 0, nil, err
+			}
+			routingID = captured.ID
+		}
+		if priorWorkflow.Workflow != nil && (in.Workflow == nil || in.Workflow.Mode != "author_only") {
+			options := priorWorkflow.Workflow.Authority.OptionSnapshot
+			if in.Workflow != nil {
+				options = *in.Workflow
+			}
+			newWorkflow, err := s.captureUnstartedWorkflow(ctx, tx, t, v, in.RequestID, options, capture, routingID, priorWorkflow.Workflow.Authority.ExecutionMode, priorWorkflow.Workflow.Authority.FakeScenario)
+			if err != nil {
+				return 0, nil, err
+			}
+			if in.Workflow == nil {
+				newWorkflow.Authority.Delivery.Source = priorWorkflow.Workflow.Authority.Delivery.Source
+				newWorkflow.Authority.Delivery.PreferenceRevision = priorWorkflow.Workflow.Authority.Delivery.PreferenceRevision
+			}
+			if err = insertWorkflowTx(ctx, tx, newWorkflow); err != nil {
+				return 0, nil, err
 			}
 		}
 		if e = saveTask(ctx, tx, t); e != nil {

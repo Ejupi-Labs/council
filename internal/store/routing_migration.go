@@ -25,6 +25,9 @@ func (s *Store) migrateRouting(ctx context.Context) error {
 }
 
 func initializeRoutingTx(ctx context.Context, tx *sql.Tx) error {
+	return initializeRoutingWithDefaultTx(ctx, tx, false)
+}
+func initializeRoutingWithDefaultTx(ctx context.Context, tx *sql.Tx, fresh bool) error {
 	if err := validateKnownRoutingDDL(ctx, tx, false); err != nil {
 		return err
 	}
@@ -39,6 +42,9 @@ func initializeRoutingTx(ctx context.Context, tx *sql.Tx) error {
 	}
 	now := domain.Now()
 	policy := routing.DefaultPolicy()
+	if fresh {
+		policy.DefaultBudget.AdmissionLimit = "4"
+	}
 	policy.UpdatedAt = now
 	if _, err := tx.ExecContext(ctx, "INSERT INTO routing_policy VALUES(1,1,?)", encode(policy)); err != nil {
 		return storageError()
@@ -131,7 +137,7 @@ func validateKnownRoutingDDL(ctx context.Context, q schemaQueryer, includeRoutin
 	return nil
 }
 func (s *Store) validateRoutingSchema(ctx context.Context) error {
-	if err := validateKnownRoutingDDL(ctx, s.db, true); err != nil {
+	if err := validateKnownWorkflowDDL(ctx, s.db); err != nil {
 		return err
 	}
 	var contexts, profiles, policy int
