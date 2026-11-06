@@ -54,11 +54,13 @@ func testEngine(t *testing.T) (*Engine, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = lock.Close() })
 	db, err := store.Open(lock.DatabasePath())
 	if err != nil {
 		lock.Close()
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	service := app.New(db)
 	body, _ := json.Marshal(map[string]string{"requestId": domain.NewID(), "selectedPath": repo, "basePath": repo})
 	opened := service.Execute(ctx, "projects.open", app.Params{Body: body})
@@ -82,7 +84,7 @@ func testEngine(t *testing.T) (*Engine, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = e.Close(); _ = db.Close(); _ = lock.Close() })
+	t.Cleanup(func() { _ = e.Close() })
 	return e, project.Project.ID, repo
 }
 

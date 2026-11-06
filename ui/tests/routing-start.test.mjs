@@ -1,0 +1,93 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fixture, openWorkspace, responseBarrier } from './helpers.mjs';
+
+test('economical Auto needs only the project, task and saved autonomy, with truthful finite defaults', { timeout: 90000 }, async t => {
+  const f = await fixture(t); const owner = await f.start(); const page = await openWorkspace(f, owner);
+  await page.locator('#task-text').fill('CONTROLLED LOCAL TEST: investigate this project without a declared model class.');
+  const admitted = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks');
+  await page.locator('#start-task').click(); const response = await admitted; const admission = (await response.json()).data;
+  const body = response.request().postDataJSON();
+  assert.equal(body.routing, undefined); assert.equal(body.pins, undefined);
+  await page.locator('#task-budget-facts').filter({ hasText: 'Remaining admissions' }).waitFor();
+  assert.match(await page.locator('#task-budget-facts').textContent(), /Granted admissions2.*Consumed admissions1.*Remaining admissions1/);
+  assert.match(await page.locator('#task-route-facts').textContent(), /Admitted target.*native/);
+  assert.match(await page.locator('#task-route-facts').textContent(), /unknown/i);
+  assert.equal(admission.attempt.executionMode, 'fake');
+  assert.equal(await page.locator('#task-suitability').inputValue(), '');
+  assert.equal(await page.locator('#task-profile').inputValue(), '');
+  assert.match(await page.locator('#routing-policy-summary').textContent(), /Automatic continuation.*OFF/);
+  assert.match(await page.locator('#attempt-facts').textContent(), /Observed actual primary modelUnknown/);
+});
+
+test('lost economical Start freezes optional profile and budget while newer composer input survives retry', { timeout: 90000 }, async t => {
+  const f = await fixture(t); const owner = await f.start(); const page = await openWorkspace(f, owner);
+  await page.locator('#task-suitability').selectOption('routine');
+  await page.locator('#task-profile').selectOption('claude-haiku-economy');
+  await page.getByText('Finite task budget and optional continuation', { exact: true }).click();
+  await page.locator('#task-budget-admissions').fill('3'); await page.locator('#task-budget-window').fill('1200');
+  await page.locator('#task-text').fill('CONTROLLED LOCAL TEST: clicked routine Claude profile.');
+  const requests = []; page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks') requests.push(r.postDataJSON()); });
+  await page.route('**/api/v1/tasks', async route => { if (route.request().method() !== 'POST') return route.continue(); await route.fetch(); await route.abort('connectionfailed'); }, { times: 1 });
+  await page.locator('#start-task').click(); await page.locator('#start-task').filter({ hasText: 'Retry pending start' }).waitFor();
+  await page.locator('#task-text').fill('Newer local task, do not overwrite.'); await page.locator('#task-profile').selectOption('codex-sol-general');
+  await page.locator('#task-suitability').selectOption('general'); await page.locator('#task-budget-admissions').fill('4');
+  await page.reload(); await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
+  await page.locator('#start-task').click(); await page.locator('#task-route-facts').filter({ hasText: 'claude-haiku-economy' }).waitFor();
+  assert.equal(requests.length, 2); assert.deepEqual(requests[1], requests[0]);
+  assert.deepEqual(requests[0].routing, { suitability: 'routine', targetProfileId: 'claude-haiku-economy', budget: { admissionLimit: '3', windowSeconds: 1200 } });
+  assert.equal(await page.locator('#task-text').inputValue(), 'Newer local task, do not overwrite.');
+  assert.equal(await page.locator('#task-profile').inputValue(), 'codex-sol-general');
+  assert.equal(await page.locator('#task-suitability').inputValue(), 'general'); assert.equal(await page.locator('#task-budget-admissions').inputValue(), '4');
+  await page.getByText('Add guidance for a new task version', { exact: true }).click();
+  await page.locator('#task-guidance').fill('Keep the captured profile/hint while explicitly adopting current routing preferences.');
+  await page.locator('#guidance-current-routing').check();
+  const guided = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().endsWith('/guidance'));
+  await page.locator('#save-guidance').click(); const body = (await guided).request().postDataJSON();
+  assert.equal(body.routing.useCurrentPolicy, true); assert.equal(body.routing.targetProfileId, 'claude-haiku-economy');
+  assert.equal(body.routing.suitability, 'routine'); assert.equal(body.routing.budget, undefined);
+  assert.equal(await page.locator('#task-profile').inputValue(), 'codex-sol-general');
+});
+
+test('a delayed routed admission preserves a newer retained-task selection and literal incompatible pins block', { timeout: 90000 }, async t => {
+  const f = await fixture(t); const owner = await f.start(); const page = await openWorkspace(f, owner);
+  await page.locator('#task-text').fill('CONTROLLED LOCAL TEST: retained first task.');
+  const firstReply = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks');
+  await page.locator('#start-task').click(); const first = (await (await firstReply).json()).data;
+  await page.locator('#attempt-status').filter({ hasText: 'Verification pending' }).waitFor();
+  const gate = responseBarrier(); t.after(() => gate.release());
+  await page.route('**/api/v1/tasks', async route => { if (route.request().method() !== 'POST') return route.continue(); const response = await route.fetch(); await gate.hold(); await route.fulfill({ response }); }, { times: 1 });
+  await page.locator('#task-text').fill('CONTROLLED LOCAL TEST: delayed second task.'); await page.locator('#start-task').click(); await gate.arrived;
+  await page.locator('#task-list button').filter({ hasText: first.task.id.slice(0, 8) }).click();
+  await page.locator('#task-text').fill('Newer composer work'); gate.release();
+  await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
+  assert.match(await page.locator('#task-detail-heading').textContent(), new RegExp(first.task.id.slice(0, 8)));
+  assert.equal(await page.locator('#task-text').inputValue(), 'Newer composer work');
+  await page.locator('#task-harness').selectOption('codex'); await page.locator('#task-profile').selectOption('claude-haiku-economy');
+  const rejected = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks');
+  await page.locator('#start-task').click(); assert.equal((await (await rejected).json()).error.code, 'pin_unavailable');
+  await page.locator('#execution-status').filter({ hasText: 'choices conflict' }).waitFor();
+  assert.equal(await page.locator('#task-harness').inputValue(), 'codex'); assert.equal(await page.locator('#task-profile').inputValue(), 'claude-haiku-economy');
+});
+
+test('a delayed configuration refresh preserves an explicit unsaved Auto profile for the next guidance version', { timeout: 90000 }, async t => {
+  const f = await fixture(t); const owner = await f.start(); const page = await openWorkspace(f, owner);
+  await page.locator('#task-suitability').selectOption('routine'); await page.locator('#task-profile').selectOption('claude-haiku-economy');
+  await page.locator('#task-text').fill('CONTROLLED LOCAL TEST: retain explicit Auto during a delayed declaration refresh.');
+  const started = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks');
+  await page.locator('#start-task').click(); const admission = (await (await started).json()).data;
+  await page.locator('#attempt-status').filter({ hasText: 'Verification pending' }).waitFor();
+  await page.getByText('Add guidance for a new task version', { exact: true }).click();
+  await page.locator('#routing-agents-panel > summary').click();
+  const gate = responseBarrier(); t.after(() => gate.release());
+  await page.route('**/api/v1/routing/profiles', async route => { const response = await route.fetch(); await gate.hold(); await route.fulfill({ response }); }, { times: 1 });
+  await page.locator('#refresh-routing').click(); await gate.arrived;
+  await page.locator('#guidance-profile').selectOption(''); await page.locator('#task-guidance').fill('Keep routine suitability but explicitly remove the prior profile choice.');
+  gate.release(); await page.waitForFunction(() => !document.querySelector('#refresh-routing')?.disabled);
+  assert.equal(await page.locator('#guidance-profile').inputValue(), '');
+  const guided = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().endsWith('/guidance'));
+  await page.locator('#save-guidance').click(); const response = await guided; const body = response.request().postDataJSON();
+  assert.equal(body.routing.targetProfileId, undefined); assert.equal(body.routing.suitability, 'routine');
+  assert.equal(body.routing.useCurrentPolicy, undefined); assert.equal(body.routing.budget, undefined);
+  assert.equal((await response.json()).data.task.currentVersion, '2');
+});

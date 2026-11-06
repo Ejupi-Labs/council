@@ -8,7 +8,7 @@ test('controlled UI test data keeps configured, primary, whole-tree and top-leve
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('.execution-options summary').click(); await page.locator('#task-harness').selectOption('claude-code');
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-harness').selectOption('claude-code');
     await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-text').fill('CONTROLLED UI OBSERVATION TEST DATA. No live provider was called.');
     let starts = 0; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/tasks') starts++; });

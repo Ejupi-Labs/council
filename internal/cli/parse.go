@@ -39,6 +39,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	bools := map[string]bool{"json": true, "no-open": true, "use-current-policy": true, "help": true, "version": true}
 	values := map[string]bool{"api-version": true, "request-id": true, "expected-revision": true, "limit": true, "cursor": true, "project": true, "task": true, "task-file": true, "revision": true}
 	addExecutionFlags(bools, values)
+	addRoutingFlags(values)
 	bools["version"] = !taskVersionCommand
 	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
@@ -52,7 +53,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 			continue
 		}
 		key := strings.TrimPrefix(arg, "--")
-		if _, exists := flags[key]; exists && key != "require-evidence" {
+		if _, exists := flags[key]; exists && !repeatableFlag(key) {
 			return c, domain.Invalid("nonduplicate command options")
 		}
 		if bools[key] {
@@ -64,14 +65,14 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		}
 		i++
 		flags[key] = args[i]
-		if key == "require-evidence" {
+		if repeatableFlag(key) {
 			repeated[key] = append(repeated[key], args[i])
 		}
 	}
 	c.json = flags["json"] == "true"
 	c.noOpen = flags["no-open"] == "true"
 	for key, value := range flags {
-		if values[key] && value == "" && key != "guidance" {
+		if values[key] && value == "" && key != "guidance" && key != "provider" && key != "note" {
 			return c, domain.Invalid("nonempty option values")
 		}
 	}
@@ -98,6 +99,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		return c, domain.Invalid("command")
 	}
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
+	if routingCommand(c.name) {
+		return parseRouting(c, positionals, flags, repeated, stdin)
+	}
 	if executionCommand(c.name) {
 		return parseExecution(c, positionals, flags, repeated, stdin)
 	}

@@ -16,7 +16,15 @@ func (s *Store) StopAttempt(ctx context.Context, attemptID, requestID string) do
 			return 0, nil, e
 		}
 		if a.Phase == "settled" {
-			return 200, map[string]any{"attemptId": attemptID, "stopAccepted": false, "reason": "already_settled", "attemptRevision": a.Revision, "cleanupState": a.Cleanup.State}, nil
+			suppressed, e := s.suppressFreshContinuation(ctx, tx, a)
+			if e != nil {
+				return 0, nil, e
+			}
+			data := map[string]any{"attemptId": attemptID, "stopAccepted": false, "reason": "already_settled", "attemptRevision": a.Revision, "cleanupState": a.Cleanup.State}
+			if suppressed {
+				data["continuationSuppressed"] = true
+			}
+			return 200, data, nil
 		}
 		if a.Stop == nil {
 			seq, e := s.appendEvent(ctx, tx, attemptID, "stop_accepted", nil)

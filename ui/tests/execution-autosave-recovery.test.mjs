@@ -8,7 +8,7 @@ test('replaying a Start autosave preserves a newer acknowledged draft revision',
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('.execution-options summary').click(); await page.locator('#task-fake').check();
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check();
     await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-text').fill('The saved original.'); await page.locator('#save-draft').click();
     await page.locator('#draft-status').filter({ hasText: 'Saved revision 1' }).waitFor();
@@ -64,7 +64,7 @@ test('accepted responses and new guidance refresh the retained task list immedia
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('.execution-options summary').click(); await page.locator('#task-fake').check();
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check();
     await page.locator('#task-deliverable').selectOption('response_only');
     let starts = 0;
     page.on('request', request => {

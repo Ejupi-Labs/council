@@ -8,52 +8,95 @@ main remains unchanged.
 
 ## Current preview
 
-Preview **2.0.0-dev.3** adds explicitly selected native Claude Code alongside Codex in managed
-isolated workspaces, with one shared execution slot. This feature passed independent review,
-complete developer checks and all six native platform jobs plus Linux race checks at `ce8aaa7`.
-The Ejupi Labs UI and CLI share
-versioned instructions, exact output, source-relative candidates, history, Stop and recovery
-incidents. A response-only result can be explicitly accepted after review; authored changes remain
-verification pending. Work is never automatically replayed, merged or published by this slice.
+Preview **2.0.0-dev.4** implements economical routing across native Codex and Claude Code in
+isolated managed workspaces. The Ejupi Labs UI and CLI share original instructions, literal pins,
+captured routing decisions, task budgets, exact output, source-relative candidates, history,
+Stop and recovery incidents. Feature 004 remains subject to its independent review and acceptance
+gates; this README does not declare it accepted. The accepted 003 baseline passed all six native
+platform jobs plus Linux race checks at `ce8aaa7`.
 
-Native Codex and Claude live provider compatibility remains **unqualified**. Installation discovery does not
-verify authentication, models, account capacity or subscription allowance. An explicit local fake
-mode exercises the real ownership/workspace/evidence lifecycle without a provider. Economical
-routing, further harnesses, independent verification/integration and MCP follow the feature plan.
+Start with a project and task. No account, quota, price or model form is required. Auto uses a
+compatible native default for unknown suitability. An explicit routine/general hint or a narrowly
+recognized document replacement can prefer a suitable declared profile. Optional user reports can
+exclude busy Codex capacity and route new work to eligible Claude. Both use one global managed
+worker slot; queued work keeps its admitted target. Existing personal chats and vendor settings
+are not changed.
+
+The fixed profiles are:
+
+| Profile | Literal native selector | Declared policy role |
+| --- | --- | --- |
+| codex-native-default | Native configured default | Unknown suitability |
+| codex-luna-economy | gpt-6-luna | Economy |
+| codex-sol-general | gpt-6.1-sol | General |
+| claude-native-default | Native configured default | Unknown suitability |
+| claude-haiku-economy | haiku | Economy |
+| claude-sonnet-general | sonnet | General |
+
+Roles and selectors are dated declarations, not measured quality, effective-model identity,
+entitlement or savings. Claude's documented transport minimum is 2.1.259; Haiku/Sonnet alias
+assumptions are 2.1.293/2.1.284. Unknown installed versions stay unverified. Native provider
+compatibility remains **unqualified** for both connections. Discovery checks filesystem metadata
+without invoking vendors or inspecting credentials. Fixed fake mode exercises real process
+ownership, workspace and evidence handling with local fixtures; it never falls back to a provider.
+
+New tasks default to **two managed attempt admissions in one shared 30-minute wall-clock window**
+from the first admission, including queue, preparation, execution and settlement. Cleanup can
+continue after a deadline requests Stop. An explicit grant adds authority without starting work.
+Automatic continuation defaults OFF. A bounded opt-in supports only proven pre-launch ineligibility
+before native process preparation/creation. Generic native errors, prose, retry progress and
+terminal-transient continuation do not authorize another attempt. Native internal calls, retries
+and fallback remain outside Council's managed admission count.
+
+Usage views keep known sourced counters, missing coverage, fake work, reference-price declarations
+and native client estimates separate. Declared accounts/links group reports and policy; they do
+not select or attest native login identity. Actual model/account/access/allowance and charges stay
+unknown when unreported. Paid API execution, actual-account pins, hard spending caps and exact
+effective-model guarantees are unsupported. No subscription saving is inferred from a fixture.
+
+A response-only result can be explicitly accepted after review. Authored candidates remain
+verification pending for feature 005; this preview does not merge or publish changes. Native
+session IDs are observed identifiers, not resume support or Council conversation history.
 
 ## Run a native preview
 
 Extract a platform package and run its `council` executable (`council.exe` on Windows). Release users
-need no Node, npm or compiler. Git is required for project inspection; a browser is needed for UI.
+need no Node, npm, Go or compiler. Git is required for project inspection/source capture; a browser
+is needed for UI. Native work needs the chosen supported native executable and existing vendor
+login. Shell wrappers are not launched.
 
 ```text
 council ui
 council projects open /absolute/path/to/project --json
 council agents list --json
 council drafts create --project PROJECT_ID --task "Describe the work"
-council drafts list --json
-council policy get --json
 council tasks start --project PROJECT_ID --task "Describe the work" --json
+council tasks start --project PROJECT_ID --task "Routine local work" --suitability routine --json
 council tasks start --project PROJECT_ID --task "Describe the work" --harness claude-code --json
 council tasks start --project PROJECT_ID --task "Local fixture" --fake --json
+council routing contexts --json
+council routing capacity --context codex-native --json
+council tasks routing TASK_ID --json
+council tasks budget TASK_ID --json
+council tasks usage TASK_ID --json
 council attempts get ATTEMPT_ID --json
 council attempts stop ATTEMPT_ID --json
 council service stop --json
 ```
 
 On Windows supply a native absolute path, quoting spaces normally. `council ui --no-open --json`
-reports a private local launch URL instead of opening a browser. Keep that URL private. Closing the
-browser ends observation while work continues. Foreground Ctrl+C requests owner shutdown; explicit
-CLI execution starts a continuing owner when needed. `service stop` targets the existing owner and
-settles its work. Foundation metadata commands retain transient ownership when no owner is active.
+reports a private local launch URL instead of opening a browser. Keep that URL private. Closing
+the browser ends observation while work continues. Foreground Ctrl+C requests owner shutdown;
+explicit CLI execution starts a continuing owner when needed. `service stop` targets the existing
+owner and settles its work. Current execution requires dev.4/004-v1. The exact known dev.2/dev.3
+maintenance Stop paths remain supported; they do not grant 004 execution compatibility.
 
-New state lives at `<user-home>/.council/v2/`, separate from legacy data. Council does not inspect
-vendor credentials or run vendor executables during installation discovery. Autonomous full access
-is the requested default and maps to native supported permission controls. Supervised approvals
-are unavailable in this slice. Auto model/account facts remain unknown unless the harness reports
-them; Council does not promise a universal OS sandbox or a native spending cap.
-Draft updates require an expected revision. A failed/uncertain save preserves its request identity
-for reconciliation; use `--request-id` when retrying CLI mutations.
+New state lives at `<user-home>/.council/v2/`, separate from legacy collaboration data. Retained task
+instructions/history and acknowledged receipts keep their original meaning. Legacy tasks require
+explicit budget adoption before a new attempt; adoption itself starts no worker. Autonomous full
+access is the requested default and maps to supported native permission controls. Supervised
+approval is unavailable, and no universal OS sandbox is promised. Draft updates and routing
+mutations use expected revisions. Preserve `--request-id` when retrying an uncertain mutation.
 
 ## Develop
 
@@ -85,6 +128,9 @@ Platform runtime evidence and cross-compilation evidence are reported separately
 - [Workspace foundation specification](specs/001-workspace-foundation/spec.md)
 - [Managed execution specification](specs/002-managed-execution/spec.md)
 - [Managed execution quickstart](specs/002-managed-execution/quickstart.md)
+- [Claude interoperability specification](specs/003-claude-interoperability/spec.md)
+- [Economical routing specification](specs/004-economical-routing/spec.md)
+- [Economical routing quickstart](specs/004-economical-routing/quickstart.md)
 
 Each feature follows Specify specification → design → tasks → implementation → independent review
 → corrections and acceptance before the next begins. Technology and limitations are documented in

@@ -3,6 +3,9 @@ package httpapi
 import "strings"
 
 func executionRoute(p, verb string) (op, id, methods string, queries []string) {
+	if routedOp, routedID, routedMethods, routedQueries := routingRoute(p, verb); routedOp != "" {
+		return routedOp, routedID, routedMethods, routedQueries
+	}
 	const prefix = "/api/v1/"
 	if !strings.HasPrefix(p, prefix) {
 		return

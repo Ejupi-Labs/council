@@ -56,6 +56,14 @@ func makeSchema2(t *testing.T, path string, populated ...bool) (*sql.DB, string,
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	// This helper models accepted schema2, so remove only the new004 tables
+	// before restoring frozen claim DDL. Feature004 has its own frozen003 fixture.
+	for _, name := range []string{"budget_ledger", "budget_amendments", "routing_continuation_proofs", "routing_decisions", "task_budgets", "task_routing_versions", "routing_report_bindings", "routing_capacity_reports", "routing_capacity_state", "routing_account_links", "routing_accounts", "routing_profiles", "routing_contexts", "routing_policy"} {
+		if _, err = db.Exec("DROP TABLE " + name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err = db.Exec("PRAGMA foreign_keys=ON; DROP TABLE capacity_claims; " + frozenClaimV2 + "; INSERT INTO capacity_claims VALUES('codex-native','" + a.ID + "'); PRAGMA user_version=2"); err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -108,7 +116,7 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 	}
 	var version int
 	var resource, claim string
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
 		t.Fatal(version, err)
 	}
 	if err = s.db.QueryRow("SELECT resource_id,attempt_id FROM capacity_claims").Scan(&resource, &claim); err != nil || resource != "managed-native" || claim != attemptID {
@@ -149,7 +157,7 @@ func TestInteropMigrationRollbackAndLostAcknowledgement(t *testing.T) {
 			}
 			wantVersion, wantCode := 2, "storage_failed"
 			if afterCommit {
-				wantVersion, wantCode = 3, "write_uncertain"
+				wantVersion, wantCode = 4, "write_uncertain"
 			}
 			var version int
 			if e := db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != wantVersion || domainErr.Code != wantCode {

@@ -2,7 +2,7 @@ package domain
 
 import "encoding/json/jsontext"
 
-const ExecutionContract = "003-v1"
+const ExecutionContract = "004-v1"
 const MaxPromptBytes = 256 * 1024
 const MaxEventBytes = 16 * 1024
 
@@ -29,6 +29,7 @@ type TaskAcceptance struct {
 	AllowCandidatePreparation bool     `json:"allowCandidatePreparation"`
 }
 type StartTaskInput struct {
+	Routing                *RoutingOptions  `json:"routing,omitempty"`
 	RequestID              string           `json:"requestId"`
 	ProjectID              string           `json:"projectId"`
 	OriginalText           string           `json:"originalText"`
@@ -42,6 +43,7 @@ type StartTaskInput struct {
 	FakeScenario           string           `json:"fakeScenario,omitempty"`
 }
 type GuidanceInput struct {
+	Routing             *RoutingOptions  `json:"routing,omitempty"`
 	RequestID           string           `json:"requestId"`
 	ExpectedRevision    string           `json:"expectedRevision"`
 	GuidanceText        string           `json:"guidanceText"`
@@ -119,9 +121,11 @@ type TaskVersionDetail struct {
 	Version      TaskVersion `json:"version"`
 }
 type Admission struct {
-	Task    TaskSummary `json:"task"`
-	Version TaskVersion `json:"version"`
-	Attempt Attempt     `json:"attempt"`
+	RoutingDecision *RoutingDecision `json:"routingDecision,omitempty"`
+	Budget          *TaskBudget      `json:"budget,omitempty"`
+	Task            TaskSummary      `json:"task"`
+	Version         TaskVersion      `json:"version"`
+	Attempt         Attempt          `json:"attempt"`
 }
 type GuidanceResult struct {
 	Task    TaskSummary `json:"task"`
@@ -200,6 +204,8 @@ type PrimaryFailure struct {
 	EventSequence string `json:"eventSequence"`
 }
 type Attempt struct {
+	RoutingDecisionID  *string            `json:"routingDecisionId,omitempty"`
+	ResolvedTarget     *ResolvedTarget    `json:"resolvedTarget,omitempty"`
 	ID                 string             `json:"id"`
 	TaskID             string             `json:"taskId"`
 	TaskVersion        string             `json:"taskVersion"`

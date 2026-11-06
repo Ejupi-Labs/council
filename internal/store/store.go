@@ -58,7 +58,7 @@ func Open(path string) (*Store, error) {
 		return fail()
 	}
 	if version == 0 && appID == 0 {
-		if err = db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil || tables != 0 {
+		if err = db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").Scan(&tables); err != nil || tables != 0 {
 			return fail()
 		}
 		err = s.initializeSchema(context.Background(), true)
@@ -72,6 +72,11 @@ func Open(path string) (*Store, error) {
 			return fail()
 		}
 		err = s.migrateSharedCapacity(context.Background())
+	} else if version == 3 && appID == applicationID {
+		if err = s.validateFoundation(context.Background()); err != nil {
+			return fail()
+		}
+		err = s.migrateRouting(context.Background())
 	} else if version != schemaVersion || appID != applicationID {
 		return fail()
 	}
@@ -95,6 +100,9 @@ func Open(path string) (*Store, error) {
 		rows.Close()
 	}
 	if err = s.validateExecutionSchema(context.Background()); err != nil {
+		return fail()
+	}
+	if err = s.validateRoutingSchema(context.Background()); err != nil {
 		return fail()
 	}
 	if err = configureDurableJournal(context.Background(), db); err != nil {
@@ -211,7 +219,7 @@ func mutationBeforeCommitFailure(ctx context.Context, id string, err error) doma
 	return domain.Failure(id, domain.SafeError(err))
 }
 func nextSequence(ctx context.Context, q queryer, table string) (int64, error) {
-	if table != "projects" && table != "drafts" && table != "tasks" && table != "attempts" && table != "attempt_events" && table != "artifacts" {
+	if table != "projects" && table != "drafts" && table != "tasks" && table != "attempts" && table != "attempt_events" && table != "artifacts" && table != "routing_accounts" && table != "routing_capacity_reports" && table != "routing_decisions" && table != "budget_ledger" {
 		return 0, storageError()
 	}
 	var n int64

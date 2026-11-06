@@ -190,8 +190,9 @@ Apply in this order, retaining bounded included/excluded reasons and evidence re
    quality/context constraints, including unsupported strict identity/financial guarantees.
 2. Payment eligibility and declared account/context association; never invent another login or
    a Council-managed paid executor.
-3. Managed occupancy and applicable denying facts, including unresolved exhaustion even when
-   stale. Temporary cooldown expiry is separate. Current ownership/cleanup/fences always dominate
+3. Managed occupancy as a dispatch queue constraint, plus applicable denying external facts,
+   including unresolved exhaustion even when stale. An occupied global claim does not exclude all
+   admission candidates or supply category-A proof; preserve ordinary queued admission. Temporary cooldown expiry is separate. Current ownership/cleanup/fences always dominate
    a user availability report.
 4. Unknown availability policy; under default allow it remains explicitly unknown. Prefer fresh
    reported availability over unknown information, without treating it as verified login/quota.

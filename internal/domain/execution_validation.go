@@ -149,6 +149,9 @@ func CheckExecutionScenario(pins ExecutionPins, mode, scenario string) *Error {
 	return nil
 }
 func ValidateStartTask(in StartTaskInput) *Error {
+	if err := ValidateRoutingOptions(in.Routing, "start"); err != nil {
+		return err
+	}
 	if !ValidID(in.RequestID) || !ValidID(in.ProjectID) {
 		return Invalid("requestId and projectId")
 	}
@@ -192,6 +195,9 @@ func ValidateVersionOptions(pins *ExecutionPins, override string, acceptance *Ac
 	return nil
 }
 func ValidateGuidance(in GuidanceInput) *Error {
+	if err := ValidateRoutingOptions(in.Routing, "guidance"); err != nil {
+		return err
+	}
 	if !ValidID(in.RequestID) {
 		return Invalid("requestId")
 	}
@@ -263,6 +269,9 @@ func CheckAuthoringCapability(v TaskVersion) *Error {
 func Decimal(n int64) string { return strconv.FormatInt(n, 10) }
 
 func executionPresence(target any, members map[string]jsontext.Value) *Error {
+	if e := routingPresence(target, members); e != nil {
+		return e
+	}
 	switch target.(type) {
 	case *StartTaskInput, *GuidanceInput, *StartAttemptInput, *ResponseAcceptanceInput:
 	default:

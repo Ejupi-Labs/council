@@ -1,13 +1,16 @@
 import { addFact, api, ApiError, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, writeSession } from './api.js';
 import type { DraftsView, ExecutionIntent } from './drafts.js';
+import type { RoutingView } from './routing.js';
 import type { Draft, Meta, Page, Policy } from './types.js';
 import type { Admission, Artifact, ArtifactChunk, Attempt, AttemptEvent, ExecutionCapabilities, ExecutionPins, TaskDetail, TaskSummary } from './execution-types.js';
 import { appendConnectionFacts, factLabel, harnessName, renderNativeModels, usageLabel } from './native-observations.js';
 
 interface PendingStart { intent: ExecutionIntent; body: Record<string, unknown>; unresolved?: boolean }
-interface PendingMutation { path: string; method: string; body: Record<string, unknown>; unresolved?: boolean }
+interface PendingMutation { path: string; method: string; body: Record<string, unknown>; unresolved?: boolean; guidanceSnapshot?: Record<string, string | boolean> }
 const input = (id: string): string => element<HTMLInputElement>(id).value;
 const checked = (id: string): boolean => element<HTMLInputElement>(id).checked;
+function composerHarnessName(id: string): string { return id ? harnessName(id) : 'Auto · economical routing'; }
+
 function label(attempt: Attempt): string {
   if (attempt.outcome === 'succeeded') return 'Verification pending';
   return attempt.outcome ?? attempt.phase;
@@ -50,7 +53,7 @@ export class TasksView {
   private guidanceEditors = readSession<Record<string, string>>('taskGuidanceEditors') ?? {};
   private guidanceHarnessEditors = readSession<Record<string, string>>('taskGuidanceHarnessEditors') ?? {};
 
-  constructor(private readonly drafts: DraftsView) {
+  constructor(private readonly drafts: DraftsView, private readonly routing?: RoutingView) {
     const responseArea = element('response-area');
     const readButtonRow = element('read-response').parentElement!;
     for (const node of [readButtonRow, element('artifact-status'), element('artifact-output'), element('response-acceptance')]) responseArea.append(node);
@@ -58,9 +61,9 @@ export class TasksView {
     for (const pending of Object.values(this.pending)) pending.unresolved = true;
     const savedHarness = readSession<string>('taskHarnessChoice');
     if (savedHarness && ['codex', 'claude-code'].includes(savedHarness)) element<HTMLSelectElement>('task-harness').value = savedHarness;
-    element('composer-target').textContent = harnessName(input('task-harness'));
+    element('composer-target').textContent = composerHarnessName(input('task-harness'));
     element('task-harness').addEventListener('change', () => {
-      writeSession('taskHarnessChoice', input('task-harness')); element('composer-target').textContent = harnessName(input('task-harness'));
+      writeSession('taskHarnessChoice', input('task-harness')); element('composer-target').textContent = composerHarnessName(input('task-harness'));
     });
     element('guidance-harness').addEventListener('change', () => {
       if (this.selectedTaskId) { this.guidanceHarnessEditors[this.selectedTaskId] = input('guidance-harness'); writeSession('taskGuidanceHarnessEditors', this.guidanceHarnessEditors); }
@@ -103,15 +106,15 @@ export class TasksView {
     this.admission = meta.admission?.state ?? 'open';
     this.available = supportsManagedExecution(meta);
     if (meta.admission && meta.admission.state !== 'open') feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
-    if (!this.available) feedback('execution-status', 'This owner does not advertise managed execution 003-v1. Reopen with a compatible Council owner.', 'error');
+    if (!this.available) feedback('execution-status', 'This owner does not advertise managed execution 004-v1. Reopen with a compatible Council owner.', 'error');
     this.controls(); if (this.available && this.projectId) void this.refreshTasks();
   }
-  disconnect(): void { this.available = false; this.attemptGeneration++; this.controls(); }
+  disconnect(): void { this.available = false; this.attemptGeneration++; this.detailGeneration++; this.listGeneration++; this.controls(); }
   setPolicy(policy: Policy): void { this.policy = policy; this.controls(); }
   setProject(id: string): void {
     if (id === this.projectId) return;
     this.projectId = id; this.projectGeneration++; this.detailGeneration++; this.attemptGeneration++; this.clearArtifact();
-    this.selectedTaskId = null; this.detail = null; this.attempt = null; this.tasks = []; this.taskCursor = null;
+    this.selectedTaskId = null; this.detail = null; this.attempt = null; this.tasks = []; this.taskCursor = null; this.routing?.clearTask();
     element('task-detail').hidden = true; element('execution-link').hidden = true; element('task-list').replaceChildren(); this.controls();
     if (this.available) void this.refreshTasks();
   }
@@ -123,8 +126,8 @@ export class TasksView {
     const stopKey = a ? 'stop:' + a.id : ''; const runKey = this.detail ? 'run:' + this.detail.task.id : '';
     element<HTMLButtonElement>('stop-attempt').disabled = !this.available || !a || (!!a.settledAt && !this.pending[stopKey]) || this.mutationBusy.has(stopKey);
     element('stop-attempt').textContent = this.pending[stopKey] ? 'Retry pending Stop' : a?.stop ? 'Stop accepted · refresh cleanup' : 'Stop';
-    element<HTMLButtonElement>('run-attempt').disabled = !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey];
-    element('run-attempt').textContent = this.pending[runKey] ? 'Retry pending execution' : 'Start another execution';
+    element<HTMLButtonElement>('run-attempt').disabled = !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey] || !!this.detail && this.routing?.requiresAdoption(this.detail.task.id) === true && !this.pending[runKey];
+    element('run-attempt').textContent = this.pending[runKey] ? 'Retry pending execution' : this.detail && this.routing?.requiresAdoption(this.detail.task.id) ? 'Adopt budget before new execution' : 'Start another execution';
     element('save-guidance').textContent = this.detail && this.pending['guidance:' + this.detail.task.id] ? 'Retry pending guidance save' : 'Save guidance';
     element<HTMLButtonElement>('save-guidance').disabled = !this.available || !this.detail || this.mutationBusy.has('guidance:' + this.detail.task.id);
     element<HTMLButtonElement>('read-response').disabled = !a?.responseArtifactId;
@@ -139,7 +142,9 @@ export class TasksView {
     if (timeout && (!/^\d+$/.test(timeout) || Number(timeout) < 1 || Number(timeout) > 86400)) throw new ApiError('invalid_input', 'Set a deadline from 1 through 86400 seconds or leave it at the default.');
     const required = input('task-required-evidence').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
     if (required.some(v => !['check', 'independent_review', 'local_integration', 'external_delivery'].includes(v)) || new Set(required).size !== required.length) throw new ApiError('invalid_input', 'Required evidence entries are unique values: check, independent_review, local_integration, external_delivery.');
+    const routing = this.routing?.composerOptions();
     return {
+      ...(routing ? { routing } : {}),
       ...(input('task-harness') || input('task-model') ? { pins: { ...(input('task-harness') ? { harnessId: input('task-harness') } : {}), ...(input('task-model') ? { model: input('task-model') } : {}) } } : {}),
       ...(timeout ? { timeoutSeconds: Number(timeout) } : {}),
       acceptance: { deliverable: input('task-deliverable'), conditionsText: input('task-conditions'), requiredEvidence: required, allowCandidatePreparation: !checked('task-final-only') },
@@ -185,6 +190,14 @@ export class TasksView {
     } finally { this.busy = false; this.controls(); }
   }
 
+  refreshRoutingControls(): void { this.controls(); }
+
+  async refreshAfterRoutingMutation(id: string): Promise<void> {
+    const generation = this.detailGeneration; const projectGeneration = this.projectGeneration;
+    await this.refreshTasks();
+    if (this.selectedTaskId === id && generation === this.detailGeneration && projectGeneration === this.projectGeneration) await this.openTask(id);
+  }
+
   async refreshTasks(append = false): Promise<void> {
     const project = this.projectId; if (!project || !this.available || append && !this.taskCursor) return;
     const generation = ++this.listGeneration;
@@ -202,7 +215,7 @@ export class TasksView {
   private async openTask(id: string): Promise<void> {
     const generation = ++this.detailGeneration; const projectGeneration = this.projectGeneration;
     const changed = id !== this.selectedTaskId;
-    if (changed) { this.selectedTaskId = id; this.attemptGeneration++; this.clearArtifact(); this.guidanceEdited = false; this.detail = null; this.attempt = null; element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
+    if (changed) { this.routing?.clearTask(); this.selectedTaskId = id; this.attemptGeneration++; this.clearArtifact(); this.guidanceEdited = false; this.detail = null; this.attempt = null; element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
     try {
       const { data } = await api<TaskDetail>('/tasks/' + id);
       if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId) return;
@@ -221,10 +234,11 @@ export class TasksView {
     const facts = element('task-facts'); facts.replaceChildren();
     addFact(facts, 'Task identity', data.task.id); addFact(facts, 'Captured requested preference', policyName(data.version.requestedPolicy.mode) + ' · revision ' + data.version.requestedPolicy.revision);
     addFact(facts, 'Captured harness choice', harnessName(data.version.pins.harnessId));
-    addFact(facts, 'Requested model', data.version.pins.model || 'Native configured default'); addFact(facts, 'Current task version', data.task.currentVersion);
+    addFact(facts, 'Requested model', data.version.pins.model || 'Auto · no literal model pin; see the admitted resolution separately'); addFact(facts, 'Current task version', data.task.currentVersion);
     element('guidance-keep-target').textContent = 'Keep captured target · ' + harnessName(data.version.pins.harnessId);
     element<HTMLSelectElement>('guidance-harness').value = this.guidanceHarnessEditors[data.task.id] ?? 'keep';
     addFact(facts, 'Acceptance', data.acceptance ? 'Reviewed response accepted · ' + timeLabel(data.acceptance.acceptedAt) : 'Not accepted');
+    void this.routing?.setTask(data);
     element('task-original').textContent = data.task.originalText;
     element('task-conditions-view').textContent = data.version.acceptance.conditionsText + (data.version.acceptance.requiredEvidence.length ? '\nRequired evidence: ' + data.version.acceptance.requiredEvidence.join(', ') : '');
     if (!this.guidanceEdited) { const cached = this.guidanceEditors[data.task.id]; element<HTMLTextAreaElement>('task-guidance').value = cached ?? data.version.guidanceText; this.guidanceEdited = cached !== undefined && cached !== data.version.guidanceText; }
@@ -242,6 +256,7 @@ export class TasksView {
       for (const count of [usage.inputTokens, usage.outputTokens]) { if (count !== null && /^\d+$/.test(count)) total += BigInt(count); else unknown = true; }
     }
     element('more-attempts').hidden = !this.attemptCursor;
+    if (this.routing) { element('usage-total').textContent = 'Execution history is not a token or cost total. Read a sourced usage page in Routing decisions, budget authority and usage for exact per-scope counters, page coverage and unknown charges.'; return; }
     element('usage-total').textContent = 'Reported input + output across loaded executions (native scopes may differ): ' + total + ' tokens.' + (unknown ? ' Some usage is unknown.' : '') + (this.attemptCursor ? ' More history is available.' : '') + ' Cached input is not added twice. Whole-tree previews are not added to these counters. Native call counts, cost and allowance remain unknown.';
   }
 
@@ -269,7 +284,12 @@ export class TasksView {
     addFact(facts, 'Cleanup', a.cleanup.state + ' · ' + a.cleanup.scope.replaceAll('_', ' ') + (a.cleanup.incidentId ? ' · incident ' + a.cleanup.incidentId : ''));
     addFact(facts, 'Evidence', a.evidenceStatus); addFact(facts, 'Source snapshot', a.sourceSnapshotId ?? 'Not captured'); addFact(facts, 'Candidate', a.candidateId ?? 'No candidate retained');
     addFact(facts, 'Captured connection', a.connectionId); addFact(facts, 'Requested harness choice', harnessName(a.requestedTarget.harnessId));
-    addFact(facts, 'Requested model selector', a.requestedTarget.model || 'Native configured default');
+    addFact(facts, 'Requested model selector', a.requestedTarget.model || 'Auto · no literal model pin');
+    if (a.resolvedTarget) {
+      addFact(facts, 'Frozen resolution for this attempt', a.resolvedTarget.contextId + ' · ' + (a.resolvedTarget.modelSelector || 'Native configured default') + ' · profile ' + (a.resolvedTarget.profileId || 'uncatalogued literal selector'));
+      addFact(facts, 'Routing decision reference', a.routingDecisionId || 'Not recorded');
+      addFact(facts, 'Captured declared account association', a.resolvedTarget.declaredAccountAssociation ? a.resolvedTarget.declaredAccountAssociation.label + ' · ' + a.resolvedTarget.declaredAccountAssociation.accountId + ' · user declaration, actual login unknown' : 'None · actual login remains separately observed or unknown');
+    }
     addFact(facts, 'Observed provider', factLabel(a.targetObservations.provider)); addFact(facts, 'Observed account', factLabel(a.targetObservations.account));
     addFact(facts, 'Observed actual primary model', factLabel(a.targetObservations.model));
     addFact(facts, 'Native configured model setting', factLabel(a.targetObservations.configuredModel));
@@ -406,19 +426,32 @@ export class TasksView {
   private async guidance(): Promise<void> {
     const detail = this.detail; if (!detail) return;
     const key = 'guidance:' + detail.task.id;
-    const target = input('guidance-harness'); const pins: ExecutionPins = { ...detail.version.pins };
-    if (target !== 'keep') { if (target) pins.harnessId = target; else delete pins.harnessId; }
-    const p = this.pending[key] ?? { path: '/tasks/' + detail.task.id + '/guidance', method: 'PUT', body: { requestId: requestId(), expectedRevision: detail.task.revision, guidanceText: input('task-guidance'), ...(target !== 'keep' ? { pins } : {}) } };
-    this.pending[key] = p; const clickedText = String(p.body['guidanceText']);
-    const clickedTarget = p.body['pins'] ? (p.body['pins'] as ExecutionPins).harnessId ?? '' : 'keep';
-    const result = await this.mutate(key, p.path, p.body);
-    if (result && this.selectedTaskId === detail.task.id) {
-      this.guidanceEdited = input('task-guidance') !== clickedText;
-      if (!this.guidanceEdited) { delete this.guidanceEditors[detail.task.id]; writeSession('taskGuidanceEditors', this.guidanceEditors); }
-      if (input('guidance-harness') === clickedTarget) { delete this.guidanceHarnessEditors[detail.task.id]; writeSession('taskGuidanceHarnessEditors', this.guidanceHarnessEditors); }
-      await this.openTask(detail.task.id); feedback('guidance-status', 'Guidance and any explicit target change saved as a new immutable version. Prior outcomes remain historical. Start another execution explicitly when ready.');
+    let p = this.pending[key];
+    if (!p) {
+      try {
+        const target = input('guidance-harness'); const pins: ExecutionPins = { ...detail.version.pins };
+        if (target !== 'keep') { if (target) pins.harnessId = target; else delete pins.harnessId; }
+        const modelMode = this.routing ? input('guidance-model-mode') : 'keep';
+        if (modelMode === 'auto') delete pins.model;
+        if (modelMode === 'exact') { if (!input('guidance-model')) throw new ApiError('invalid_input', 'Supply the literal selector or choose Auto / keep captured.'); pins.model = input('guidance-model'); }
+        const routing = this.routing?.guidanceOptions(); const guidanceSnapshot = this.routing?.guidanceSnapshot();
+        p = { path: '/tasks/' + detail.task.id + '/guidance', method: 'PUT', body: { requestId: requestId(), expectedRevision: detail.task.revision, guidanceText: input('task-guidance'), ...(target !== 'keep' || modelMode !== 'keep' ? { pins } : {}), ...(routing ? { routing } : {}) }, ...(guidanceSnapshot ? { guidanceSnapshot } : {}) };
+        this.pending[key] = p;
+      } catch (error) { feedback('guidance-status', errorMessage(error), 'error'); return; }
     }
-    if (result) await this.refreshTasks();
+    const clickedText = String(p.body['guidanceText']);
+    const clickedTarget = p.guidanceSnapshot?.['guidance-harness'] ?? (p.body['pins'] ? (p.body['pins'] as ExecutionPins).harnessId ?? '' : 'keep');
+    const result = await this.mutate(key, p.path, p.body);
+    if (!result) return;
+    if (this.guidanceEditors[detail.task.id] === clickedText) { delete this.guidanceEditors[detail.task.id]; writeSession('taskGuidanceEditors', this.guidanceEditors); }
+    if (this.guidanceHarnessEditors[detail.task.id] === clickedTarget) { delete this.guidanceHarnessEditors[detail.task.id]; writeSession('taskGuidanceHarnessEditors', this.guidanceHarnessEditors); }
+    if (p.guidanceSnapshot) this.routing?.finishGuidance(detail.task.id, p.guidanceSnapshot);
+    if (this.selectedTaskId === detail.task.id) {
+      this.guidanceEdited = input('task-guidance') !== clickedText;
+      await this.openTask(detail.task.id);
+      feedback('guidance-status', 'Guidance and explicit routing/target choices saved as a new immutable version. Prior outcomes, cumulative use and deadlines remain. Start another execution explicitly when ready.');
+    }
+    await this.refreshTasks();
   }
   private async accept(): Promise<void> {
     const d = this.detail; const a = this.attempt; const response = this.readArtifact; if (!d || !a || !response?.sha256 || !checked('reviewed-response')) return;

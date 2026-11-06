@@ -33,7 +33,10 @@ func (s *Store) initializeSchema(ctx context.Context, foundation bool) error {
 		if err := validateCapacityTable(ctx, tx, 3); err != nil {
 			return err
 		}
-		return validateForeignKeys(ctx, tx)
+		if err := validateForeignKeys(ctx, tx); err != nil {
+			return err
+		}
+		return initializeRoutingTx(ctx, tx)
 	})
 }
 
@@ -84,7 +87,7 @@ func (s *Store) migrateSharedCapacity(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=3"); err != nil {
 			return storageError()
 		}
-		return nil
+		return initializeRoutingTx(ctx, tx)
 	})
 }
 

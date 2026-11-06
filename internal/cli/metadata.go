@@ -71,7 +71,16 @@ func readMetadata(ctx context.Context, desc localstate.Descriptor, maintenance b
 }
 
 func executionMetadata(m ownerMetadata) bool {
-	return managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == ""
+	return hasCapability(m, "economical_routing") && managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == ""
+}
+
+func hasCapability(m ownerMetadata, value string) bool {
+	for _, capability := range m.Capabilities {
+		if capability == value {
+			return true
+		}
+	}
+	return false
 }
 
 func managedMetadata(m ownerMetadata) bool {
@@ -88,6 +97,9 @@ func managedMetadata(m ownerMetadata) bool {
 
 func maintenanceMetadata(m ownerMetadata) bool {
 	if executionMetadata(m) {
+		return true
+	}
+	if managedMetadata(m) && m.AppVersion == "2.0.0-dev.3" && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == "003-v1" && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == "" {
 		return true
 	}
 	return managedMetadata(m) && m.AppVersion == "2.0.0-dev.2" && m.ManagedExecution == "native_codex" && m.ExecutionContract == "002-v1" && m.MaintenanceContract == "" && m.Capacity.ConnectionID == "codex-native" && m.Capacity.ResourceID == ""

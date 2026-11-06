@@ -150,8 +150,9 @@ report ID wherever currently retained, from origin bindings or later link inheri
 denial IDs stay active. This can clear an
 older inherited exhaustion without resetting a newer denial. Positive recovery coverage uses
 current bindings/current links only, never historical associations. Already-resolved references
-conflict except for exact receipt replay. Resolution is retained in report/current-state JSON and
-receipts; no extra table/history scan is required.
+conflict except for exact receipt replay. Resolution is retained in current-state JSON, the new
+correction report and its receipt; prior report bodies remain immutable. No extra table or
+history scan is required.
 When account A is already exhausted before context C links to A, C is denied by the current account
 negative and receives a sticky reference `{reportId,accountId,linkRevision,linkedAt}` in its current
 control JSON. Unlinking C cannot remove it. Do not rewrite the report's immutable original bindings
@@ -208,7 +209,12 @@ normalization or profile preference may replace contradictory explicit intent.
 `authorityId`, `kind` (`manual`, `automatic`), nullable `previousAttemptId`, `createdAt`,
 `candidateAssessments`, `selectedTarget`, `budgetEffect`, `evidenceSnapshot`, `uncertainties`.
 Each of at most six candidate assessments records its profile/version snapshot, applicable
-capability/report/link/price facts, eligibility and bounded reason codes. An explicit uncatalogued
+capability/report/link/price facts, eligibility and bounded reason codes. Shared `capacityEvidence`
+contains at most two compact context snapshots: revision/asOf, declared account/link revision,
+effective dimension states, positive coverage, report eligibility and deduplicated blocking/supporting
+report IDs. Candidates refer to their context ID. Do not repeat full CapacityView bodies in every
+candidate; immutable report IDs retain complete evidence without defeating the 64 KiB decision
+bound. Validate the encoded decision bound before admission commits. An explicit uncatalogued
 selector is one additional ephemeral assessment, never a new catalog/account/context.
 
 `selectedTarget` is `{contextId, connectionId, harnessId, modelSelector, profileId,

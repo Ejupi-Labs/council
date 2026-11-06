@@ -4,7 +4,8 @@ Status: features 001–003 are implemented, independently reviewed and accepted.
 six-platform native qualification; features 002–003 also have Linux race qualification.
 Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
-Features 004–012 remain planned.
+Feature 004 is implemented and undergoing local/native qualification; its acceptance gate remains
+open. Features 005–012 remain planned.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 

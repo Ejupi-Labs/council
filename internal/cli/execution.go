@@ -206,8 +206,9 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 		c.op = "tasks.start"
 		c.method = "POST"
 		c.route = "/tasks"
-		allow("request-id", "project", "task", "task-file", "source-draft", "source-draft-revision", "expected-policy-revision", "fake", "fake-scenario")
+		allow("request-id", "project", "task", "task-file", "source-draft", "source-draft-revision", "expected-policy-revision", "fake", "fake-scenario", "budget-admissions", "budget-window-seconds")
 		allow(versionKeys...)
+		allow(taskRoutingFlags...)
 	case "tasks list":
 		needsID = false
 		c.op = "tasks.list"
@@ -221,8 +222,9 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 	case "tasks guidance":
 		c.op = "tasks.guidance"
 		c.method = "PUT"
-		allow("request-id", "expected-revision", "guidance", "guidance-file", "use-current-policy", "clear-policy-override")
+		allow("request-id", "expected-revision", "guidance", "guidance-file", "use-current-policy", "clear-policy-override", "use-current-routing-policy")
 		allow(versionKeys...)
+		allow(taskRoutingFlags...)
 	case "tasks run":
 		c.op = "tasks.attempts.start"
 		c.method = "POST"
@@ -312,6 +314,10 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 			return c, err
 		}
 		in := domain.StartTaskInput{RequestID: c.requestID, ProjectID: flags["project"], OriginalText: text, ExpectedPolicyRevision: flags["expected-policy-revision"], Pins: pins, Acceptance: acceptance, PolicyOverride: flags["policy"], TimeoutSeconds: timeout, FakeScenario: flags["fake-scenario"]}
+		in.Routing, err = routingOptions(flags, repeated, "start")
+		if err != nil {
+			return c, err
+		}
 		_, draft := flags["source-draft"]
 		_, revision := flags["source-draft-revision"]
 		if draft != revision {
@@ -351,6 +357,10 @@ func parseExecution(c command, pos []string, flags map[string]string, repeated m
 			return c, err
 		}
 		in := domain.GuidanceInput{RequestID: c.requestID, ExpectedRevision: flags["expected-revision"], GuidanceText: text, UseCurrentPolicy: flags["use-current-policy"] == "true", ClearPolicyOverride: flags["clear-policy-override"] == "true", PolicyOverride: flags["policy"], Pins: pins, Acceptance: acceptance, TimeoutSeconds: timeout}
+		in.Routing, err = routingOptions(flags, repeated, "guidance")
+		if err != nil {
+			return c, err
+		}
 		if err := domain.ValidateGuidance(in); err != nil {
 			return c, err
 		}

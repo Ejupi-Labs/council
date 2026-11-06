@@ -2,7 +2,7 @@ import { addFact, element, timeLabel } from './api.js';
 import type { Attempt, ConnectionCapability, Fact, UsageObservation } from './execution-types.js';
 
 export function harnessName(id?: string): string {
-  if (!id) return 'Auto · Codex native default';
+  if (!id) return 'Auto · no literal harness pin';
   return ({ codex: 'Codex', 'claude-code': 'Claude Code' } as Record<string, string>)[id] ?? id;
 }
 

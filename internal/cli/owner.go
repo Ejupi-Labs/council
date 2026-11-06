@@ -22,7 +22,7 @@ import (
 )
 
 func requiresExecutionOwner(op string) bool {
-	return strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
+	return strings.HasPrefix(op, "routing.") || strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
 }
 
 // HandleInternal starts a continuing owner of this exact executable. Task bodies,

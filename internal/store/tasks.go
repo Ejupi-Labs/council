@@ -9,6 +9,9 @@ import (
 )
 
 func (s *Store) CreateTask(ctx context.Context, ownerID string, in domain.StartTaskInput) domain.Result {
+	return s.CreateTaskWithRouting(ctx, ownerID, in, wrapperRoutingFacts(in.ExecutionMode))
+}
+func (s *Store) CreateTaskWithRouting(ctx context.Context, ownerID string, in domain.StartTaskInput, facts domain.RoutingFacts) domain.Result {
 	if e := domain.ValidateStartTask(in); e != nil {
 		return domain.Failure(in.RequestID, e)
 	}
@@ -56,9 +59,6 @@ func (s *Store) CreateTask(ctx context.Context, ownerID string, in domain.StartT
 		if e := domain.CheckAuthoringCapability(v); e != nil {
 			return 0, nil, e
 		}
-		if e := domain.CheckExecutionScenario(v.Pins, in.ExecutionMode, in.FakeScenario); e != nil {
-			return 0, nil, e
-		}
 		seq, e := nextSequence(ctx, tx, "tasks")
 		if e != nil {
 			return 0, nil, e
@@ -71,23 +71,41 @@ func (s *Store) CreateTask(ctx context.Context, ownerID string, in domain.StartT
 		if _, e = tx.ExecContext(ctx, "INSERT INTO task_versions VALUES(?,1,?)", t.ID, encode(v)); e != nil {
 			return 0, nil, storageError()
 		}
+		authority, e := s.captureRouting(ctx, tx, t, v, in.Routing, facts, nil, "user")
+		if e != nil {
+			return 0, nil, e
+		}
+		budget, e := s.initialBudget(ctx, tx, authority, in.RequestID)
+		if e != nil {
+			return 0, nil, e
+		}
+		decision, e := s.admitRouting(ctx, tx, t, v, &a, authority, &budget, facts, "manual")
+		if e != nil {
+			return 0, nil, e
+		}
+		if e := checkResolvedScenario(a, in.ExecutionMode, in.FakeScenario); e != nil {
+			return 0, nil, e
+		}
 		if e = s.insertAttempt(ctx, tx, a); e != nil {
 			return 0, nil, e
 		}
-		return 201, domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a)}, nil
+		if e = storeRoutingDecision(ctx, tx, decision); e != nil {
+			return 0, nil, e
+		}
+		return 201, domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: &budget}, nil
 	})
 }
 func (s *Store) UpdateGuidance(ctx context.Context, taskID string, in domain.GuidanceInput) domain.Result {
+	return s.UpdateGuidanceWithRouting(ctx, taskID, in, wrapperRoutingFacts(""))
+}
+func (s *Store) UpdateGuidanceWithRouting(ctx context.Context, taskID string, in domain.GuidanceInput, facts domain.RoutingFacts) domain.Result {
 	if !domain.ValidID(taskID) {
 		return domain.Failure(in.RequestID, domain.Invalid("task identity"))
 	}
 	if e := domain.ValidateGuidance(in); e != nil {
 		return domain.Failure(in.RequestID, e)
 	}
-	fp := Fingerprint("tasks.guidance", struct {
-		TaskID string
-		Input  domain.GuidanceInput
-	}{taskID, in})
+	fp := GuidanceFingerprint(taskID, in)
 	return s.mutate(ctx, in.RequestID, "tasks.guidance", fp, func(tx *sql.Tx) (int, any, error) {
 		t, e := s.task(ctx, tx, taskID)
 		if e != nil {
@@ -99,6 +117,13 @@ func (s *Store) UpdateGuidance(ctx context.Context, taskID string, in domain.Gui
 		v, e := s.version(ctx, tx, taskID, t.CurrentVersion)
 		if e != nil {
 			return 0, nil, e
+		}
+		priorAuthority, e := s.routingAuthority(ctx, tx, taskID, v.Version)
+		if e != nil {
+			return 0, nil, e
+		}
+		if priorAuthority == nil && in.Routing != nil {
+			return 0, nil, domain.Fail("routing_adoption_required", "Adopt an explicit task budget before adding routing authority to legacy work.")
 		}
 		v.Version, e = increment(v.Version)
 		if e != nil {
@@ -140,6 +165,11 @@ func (s *Store) UpdateGuidance(ctx context.Context, taskID string, in domain.Gui
 		if _, e = tx.ExecContext(ctx, "INSERT INTO task_versions VALUES(?,?,?)", taskID, intRevision(v.Version), encode(v)); e != nil {
 			return 0, nil, storageError()
 		}
+		if priorAuthority != nil {
+			if _, e = s.captureRouting(ctx, tx, t, v, in.Routing, facts, priorAuthority, "user"); e != nil {
+				return 0, nil, e
+			}
+		}
 		if e = saveTask(ctx, tx, t); e != nil {
 			return 0, nil, e
 		}
@@ -151,6 +181,9 @@ func (s *Store) UpdateGuidance(ctx context.Context, taskID string, in domain.Gui
 	})
 }
 func (s *Store) StartAttempt(ctx context.Context, ownerID, taskID string, in domain.StartAttemptInput) domain.Result {
+	return s.StartAttemptWithRouting(ctx, ownerID, taskID, in, wrapperRoutingFacts(in.ExecutionMode))
+}
+func (s *Store) StartAttemptWithRouting(ctx context.Context, ownerID, taskID string, in domain.StartAttemptInput, facts domain.RoutingFacts) domain.Result {
 	if e := domain.ValidateStartAttempt(in); e != nil {
 		return domain.Failure(in.RequestID, e)
 	}
@@ -190,10 +223,25 @@ func (s *Store) StartAttempt(ctx context.Context, ownerID, taskID string, in dom
 		if e := domain.CheckAuthoringCapability(v); e != nil {
 			return 0, nil, e
 		}
-		if e := domain.CheckExecutionScenario(v.Pins, in.ExecutionMode, in.FakeScenario); e != nil {
+		authority, e := s.routingAuthority(ctx, tx, t.ID, v.Version)
+		if e != nil {
 			return 0, nil, e
 		}
+		budget, e := s.taskBudget(ctx, tx, t.ID)
+		if e != nil {
+			return 0, nil, e
+		}
+		if authority == nil || budget == nil {
+			return 0, nil, domain.Fail("routing_adoption_required", "This legacy task needs explicit budget adoption before a new managed attempt.")
+		}
 		a := newAttempt(t, v, in.RequestID, ownerID, in.ExecutionMode, in.FakeScenario)
+		decision, e := s.admitRouting(ctx, tx, t, v, &a, *authority, budget, facts, "manual")
+		if e != nil {
+			return 0, nil, e
+		}
+		if e := checkResolvedScenario(a, in.ExecutionMode, in.FakeScenario); e != nil {
+			return 0, nil, e
+		}
 		t.LatestAttemptID = ptr(a.ID)
 		t.Revision, e = increment(t.Revision)
 		if e != nil {
@@ -210,6 +258,9 @@ func (s *Store) StartAttempt(ctx context.Context, ownerID, taskID string, in dom
 		if e = saveTask(ctx, tx, t); e != nil {
 			return 0, nil, e
 		}
-		return 201, domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a)}, nil
+		if e = storeRoutingDecision(ctx, tx, decision); e != nil {
+			return 0, nil, e
+		}
+		return 201, domain.Admission{Task: taskSummary(t, v, &a, false), Version: v, Attempt: observe(a), RoutingDecision: &decision, Budget: budget}, nil
 	})
 }

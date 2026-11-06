@@ -95,9 +95,22 @@ func (s *Store) RecordLaunchIntent(ctx context.Context, id string) (domain.Attem
 		if a.SourceSnapshotID == nil {
 			return domain.Fail("source_capture_blocked", "A durable current-source snapshot is required before launch.")
 		}
+		if _, _, e = s.checkRoutingControls(ctx, tx, a, nil); e != nil {
+			return e
+		}
 		if a.LaunchIntent {
 			out = a
 			return nil
+		}
+		budget, e := s.taskBudget(ctx, tx, a.TaskID)
+		if e != nil || budget == nil {
+			if e != nil {
+				return e
+			}
+			return storageError()
+		}
+		if e = appendBudgetLedger(ctx, tx, *budget, "launch_intent", a.StartRequestID, &a.ID, "0", "0"); e != nil {
+			return e
 		}
 		a.LaunchIntent = true
 		a.Cleanup.Scope = "unix_process_group"
@@ -146,6 +159,18 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, u domain.AttemptUp
 			return e
 		}
 		if u.StartedAt != nil {
+			if a.StartedAt == nil && a.RoutingDecisionID != nil {
+				b, e := s.taskBudget(ctx, tx, a.TaskID)
+				if e != nil {
+					return e
+				}
+				if b == nil {
+					return storageError()
+				}
+				if e = appendBudgetLedger(ctx, tx, *b, "launch_started", a.StartRequestID, &a.ID, "0", "0"); e != nil {
+					return e
+				}
+			}
 			a.StartedAt = u.StartedAt
 		}
 		if u.SourceSnapshotID != nil {

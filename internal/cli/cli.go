@@ -34,7 +34,7 @@ const help = `Council — managed local workspace
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
 Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
-` + executionHelp
+` + executionHelp + routingHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
 	c, err := parse(args, stdin)

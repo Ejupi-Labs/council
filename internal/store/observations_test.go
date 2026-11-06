@@ -16,7 +16,7 @@ func TestNativeObservationBindingsBoundsAndFakeSeparation(t *testing.T) {
 	in := taskInput(p.ID)
 	in.ExecutionMode = "native"
 	in.Pins = &domain.ExecutionPins{HarnessID: "claude-code"}
-	r := s.CreateTask(ctx, owner, in)
+	r := s.CreateTaskWithRouting(ctx, owner, in, wrapperRoutingFacts("fake"))
 	if r.Status != 201 {
 		t.Fatal(r)
 	}
@@ -30,7 +30,7 @@ func TestNativeObservationBindingsBoundsAndFakeSeparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	stderr := closedArtifact(t, s, admission.Attempt.ID, "stderr")
-	other := s.CreateTask(ctx, owner, inWithNewRequest(in))
+	other := s.CreateTaskWithRouting(ctx, owner, inWithNewRequest(in), wrapperRoutingFacts("fake"))
 	if other.Status != 201 {
 		t.Fatal(other)
 	}

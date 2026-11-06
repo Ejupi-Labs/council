@@ -12,7 +12,7 @@ async function open(f, owner) {
   return page;
 }
 async function fakeOptions(page, scenario = 'response', deliverable = 'response_only') {
-  await page.locator('.execution-options summary').click();
+  await page.locator('#execution-options > summary').click();
   await page.locator('#task-fake').check(); await page.locator('#task-fake-scenario').selectOption(scenario);
   await page.locator('#task-deliverable').selectOption(deliverable);
 }

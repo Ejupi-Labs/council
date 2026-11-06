@@ -9,7 +9,7 @@ test('browser fixes a byte snapshot, decodes split Unicode and drops late eviden
     owner = await f.start(); const page = await f.browser.newPage(); await page.goto(owner.url);
     await page.locator('#project-path').fill(f.project); await page.locator('#open-project').click();
     await page.waitForFunction(() => !document.querySelector('#start-task')?.disabled);
-    await page.locator('.execution-options summary').click(); await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
+    await page.locator('#execution-options > summary').click(); await page.locator('#task-fake').check(); await page.locator('#task-deliverable').selectOption('response_only');
     await page.locator('#task-text').fill('First retained response'); await page.locator('#start-task').click();
     await page.locator('#attempt-status').filter({ hasText: 'Verification pending' }).waitFor();
     let artifactId;

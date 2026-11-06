@@ -1,7 +1,7 @@
 import { addFact, element, timeLabel } from './api.js';
 export function harnessName(id) {
     if (!id)
-        return 'Auto · Codex native default';
+        return 'Auto · no literal harness pin';
     return { codex: 'Codex', 'claude-code': 'Claude Code' }[id] ?? id;
 }
 export function factLabel(value) {

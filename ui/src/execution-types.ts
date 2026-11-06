@@ -1,4 +1,5 @@
 import type { Policy } from './types.js';
+import type { ResolvedTarget, RoutingDecision, RoutingOptions, TaskBudget } from './routing-types.js';
 
 export interface TaskSummary {
   id: string; projectId: string; currentVersion: string; revision: string; stateRevision: string;
@@ -7,6 +8,7 @@ export interface TaskSummary {
 export interface Task extends TaskSummary { originalText: string }
 export interface TaskVersion {
   taskId: string; version: string; guidanceText: string; requestedPolicy: Policy; timeoutSeconds: number;
+  routing?: RoutingOptions;
   pins: ExecutionPins; acceptance: { deliverable: string; conditionsText: string; requiredEvidence: string[]; allowCandidatePreparation: boolean };
 }
 export interface ExecutionPins { harnessId?: string; model?: string; accountId?: string; paymentPath?: string }
@@ -31,8 +33,9 @@ export interface ConnectionCapability {
   sessionContinuity: string; sessionPersistence: string; cancellationScope: string;
   liveQualification: string; fakeMode: boolean; limits: Record<string, number>;
 }
-export interface ExecutionCapabilities { resourceId: 'managed-native'; limit: 1; defaultHarnessId: 'codex'; connections: ConnectionCapability[] }
+export interface ExecutionCapabilities { resourceId: 'managed-native'; limit: 1; defaultHarnessId: 'codex'; connections: ConnectionCapability[]; routingContract?: '004-v1'; supportedContinuationCategories?: string[]; recognizedContinuationCategories?: string[]; actualAccountSelection?: string; paidAPIExecution?: string }
 export interface Attempt {
+  routingDecisionId?: string; resolvedTarget?: ResolvedTarget;
   id: string; taskId: string; taskVersion: string; connectionId: string; phase: string; outcome: string | null; revision: string;
   executionMode: string; deadlineAt: string; remainingSeconds: number; observedAt: string; settledAt: string | null;
   sourceSnapshotId: string | null; candidateId: string | null; responseArtifactId: string | null;
@@ -52,7 +55,7 @@ export interface Attempt {
   };
 }
 export interface TaskDetail { task: Task; version: TaskVersion; latestAttempt: Attempt | null; acceptance: { responseArtifactId: string; acceptedAt: string } | null }
-export interface Admission { task: TaskSummary; version: TaskVersion; attempt: Attempt }
+export interface Admission { task: TaskSummary; version: TaskVersion; attempt: Attempt; routingDecision?: RoutingDecision; budget?: TaskBudget }
 export interface Artifact { id: string; attemptId: string; kind: string; byteLength: string; closed: boolean; completeness: string; sha256: string | null; createdAt: string }
 export interface ArtifactChunk { artifactId: string; offset: string; nextOffset: string; through: string; bytesBase64: string; eof: boolean; streamClosed: boolean; completeness: string; sha256: string | null }
 export interface AttemptEvent { sequence: string; kind: string; observedAt: string; metadata: unknown }

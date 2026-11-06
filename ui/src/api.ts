@@ -96,10 +96,10 @@ export async function api<T>(path: string, method = 'GET', body?: object): Promi
 }
 
 export function supportsManagedExecution(meta: Meta): boolean {
-  return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.3' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
+  return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.4' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
     && meta.scope === 'managed_execution' && meta.managedExecution === 'native_codex_claude'
-    && meta.executionContract === '003-v1' && meta.maintenanceContract === 'owner-stop/1'
-    && Array.isArray(meta.capabilities) && meta.capabilities.includes('workspace_foundation') && meta.capabilities.includes('managed_execution')
+    && meta.executionContract === '004-v1' && meta.maintenanceContract === 'owner-stop/1'
+    && Array.isArray(meta.capabilities) && meta.capabilities.includes('workspace_foundation') && meta.capabilities.includes('managed_execution') && meta.capabilities.includes('economical_routing')
     && !!meta.admission && ['open', 'closing', 'fenced'].includes(meta.admission.state)
     && meta.capacity?.resourceId === 'managed-native' && meta.capacity.limit === 1
     && (meta.capacity.activeAttemptId === null || /^[a-f0-9]{32}$/.test(meta.capacity.activeAttemptId));

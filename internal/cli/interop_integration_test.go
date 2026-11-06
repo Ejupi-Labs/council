@@ -118,12 +118,47 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 				lock.Close()
 				t.Fatal(err)
 			}
-			// Freeze only the historical schema differences. The other records use
-			// accepted shared APIs and retain their exact encoded receipt bytes.
+			db.SetMaxOpenConns(1)
+			t.Cleanup(func() { _ = db.Close(); _ = lock.Close() })
+			var currentSchema int
+			if err = db.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 4 {
+				t.Fatal("prior-schema fixture must start from its own known schema4 state", currentSchema, err)
+			}
+			if _, err = db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			// This disposable fixture starts with current shared APIs. Remove every
+			// known004 child table before restoring its frozen historical DDL; a
+			// schema2/version marker beside routing tables is rightly refused by the
+			// production migrator. Keep retained history/receipt bytes unchanged.
+			statements := []string{
+				"DROP TABLE budget_ledger", "DROP TABLE budget_amendments",
+				"DROP TABLE routing_continuation_proofs", "DROP TABLE routing_decisions",
+				"DROP TABLE task_budgets", "DROP TABLE task_routing_versions",
+				"DROP TABLE routing_report_bindings", "DROP TABLE routing_capacity_reports",
+				"DROP TABLE routing_capacity_state", "DROP TABLE routing_account_links",
+				"DROP TABLE routing_accounts", "DROP TABLE routing_profiles",
+				"DROP TABLE routing_contexts", "DROP TABLE routing_policy",
+			}
 			if version == 2 {
-				_, err = db.Exec("PRAGMA foreign_keys=ON; DROP TABLE capacity_claims; CREATE TABLE capacity_claims(connection_id TEXT PRIMARY KEY CHECK(connection_id='codex-native'),attempt_id TEXT UNIQUE NOT NULL REFERENCES attempts(id)); PRAGMA user_version=2")
+				statements = append(statements, "DROP TABLE capacity_claims", "CREATE TABLE capacity_claims(connection_id TEXT PRIMARY KEY CHECK(connection_id='codex-native'),attempt_id TEXT UNIQUE NOT NULL REFERENCES attempts(id))", "PRAGMA user_version=2")
 			} else {
-				_, err = db.Exec("PRAGMA foreign_keys=ON; DROP TABLE response_acceptances; DROP TABLE candidates; DROP TABLE source_snapshots; DROP TABLE artifacts; DROP TABLE attempt_events; DROP TABLE attempt_terminals; DROP TABLE capacity_claims; DROP TABLE execution_control; DROP TABLE execution_incidents; DROP TABLE attempts; DROP TABLE task_versions; DROP TABLE tasks; PRAGMA user_version=1")
+				statements = append(statements, "DROP TABLE response_acceptances", "DROP TABLE candidates", "DROP TABLE source_snapshots", "DROP TABLE artifacts", "DROP TABLE attempt_events", "DROP TABLE attempt_terminals", "DROP TABLE capacity_claims", "DROP TABLE execution_control", "DROP TABLE execution_incidents", "DROP TABLE attempts", "DROP TABLE task_versions", "DROP TABLE tasks", "PRAGMA user_version=1")
+			}
+			for _, statement := range statements {
+				if _, err = tx.Exec(statement); err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
 			}
 			closeErr := db.Close()
 			lockErr := lock.Close()

@@ -20,7 +20,7 @@ type ExecutionController interface {
 }
 
 func executionOperation(op string) bool {
-	return strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
+	return strings.HasPrefix(op, "routing.") || strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
 }
 
 func (s *Service) executeManaged(ctx context.Context, op string, p Params) domain.Result {
@@ -36,6 +36,9 @@ func (s *Service) executeManaged(ctx context.Context, op string, p Params) domai
 	id := domain.MutationIdentity(p.Body)
 	if e := domain.ValidateQuery(p.Query); e != nil {
 		return domain.Failure(id, e)
+	}
+	if strings.HasPrefix(op, "routing.") || op == "tasks.budget.amend" {
+		return s.executeRoutingMutation(ctx, op, p)
 	}
 	if p.ID != "" && !domain.ValidID(p.ID) {
 		return domain.Failure(id, domain.Invalid("resource identity"))

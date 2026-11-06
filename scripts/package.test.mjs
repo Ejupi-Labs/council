@@ -104,7 +104,7 @@ test('native preview has exact contents, complete notices and an independently v
   const release = await packagePreview({ outputDirectory: path.join(temporary, 'releases') });
   const data = await readFile(release.archive);
   assert.equal(await readFile(release.checksum, 'utf8'), `${sha256(data)}  ${release.archiveName}\n`);
-  assert.match(release.archiveName, /^council-2\.0\.0-dev\.3-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
+  assert.match(release.archiveName, /^council-2\.0\.0-dev\.4-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
   const entries = readZip(data);
   const manifest = entries.get('SHA256SUMS.txt').contents.toString('utf8');
   const records = manifest.trimEnd().split('\n').map(line => line.match(/^([a-f0-9]{64})  (.+)$/));
@@ -172,10 +172,11 @@ test('native preview has exact contents, complete notices and an independently v
   assert.equal(url.hostname, '127.0.0.1');
   const accessToken = new URLSearchParams(url.hash.slice(1)).get('token');
   const ownerMetadata = await (await fetch(url.origin + '/api/v1/meta', { headers: { Authorization: 'Bearer ' + accessToken }, signal: AbortSignal.timeout(10_000) })).json();
-  assert.equal(ownerMetadata.data.appVersion, '2.0.0-dev.3');
-  assert.equal(ownerMetadata.data.executionContract, '003-v1');
+  assert.equal(ownerMetadata.data.appVersion, '2.0.0-dev.4');
+  assert.equal(ownerMetadata.data.executionContract, '004-v1');
   assert.equal(ownerMetadata.data.maintenanceContract, 'owner-stop/1');
   assert.equal(ownerMetadata.data.managedExecution, 'native_codex_claude');
+  assert.ok(ownerMetadata.data.capabilities.includes('economical_routing'));
   assert.equal(ownerMetadata.data.capacity.resourceId, 'managed-native');
   const declared = await (await fetch(url.origin + '/api/v1/execution/capabilities', { headers: { Authorization: 'Bearer ' + accessToken }, signal: AbortSignal.timeout(10_000) })).json();
   assert.deepEqual(declared.data.connections.map(connection => connection.connectionId), ['codex-native', 'claude-native']);
@@ -260,6 +261,74 @@ test('native preview has exact contents, complete notices and an independently v
   assert.match(claudeBytes.toString('utf8'), /^\ufeff/);
   assert.match(claudeBytes.toString('utf8'), /café, 東京, π/);
   assert.match(claudeBytes.toString('utf8'), /\r\n/);
+
+  // Reports are user declarations; a fake worker never measures provider capacity.
+  const capacityBefore = runBinary(binary, ['routing', 'capacity', '--context', 'codex-native'], runtimeOptions).data;
+  const busy = runBinary(binary, ['routing', 'report', '--context', 'codex-native',
+    '--dimension', 'occupancy', '--state', 'busy', '--expected-revision', capacityBefore.revision,
+    '--valid-for-seconds', '900'], runtimeOptions).data;
+  assert.equal(busy.report.source, 'user_report');
+  assert.equal(busy.report.subject.kind, 'context');
+  assert.equal(busy.report.subject.id, 'codex-native');
+  assert.equal(busy.capacity.dimensions.occupancy.effectiveState, 'busy');
+  assert.equal(busy.capacity.reportEligibility.permitted, false);
+
+  const autoText = '\ufeffExtracted suitable Auto fixture.\r\nKeep original selector intent empty.';
+  const autoArgs = ['tasks', 'start', '--project', project.id, '--task', autoText,
+    '--suitability', 'routine', '--deliverable', 'response_only', '--fake', '--timeout-seconds', '60'];
+  const autoEnvelope = runBinary(binary, autoArgs, runtimeOptions);
+  const auto = autoEnvelope.data;
+  assert.equal(auto.attempt.connectionId, 'claude-native');
+  assert.equal(auto.attempt.resolvedTarget.contextId, 'claude-native');
+  assert.equal(auto.attempt.resolvedTarget.modelSelector, 'haiku');
+  assert.equal(auto.attempt.resolvedTarget.profileId, 'claude-haiku-economy');
+  assert.equal(auto.version.pins.harnessId ?? '', '');
+  assert.equal(auto.version.pins.model ?? '', '');
+  assert.equal(auto.routingDecision.selectedTarget.profileId, 'claude-haiku-economy');
+  assert.equal(auto.routingDecision.budgetEffect.admissionUnits, '1');
+  assert.equal(auto.budget.grantedAdmissions, '2');
+  assert.equal(auto.budget.consumedAdmissions, '1');
+  assert.equal(auto.budget.remainingAdmissions, '1');
+  assert.equal(auto.budget.currentWindow.windowSeconds, 1800);
+  assert.ok(auto.budget.currentWindow.firstAdmissionAt && auto.budget.currentWindow.deadlineAt);
+  const replayedAuto = runBinary(binary, [...autoArgs, '--request-id', autoEnvelope.requestId], runtimeOptions);
+  assert.deepEqual(replayedAuto, autoEnvelope, 'exact extracted Auto replay preserves its original admission and one budget debit');
+  const autoResult = await settled(auto.attempt.id);
+  assert.equal(autoResult.outcome, 'succeeded');
+  assert.equal(autoResult.cleanup.state, 'verified');
+  assert.equal(autoResult.targetObservations.provider.status, 'unknown');
+  assert.equal(autoResult.targetObservations.account.status, 'unknown');
+  assert.equal(autoResult.targetObservations.model.status, 'unknown');
+  const autoTask = runBinary(binary, ['tasks', 'get', auto.task.id], runtimeOptions).data;
+  assert.equal(autoTask.task.originalText, autoText);
+  const autoRouting = runBinary(binary, ['tasks', 'routing', auto.task.id], runtimeOptions).data;
+  assert.equal(autoRouting.adoptionRequired, false);
+  assert.equal(autoRouting.authority.suitabilityAssessment.source, 'user_declared');
+  assert.equal(autoRouting.latestDecision.attemptId, auto.attempt.id);
+  assert.equal(autoRouting.latestDecision.selectedTarget.profileId, 'claude-haiku-economy');
+  const autoBudget = runBinary(binary, ['tasks', 'budget', auto.task.id], runtimeOptions).data;
+  assert.equal(autoBudget.budget.consumedAdmissions, '1');
+  assert.equal(autoBudget.budget.remainingAdmissions, '1');
+  assert.equal(autoBudget.budget.currentWindow.deadlineAt, auto.budget.currentWindow.deadlineAt);
+  const ledger = runBinary(binary, ['tasks', 'budget-ledger', auto.task.id], runtimeOptions).data;
+  assert.equal(ledger.nextCursor, null);
+  assert.equal(ledger.items.filter(item => item.kind === 'admission').length, 1);
+  assert.equal(ledger.items.filter(item => item.kind === 'window_open').length, 1);
+  assert.equal(ledger.items.filter(item => item.kind === 'launch_intent').length, 1);
+  assert.equal(ledger.items.filter(item => item.kind === 'launch_started').length, 1);
+  assert.equal(ledger.items.reduce((sum, item) => sum + BigInt(item.consumedDelta), 0n), 1n);
+  assert.equal(ledger.items.reduce((sum, item) => sum + BigInt(item.grantedDelta), 0n), 2n);
+  const usage = runBinary(binary, ['tasks', 'usage', auto.task.id], runtimeOptions).data;
+  assert.equal(usage.nextCursor, null);
+  assert.equal(usage.items.length, 1);
+  assert.equal(usage.items[0].attemptId, auto.attempt.id);
+  assert.equal(usage.items[0].selectedUsageScope, 'fake_unmeasured');
+  assert.deepEqual(usage.coverage.excludedFakeAttemptIds, [auto.attempt.id]);
+  assert.equal(usage.knownSubtotal.scope, 'returned_attempts');
+  assert.equal(usage.knownSubtotal.byUsageScope.top_level.inputTokens.knownValue, null);
+  assert.equal(usage.knownSubtotal.byUsageScope.whole_tree.inputTokens.knownValue, null);
+  assert.deepEqual(usage.estimates, []);
+  assert.deepEqual(usage.charges, { status: 'unknown', items: [] });
 
   // The same extracted binary can restart and read retained bytes without rerunning work.
   await stopOwnedService(binary);

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Ejupi-Labs/council/v2/internal/adapters"
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/evidence"
 	"github.com/Ejupi-Labs/council/v2/internal/localstate"
@@ -68,50 +67,93 @@ func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain
 	} else if previous != nil {
 		return *previous
 	}
-	if in.ExecutionMode != "fake" {
-		pins := domain.ExecutionPins{}
-		if in.Pins != nil {
-			pins = *in.Pins
-		}
-		resolve := e.config.Resolve
-		if resolve == nil {
-			resolve = adapters.ResolveNative
-		}
-		if _, err := resolve(ctx, pins); err != nil {
-			return e.failure(in.RequestID, err)
-		}
+	facts, err := e.startRoutingFacts(ctx, in)
+	if err != nil {
+		return e.failure(in.RequestID, err)
 	}
 	e.control.Lock()
 	if e.fenced {
 		e.control.Unlock()
 		return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Dispatch is fenced by unresolved ownership or persistence. Inspect the retained incident before admitting work."))
 	}
-	result := e.db.CreateTask(ctx, e.config.OwnerInstanceID, in)
+	result := e.db.CreateTaskWithRouting(ctx, e.config.OwnerInstanceID, in, facts)
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
 	return result
 }
 func (e *Engine) Guidance(ctx context.Context, id string, in domain.GuidanceInput) domain.Result {
+	if !domain.ValidID(id) {
+		return e.failure(in.RequestID, domain.Invalid("task identity"))
+	}
+	if err := domain.ValidateGuidance(in); err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	if replayed, err := e.db.Replay(ctx, in.RequestID, "tasks.guidance", store.GuidanceFingerprint(id, in)); err != nil {
+		return e.failure(in.RequestID, err)
+	} else if replayed != nil {
+		return *replayed
+	}
+	view, err := e.db.TaskRouting(ctx, id)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	var facts domain.RoutingFacts
+	if view.Authority != nil {
+		detail, err := e.db.Task(ctx, id)
+		if err != nil {
+			return e.failure(in.RequestID, err)
+		}
+		facts, err = e.guidanceRoutingFacts(ctx, detail, in, *view.Authority)
+		if err != nil {
+			return e.failure(in.RequestID, err)
+		}
+	}
+	e.prepareGate.Lock()
+	defer e.prepareGate.Unlock()
 	e.control.Lock()
-	result := e.db.UpdateGuidance(ctx, id, in)
+	result := e.db.UpdateGuidanceWithRouting(ctx, id, in, facts)
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
 	return result
 }
 func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAttemptInput) domain.Result {
+	if !domain.ValidID(id) {
+		return e.failure(in.RequestID, domain.Invalid("task identity"))
+	}
+	if err := domain.ValidateStartAttempt(in); err != nil {
+		return e.failure(in.RequestID, err)
+	}
 	if prior, err := e.db.Replay(ctx, in.RequestID, "tasks.attempts.start", store.AttemptStartFingerprint(id, in)); err != nil {
 		return e.failure(in.RequestID, err)
 	} else if prior != nil {
 		return *prior
+	}
+	view, err := e.db.TaskRouting(ctx, id)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	if view.Authority == nil {
+		return e.failure(in.RequestID, domain.Fail("routing_adoption_required", "Adopt explicit routing and budget authority before starting new work for this legacy task."))
+	}
+	if view.Authority.TaskVersion != in.TaskVersion {
+		return e.failure(in.RequestID, domain.Fail("task_version_conflict", "Start against the current immutable task version."))
+	}
+	detail, err := e.db.Task(ctx, id)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	facts, err := e.frozenRoutingFacts(ctx, detail.Task, *view.Authority, in.ExecutionMode)
+	if err != nil {
+		return e.failure(in.RequestID, err)
 	}
 	e.control.Lock()
 	if e.fenced {
 		e.control.Unlock()
 		return e.failure(in.RequestID, domain.Fail("dispatch_fenced", "Dispatch is fenced by unresolved ownership or persistence. Inspect the retained incident before admitting work."))
 	}
-	result := e.db.StartAttempt(ctx, e.config.OwnerInstanceID, id, in)
+	result := e.db.StartAttemptWithRouting(ctx, e.config.OwnerInstanceID, id, in, facts)
 	e.guardMutationLocked(result)
 	e.control.Unlock()
 	e.signal()
@@ -264,6 +306,7 @@ func (e *Engine) schedule() {
 					e.activeCancel = nil
 				}
 				e.control.Unlock()
+				e.continueRouting(a.ID)
 				e.signal()
 			}(claimed)
 		}

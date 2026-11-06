@@ -16,7 +16,7 @@ import (
 func metadataFixture(ownerID string, old bool) map[string]any {
 	m := map[string]any{"ownerInstanceId": ownerID, "apiVersion": 1, "appVersion": domain.AppVersion,
 		"scope": "managed_execution", "managedExecution": "native_codex_claude", "executionContract": domain.ExecutionContract,
-		"maintenanceContract": "owner-stop/1", "capabilities": []string{"workspace_foundation", "managed_execution"},
+		"maintenanceContract": "owner-stop/1", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing"},
 		"admission": map[string]any{"state": "open", "incidentId": nil},
 		"capacity":  map[string]any{"resourceId": "managed-native", "limit": 1, "activeAttemptId": nil}}
 	if old {

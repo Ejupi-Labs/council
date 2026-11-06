@@ -18,6 +18,7 @@ import (
 	"github.com/Ejupi-Labs/council/v2/internal/fixture"
 	"github.com/Ejupi-Labs/council/v2/internal/process"
 	"github.com/Ejupi-Labs/council/v2/internal/project"
+	"github.com/Ejupi-Labs/council/v2/internal/routing"
 	"github.com/Ejupi-Labs/council/v2/internal/store"
 	"github.com/Ejupi-Labs/council/v2/internal/workspace"
 )
@@ -82,8 +83,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, failure, err)
 		return
 	}
-	connectionID, pinErr := domain.ResolveConnectionID(detail.Version.Pins)
-	if pinErr != nil || connectionID != a.ConnectionID {
+	if a.ResolvedTarget == nil || a.RoutingDecisionID == nil || a.ResolvedTarget.ConnectionID != a.ConnectionID {
 		e.settleUnlaunched(a, primary("pin_unavailable", "The captured task target does not match its admitted native connection. No target was substituted."))
 		return
 	}
@@ -96,6 +96,29 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("project_identity_changed", "The saved project identity changed. Restore its original folder before another explicit attempt."))
 		return
 	}
+	view, err := e.db.TaskRouting(ctx, a.TaskID)
+	if err != nil || view.Authority == nil {
+		e.settleUnlaunched(a, primary("routing_adoption_required", "This task has no captured routing authority. Adopt it explicitly before starting new work."), err)
+		return
+	}
+	if view.Authority.TaskVersion != a.TaskVersion {
+		e.settleUnlaunched(a, primary("guidance_changed", "Guidance changed before dispatch. Start against the current version explicitly."))
+		return
+	}
+	assessment := view.Authority.SuitabilityAssessment
+	if sourceErr := routing.RecheckOriginal(ctx, p.ResolvedPath, assessment); sourceErr != nil {
+		e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
+		return
+	}
+	if stopped, routingErr := e.guardRouting(ctx, a, assessment); routingErr != nil || stopped {
+		if routingErr != nil {
+			e.settleUnlaunched(a, primary(domain.SafeError(routingErr).Code, domain.SafeError(routingErr).Message), routingErr)
+		}
+		return
+	}
+	invocationPins := detail.Version.Pins
+	invocationPins.HarnessID = a.ResolvedTarget.HarnessID
+	invocationPins.Model = a.ResolvedTarget.ModelSelector
 	// Codex alone writes its private response file. Claude returns terminal text
 	// through the parsed stdout protocol and never receives a response path.
 	outputPath := ""
@@ -115,7 +138,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	if a.ExecutionMode == "fake" {
 		resolve = func(context.Context, domain.ExecutionPins) (string, error) { return os.Executable() }
 	}
-	launch, err := adapters.BuildNative(ctx, detail.OriginalText, detail.Version, outputPath, resolve)
+	launch, err := adapters.BuildResolvedNative(ctx, detail.OriginalText, detail.Version, *a.ResolvedTarget, outputPath, resolve)
 	if err != nil {
 		e.settleUnlaunched(a, primary(domain.SafeError(err).Code, domain.SafeError(err).Message))
 		return
@@ -125,7 +148,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		if a.ConnectionID == "claude-native" {
 			auxiliaryPath = e.lock.Root()
 		}
-		launch.Args, err = fixture.ArgsForHarness(detail.Version.Pins.HarnessID, a.FakeScenario, auxiliaryPath)
+		launch.Args, err = fixture.ArgsForHarness(invocationPins.HarnessID, a.FakeScenario, auxiliaryPath)
 		if err != nil {
 			e.settleUnlaunched(a, primary("capability_unavailable", "The requested fixed fixture is unsupported."))
 			return
@@ -148,6 +171,20 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("source_capture_blocked", message), err)
 		return
 	}
+	if identityErr := project.ValidateIdentity(p.ResolvedPath, identity); identityErr != nil {
+		e.settleUnlaunched(a, primary("project_identity_changed", "The saved project identity changed during source capture. No worker was prepared."))
+		return
+	}
+	if sourceErr := routing.RecheckOriginal(ctx, p.ResolvedPath, assessment); sourceErr != nil {
+		e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
+		return
+	}
+	if assessment.SourceProof != nil {
+		if sourceErr := routing.RecheckManaged(ctx, snapshot.ExecutionPath, *assessment.SourceProof); sourceErr != nil {
+			e.settleUnlaunched(a, primary(sourceErr.Code, sourceErr.Message))
+			return
+		}
+	}
 	manifest, err := e.evidence.VerifyClosed(ctx, snapshot.ManifestArtifactID)
 	if err != nil || manifest.SHA256 == nil {
 		e.settleUnlaunched(a, primary("evidence_failed", "The captured source manifest is not verifiable."), err)
@@ -166,6 +203,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, failure, err)
 		return
 	}
+	if stopped, routingErr := e.guardRouting(ctx, a, assessment); routingErr != nil || stopped {
+		if routingErr != nil {
+			e.settleUnlaunched(a, primary(domain.SafeError(routingErr).Code, domain.SafeError(routingErr).Message), routingErr)
+		}
+		return
+	}
 	out, err := e.evidence.Create(ctx, a.ID, "stdout", evidence.StdoutLimit)
 	if err != nil {
 		e.settleUnlaunched(a, primary("evidence_failed", "Cannot create the private stdout artifact."), err)
@@ -177,7 +220,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("evidence_failed", "Cannot create the private stderr artifact."), errors.Join(err, closeErr))
 		return
 	}
-	parser, err := adapters.NewParser(a.ConnectionID, detail.Version.Pins, out.ID(), func(event adapters.Event) error {
+	parser, err := adapters.NewParser(a.ConnectionID, invocationPins, out.ID(), func(event adapters.Event) error {
 		if err := out.Checkpoint(context.Background()); err != nil {
 			return err
 		}
@@ -192,10 +235,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("capability_unavailable", "The captured native parser is unavailable."), errors.Join(err, outCloseErr, stderrCloseErr))
 		return
 	}
+	e.prepareGate.Lock()
 	e.control.Lock()
 	_, guardErr := e.db.RecordLaunchIntent(ctx, a.ID)
 	e.control.Unlock()
 	if guardErr != nil {
+		e.prepareGate.Unlock()
 		if persistenceFault(guardErr) {
 			e.fence(a.ID, "storage_failed", "The durable native preparation guard could not be acknowledged. Further dispatch remains fenced.")
 		}
@@ -204,7 +249,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("launch_blocked", "The durable preparation guard rejected native creation. No worker was launched."), errors.Join(guardErr, outCloseErr, stderrCloseErr))
 		return
 	}
-	owned, err := process.Prepare(ctx, process.NativeSpec{Executable: launch.Executable, Args: launch.Args, Cwd: snapshot.ExecutionPath, Stdin: launch.Prompt, Stdout: protocolWriter{e, a.ID, out, parser}, Stderr: stderr})
+	prepare := process.Prepare
+	if e.config.Prepare != nil {
+		prepare = e.config.Prepare
+	}
+	owned, err := prepare(ctx, process.NativeSpec{Executable: launch.Executable, Args: launch.Args, Cwd: snapshot.ExecutionPath, Stdin: launch.Prompt, Stdout: protocolWriter{e, a.ID, out, parser}, Stderr: stderr})
+	e.prepareGate.Unlock()
 	if err != nil {
 		if errors.Is(err, process.ErrOwnershipUncertain) {
 			e.fence(a.ID, "ownership_uncertain", "Native preparation cleanup could not be verified. Do not replay or dispatch more work.")

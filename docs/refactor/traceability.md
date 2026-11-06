@@ -21,7 +21,9 @@ failure/cancellation precedence, complete evidence, isolation and fail-closed cl
 
 Features 001–003 acceptance.md and review.md records include their actual hosted qualification,
 independent review/corrections and separately unperformed live-provider qualification.
-Evidence paths for features 004–012 are **planned and not yet created**; a path alone is not evidence.
+Feature 004 has reviewed Specify artifacts and implementation under qualification; its
+acceptance/review records distinguish actual local checks from outstanding release gates.
+Evidence paths for features 005–012 are **planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
@@ -82,10 +84,10 @@ single status cannot hide an unmet claim.
 | FR-042 | Export evidence, back up/restore state and clean reviewed artifacts with explicit scope | 007 | 001, 002, 012 | `specs/007-recovery-and-retention/acceptance.md#export-backup-and-cleanup` | NOT IMPLEMENTED |
 | FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — approved composer, execution, evidence and usage views accepted; later workflow views repeat qualification |
 | FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — foundation and authoring copy, keyboard, errors and 360px states accepted; later views remain planned |
-| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing and MCP remain planned |
+| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing passes local qualification; MCP remains planned |
 | FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — task/draft/control/acceptance replay and stale clients accepted on six targets at f5edd96 |
 | FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation and native Codex fake journeys accepted on six targets; complete multi-adapter release remains planned |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — features 001–003 specified, independently reviewed, corrected and accepted; features 004–012 remain planned |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — features 001–003 specified, independently reviewed, corrected and accepted; 004 implementation is under qualification; features 005–012 remain planned |
 
 ## Per-feature review and fix gates
 
@@ -99,7 +101,7 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 | 001 | `specs/001-workspace-foundation/` | `specs/001-workspace-foundation/review.md` | ACCEPTED — six native targets at 93c8c25 |
 | 002 | `specs/002-managed-execution/` | `specs/002-managed-execution/review.md` | ACCEPTED — six native targets plus race at f5edd96 |
 | 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | ACCEPTED — six native targets plus race at ce8aaa7; all six implementation findings closed |
-| 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | NOT IMPLEMENTED; gate open |
+| 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | IMPLEMENTED UNDER QUALIFICATION — local gates passed; native/race gate open |
 | 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | NOT IMPLEMENTED; gate open |
 | 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | NOT IMPLEMENTED; gate open |
 | 007 | `specs/007-recovery-and-retention/` | `specs/007-recovery-and-retention/review.md` | NOT IMPLEMENTED; gate open |

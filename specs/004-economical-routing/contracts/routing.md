@@ -102,7 +102,10 @@ is unsupported even with a proposed provider/account/budget; no implicit paid fa
 New admission success remains `{task,version,attempt}` with receipt, plus optional `routingDecision`
 and `budget` snapshots. The decision records actual selected context/selector separately from
 original pins. New attempt reads expose optional `routingDecisionId` and `resolvedTarget`.
-Old stored response envelopes/JSON are not enriched during replay or migration. A target admitted
+Old stored response envelopes/JSON are not enriched during replay or migration. Decisions share
+at most two compact context capacityEvidence snapshots, with immutable report IDs and captured
+asOf/effective facts as defined in the data model; they do not duplicate full CapacityView bodies
+per profile. evidenceSnapshot uses the named assessment and contexts members. A target admitted
 to the queue is frozen; later changes cannot alter its connection or selector in place.
 
 ## Published decision policy
@@ -355,6 +358,11 @@ prevents new dispatch and requests controlled Stop; cleanup can remain visibly p
 
 ## Dispatch and closed continuation rules
 
+An occupied global managed-native claim is ordinary queue waiting, not target ineligibility.
+New eligible tasks may be admitted and consume their unit/window while queued. Claim contention
+neither rejects all routing candidates nor creates category-A replacement authority; dispatch waits
+for verified resource release. External reported busy/denying capacity remains a separate control.
+
 Gather installation/recognized-operation filesystem facts outside the transaction. The typed
 admission/dispatch facts identify exact profile/context/link/report/policy/source versions and
 observation time. Under the serialized owner/store boundary recheck current task/version, literal
@@ -395,6 +403,11 @@ published preference/fallback rules, not this comparison against a predecessor. 
 unchanged; candidates are retained, never assumed integrated into a new workspace. Accepted Stop,
 owner closing/loss, evidence/commit ambiguity, corruption or unknown cleanup prevents automatic
 replacement through either harness. Restart never creates new authority from old terminal rows.
+
+A Stop targeting the freshly settled current predecessor can suppress its not-yet-admitted
+continuation by advancing task control revision and recording a separate suppression receipt.
+It never rewrites the settled terminal or proof. Once a successor exists, Stop on the older
+attempt remains scoped to that older attempt; cancelling the successor requires its exact ID.
 
 ## Usage views and UI/CLI parity
 
@@ -514,7 +527,10 @@ it is never required for task start. `routing capacity` and `routing reports` ta
 optional flags are `--observed-at`, `--retry-after`, `--note`, `--correction-of`,
 `--correction-action` and `--valid-for-seconds`. Enum values use the wire spellings. Omitting a
 boolean retains its documented default/current value; an explicitly supplied false is represented
-as false rather than being mistaken for omission.
+as false rather than being mistaken for omission. New boolean options take an explicit true|false
+value: --enabled, --unlink, --clear-reference-price, --allow-replacement, --allow-escalation and
+--use-current-routing-policy. Thus unlink is --unlink true. Existing standalone flags such as
+--fake and --reviewed retain their prior meanings.
 
 ## Errors, receipts and required evidence
 
