@@ -8,8 +8,9 @@ Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172
 Its38-row evidence matrix and independent review are closed. Feature005 design was committed
 at `24b0cf1`; accepted dev.5/005-v1 source `794f08032b96434d1217f8bb3797c6803263f39c`
 passes all seven jobs in run42224386878. Its35-row matrix,22 independent corrections and local
-visual review are closed; the first failed hosted run remains documented. Features006–012 remain
-planned. The parent rebuild is incomplete.
+visual review are closed; the first failed hosted run remains documented. Feature006 has reviewed
+functional specification and active design/tasks under specs/006-task-graphs; runtime acceptance
+is still unperformed. Features007–012 remain planned. The parent rebuild is incomplete.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
@@ -79,8 +80,8 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Features001–005 are accepted;006–012 are planned
-and not implemented. The exit descriptions define each slice's acceptance boundary and are not
+Features001–005 are accepted;006 is in its design/task gate and not implemented;007–012 are
+planned. The exit descriptions define each slice's acceptance boundary and are not
 pass claims. The order is sequential; later slices build on accepted earlier ones and must
 preserve their working journeys.
 

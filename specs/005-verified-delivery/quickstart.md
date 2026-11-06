@@ -1,10 +1,10 @@
 # Verified task delivery acceptance quickstart
 
-**Status**: Dev.5 implementation under qualification, after design commit `24b0cf1`. The current
-execution/workflow contracts are `005-v1`. This is the functional demonstration and qualification
-procedure, not a completed acceptance report. Observed checks and remaining work belong in
-[acceptance.md](acceptance.md); 005 acceptance and its six-native-target/race gate are not yet
-claimed. Features 006–012 remain planned.
+**Status**: Accepted dev.5 scope at checked source `794f08032b96434d1217f8bb3797c6803263f39c`,
+after design commit `24b0cf1` and acceptance commit `c5b1801`. Execution/workflow contracts are
+`005-v1`. This is the demonstration/qualification procedure; terminal local and all seven native/
+race results are recorded in [acceptance.md](acceptance.md), run42224386878. Feature006 is in
+planning;007–012 remain planned. This guide establishes no006 capability or live-provider result.
 
 Follow [spec.md](spec.md), [contracts/workflow.md](contracts/workflow.md) and
 [data-model.md](data-model.md). The accepted prerequisite is feature 004 at

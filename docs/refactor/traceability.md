@@ -30,7 +30,9 @@ Feature005 design was committed at `24b0cf1` before implementation. Its
 [acceptance ledger](../../specs/005-verified-delivery/acceptance.md) and35-row evidence matrix
 close the specified workflow scope at794f080, including all six native jobs and Linux race.
 Future graph, recovery, host and remaining adapter scopes are not implied by that acceptance.
-Evidence paths for features006–012 are **planned and not yet created**; a path alone is not evidence.
+Feature006 specification/design/tasks are active under specs/006-task-graphs; its runtime
+review/acceptance evidence paths remain planned and unperformed. Feature007–012 directories and
+evidence paths are planned and not yet created. A path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
