@@ -36,6 +36,9 @@ func serviceFailure(id string, err error) domain.Result {
 	return domain.Failure(id, domain.Fail("internal_error", "The operation could not complete. Report this request identity."))
 }
 func (s *Service) Execute(ctx context.Context, operation string, p Params) domain.Result {
+	if executionOperation(operation) {
+		return s.executeManaged(ctx, operation, p)
+	}
 	switch operation {
 	case "projects.open":
 		return s.openProject(ctx, p)

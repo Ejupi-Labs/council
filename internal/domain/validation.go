@@ -61,9 +61,12 @@ func StrictDecode(body []byte, target any) *Error {
 		return Invalid("JSON object body")
 	}
 	for _, value := range members {
-		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if containsNull(value) {
 			return Invalid("non-null JSON members")
 		}
+	}
+	if err := executionPresence(target, members); err != nil {
+		return err
 	}
 	if err := json.Unmarshal(body, target, json.RejectUnknownMembers(true)); err != nil {
 		return Invalid("documented JSON members and types")
@@ -125,4 +128,17 @@ func MutationIdentity(body []byte) string {
 		}
 	}
 	return NewID()
+}
+
+func containsNull(value jsontext.Value) bool {
+	decoder := jsontext.NewDecoder(bytes.NewReader(value))
+	for {
+		token, err := decoder.ReadToken()
+		if err != nil {
+			return false
+		}
+		if token.Kind() == 'n' {
+			return true
+		}
+	}
 }

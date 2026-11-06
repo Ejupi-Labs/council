@@ -1,7 +1,9 @@
 # Council rebuild delivery plan
 
-Status: feature001 implemented/reviewed with six-platform native CI and Linux race checks; features002–012 remain planned.
-Date: 5 November 2026. See the feature001 acceptance/review records for actual evidence.
+Status: feature001 accepted with six-platform native CI and Linux race checks. Feature002 is
+implemented and reviewed with complete local Windows ARM64 acceptance; hosted native/race
+qualification is pending. Features003–012 remain planned. Date: 6 November 2026.
+See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
 

@@ -60,7 +60,14 @@ func (s Scanner) Discover(ctx context.Context) (DiscoveryResult, error) {
 			} else if status == "unsupported_launcher" {
 				action = "review_launcher_support"
 			}
-			e.Observation = &ConnectionObservation{HarnessID: h.id, InstallationStatus: status, LauncherPath: path, Source: source, ObservedAt: stamp, ManagedExecution: "not_implemented", Authentication: "unknown", Provider: "unknown", Account: "unknown", Model: "unknown", EffectivePermissions: "unknown", ExternalOccupancy: "unknown", Allowance: "unknown", Usage: "unknown", NextAction: action}
+			managed := "not_implemented"
+			if h.id == "codex" {
+				managed = "native_supported_live_unqualified"
+				if status == "installed" {
+					action = "start_explicit_task"
+				}
+			}
+			e.Observation = &ConnectionObservation{HarnessID: h.id, InstallationStatus: status, LauncherPath: path, Source: source, ObservedAt: stamp, ManagedExecution: managed, Authentication: "unknown", Provider: "unknown", Account: "unknown", Model: "unknown", EffectivePermissions: "unknown", ExternalOccupancy: "unknown", Allowance: "unknown", Usage: "unknown", NextAction: action}
 		}
 		result.Observations = append(result.Observations, e)
 	}

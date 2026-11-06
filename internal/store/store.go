@@ -26,7 +26,11 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn, err := sqliteDSN(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, storageError()
 	}
@@ -70,6 +74,25 @@ func Open(path string) (*Store, error) {
 			tx.Rollback()
 			return fail()
 		}
+		if _, e = tx.Exec(executionSchema); e != nil {
+			tx.Rollback()
+			return fail()
+		}
+		if e = tx.Commit(); e != nil {
+			return fail()
+		}
+	} else if version == 1 && appID == applicationID {
+		if err = s.validateFoundation(context.Background()); err != nil {
+			return fail()
+		}
+		tx, e := db.Begin()
+		if e != nil {
+			return fail()
+		}
+		if _, e = tx.Exec(executionSchema); e != nil {
+			tx.Rollback()
+			return fail()
+		}
 		if e = tx.Commit(); e != nil {
 			return fail()
 		}
@@ -90,6 +113,12 @@ func Open(path string) (*Store, error) {
 			return fail()
 		}
 		rows.Close()
+	}
+	if err = s.validateExecutionSchema(context.Background()); err != nil {
+		return fail()
+	}
+	if err = configureDurableJournal(context.Background(), db); err != nil {
+		return fail()
 	}
 	return s, nil
 }
@@ -141,47 +170,68 @@ func (s *Store) Replay(ctx context.Context, id, operation, fingerprint string) (
 func (s *Store) mutate(ctx context.Context, id, operation, fingerprint string, change func(*sql.Tx) (int, any, error)) domain.Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return domain.Failure(id, storageError())
+	if err := ctx.Err(); err != nil {
+		return interruptedMutation(id)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return mutationBeforeCommitFailure(ctx, id, storageError())
 	}
 	defer tx.Rollback()
-	previous, e := s.replay(ctx, tx, id, operation, fingerprint)
-	if e != nil {
-		return domain.Failure(id, domain.SafeError(e))
+	previous, err := s.replay(ctx, tx, id, operation, fingerprint)
+	if err != nil {
+		return mutationBeforeCommitFailure(ctx, id, err)
 	}
 	if previous != nil {
 		return *previous
 	}
-	status, data, e := change(tx)
-	if e != nil {
-		return domain.Failure(id, domain.SafeError(e))
+	status, data, err := change(tx)
+	if err != nil {
+		return mutationBeforeCommitFailure(ctx, id, err)
+	}
+	if err = ctx.Err(); err != nil {
+		return interruptedMutation(id)
 	}
 	receipt := &domain.Receipt{RequestID: id, Operation: operation, CommittedAt: domain.Now()}
 	result := domain.Success(status, id, data, receipt)
-	if _, e = tx.ExecContext(ctx, "INSERT INTO receipts(request_id,operation,fingerprint,status,envelope) VALUES(?,?,?,?,?)", id, operation, fingerprint, status, encode(result.Envelope)); e != nil {
-		return domain.Failure(id, storageError())
+	if _, err = tx.ExecContext(ctx, "INSERT INTO receipts(request_id,operation,fingerprint,status,envelope) VALUES(?,?,?,?,?)", id, operation, fingerprint, status, encode(result.Envelope)); err != nil {
+		return mutationBeforeCommitFailure(ctx, id, storageError())
 	}
 	if s.BeforeCommit != nil {
-		if e = s.BeforeCommit(); e != nil {
-			return domain.Failure(id, storageError())
+		if err = s.BeforeCommit(); err != nil {
+			return mutationBeforeCommitFailure(ctx, id, beforeCommitHookError(ctx, err))
 		}
 	}
-	if e = ctx.Err(); e != nil {
-		return domain.Failure(id, storageError())
+	if err = ctx.Err(); err != nil {
+		return interruptedMutation(id)
 	}
-	if e = tx.Commit(); e != nil {
+	if err = tx.Commit(); err != nil {
 		return domain.Failure(id, domain.Fail("write_uncertain", "Storage acknowledgement is uncertain. Retry with the same request identity and input."))
 	}
 	if s.AfterCommit != nil {
-		if e = s.AfterCommit(); e != nil {
+		if err = s.AfterCommit(); err != nil {
 			return domain.Failure(id, domain.Fail("write_uncertain", "Storage acknowledgement is uncertain. Retry with the same request identity and input."))
 		}
 	}
 	return result
 }
+func interruptedMutation(id string) domain.Result {
+	return domain.Failure(id, domain.Fail("operation_interrupted", "The operation was interrupted before commit. Retry with the same request identity and input."))
+}
+func mutationBeforeCommitFailure(ctx context.Context, id string, err error) domain.Result {
+	if durabilityErrorCode(err) == "write_uncertain" {
+		return domain.Failure(id, domain.Fail("write_uncertain", "Persistence is uncertain. Retry with the same request identity and input."))
+	}
+	if hasJoinedDurabilityFault(err) {
+		return domain.Failure(id, storageError())
+	}
+	if ctx.Err() != nil || cancellationOnly(err) {
+		return interruptedMutation(id)
+	}
+	return domain.Failure(id, domain.SafeError(err))
+}
 func nextSequence(ctx context.Context, q queryer, table string) (int64, error) {
-	if table != "projects" && table != "drafts" {
+	if table != "projects" && table != "drafts" && table != "tasks" && table != "attempts" && table != "attempt_events" && table != "artifacts" {
 		return 0, storageError()
 	}
 	var n int64

@@ -1,8 +1,9 @@
 # Council rebuild requirements traceability
 
-Status: feature001 foundation implemented/reviewed on Windows ARM64. FR-001 is implemented for
-all six native CI targets qualified at93c8c25; other parent requirements remain partial or not implemented as marked.
-Date: 5 November 2026.
+Status: feature001 foundation is accepted on all six native targets at93c8c25. Feature002 managed
+execution is implemented and independently reviewed with complete local Windows ARM64 acceptance;
+its changed native behavior awaits hosted platform/race qualification. Other parent requirements
+remain partial or not implemented as marked. Date: 6 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
 [the delivery plan](delivery-plan.md). It does not credit the legacy runtime at
@@ -17,8 +18,9 @@ This is not permission to postpone foundational controls: task ownership, bounde
 failure/cancellation precedence, complete evidence, isolation and fail-closed cleanup exist from
 002. Slice 007 adds deliberate recovery and retention operations to that established base.
 
-Feature001 evidence exists in its acceptance.md and review.md. Other evidence paths are
-**planned and not yet created**; a path alone is not evidence.
+Feature001 and feature002 evidence exists in their acceptance.md and review.md records. Feature002
+still has the explicit hosted qualification gate. Other evidence paths are **planned and not yet
+created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
@@ -41,11 +43,11 @@ single status cannot hide an unmet claim.
 | FR-004 | Keep provider, account, harness and model identities distinct; link shared accounts | 004 | 002, 003, 009–012 | `specs/004-economical-routing/acceptance.md#target-and-account-identities` | NOT IMPLEMENTED |
 | FR-005 | Supply all five core lifecycle adapters with truthful optional capabilities and qualification | 012 | 002, 003, 009, 010, 011 | `specs/012-release-qualification/acceptance.md#adapter-capability-matrix` | NOT IMPLEMENTED |
 | FR-006 | Keep documented collaboration state outside Git and release artifacts | 001 | 002, 007, 012 | `specs/001-workspace-foundation/acceptance.md#local-state-boundary-and-authority` | IMPLEMENTED — six-platform foundation; later records repeat exclusion checks |
-| FR-007 | Admit tasks with project/task and Auto defaults, preserving resolved choices | 002 | 001, 004, 005, 012 | `specs/002-managed-execution/acceptance.md#task-admission-defaults` | NOT IMPLEMENTED |
-| FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | PARTIAL — exact immutable draft versions; execution/guidance pending |
-| FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | PARTIAL — requested preference saved; effective execution pending |
-| FR-010 | Report actual harness policy capabilities and restrictions honestly | 002 | 003, 009–012 | `specs/002-managed-execution/acceptance.md#permission-capabilities-and-limits` | NOT IMPLEMENTED |
-| FR-011 | Validate task data and destination before side effects | 002 | 004, 005, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | NOT IMPLEMENTED |
+| FR-007 | Admit tasks with project/task and Auto defaults, preserving resolved choices | 002 | 001, 004, 005, 012 | `specs/002-managed-execution/acceptance.md#task-admission-defaults` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-008 | Preserve original task text, constraints and attributable guidance versions | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-009 | Persist and apply scoped autonomous full-access preference without repeat permission prompts | 002 | 001, 003, 009–012 | `specs/002-managed-execution/acceptance.md#effective-execution-policy` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-010 | Report actual harness policy capabilities and restrictions honestly | 002 | 003, 009–012 | `specs/002-managed-execution/acceptance.md#permission-capabilities-and-limits` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-011 | Validate task data and destination before side effects | 002 | 004, 005, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
 | FR-012 | Select proportionate workflow stages without mandatory model planning, debate or review | 005 | 002, 004, 012 | `specs/005-verified-delivery/acceptance.md#proportionate-workflow` | NOT IMPLEMENTED |
 | FR-013 | Choose the least costly suitably capable configured target deterministically | 004 | 003, 005, 012 | `specs/004-economical-routing/acceptance.md#suitable-economy-selection` | NOT IMPLEMENTED |
 | FR-014 | Distinguish Council occupancy, external occupancy, allowance and unknown information | 004 | 002, 012 | `specs/004-economical-routing/acceptance.md#occupancy-and-allowance-states` | NOT IMPLEMENTED |
@@ -63,16 +65,16 @@ single status cannot hide an unmet claim.
 | FR-026 | Give followers the accepted predecessor change/base within their actual access | 006 | 005, 009–012 | `specs/006-task-graphs/acceptance.md#workspace-handoff` | NOT IMPLEMENTED |
 | FR-027 | Retrieve focused context while preserving every applicable original constraint | 006 | 002, 005, 012 | `specs/006-task-graphs/acceptance.md#scoped-context-and-constraints` | NOT IMPLEMENTED |
 | FR-028 | Label derived summaries, retain provenance/originals and handle context capacity explicitly | 006 | 002, 004, 012 | `specs/006-task-graphs/acceptance.md#derived-context-and-capacity` | NOT IMPLEMENTED |
-| FR-029 | Retain complete linked task, attempt, review, verifier and change evidence | 002 | 005, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#complete-linked-evidence` | NOT IMPLEMENTED |
+| FR-029 | Retain complete linked task, attempt, review, verifier and change evidence | 002 | 005, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
 | FR-030 | Propagate only relevant authorized context; peer content creates no new authority | 006 | 002, 004, 005, 009–012 | `specs/006-task-graphs/acceptance.md#context-authorization-boundary` | NOT IMPLEMENTED |
-| FR-031 | Observe progress/history/evidence without model calls using bounded metadata and explicit full reads | 002 | 006, 008, 012 | `specs/002-managed-execution/acceptance.md#observation-without-model-calls` | NOT IMPLEMENTED |
-| FR-032 | Preserve distinct lifecycle meanings; timeouts, responses and partial results do not imply acceptance | 002 | 005, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#lifecycle-and-terminal-outcomes` | NOT IMPLEMENTED |
+| FR-031 | Observe progress/history/evidence without model calls using bounded metadata and explicit full reads | 002 | 006, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-032 | Preserve distinct lifecycle meanings; timeouts, responses and partial results do not imply acceptance | 002 | 005, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
 | FR-033 | Pause admission/checkpoint/resume unfinished work and cancel admitted work with honest cleanup | 007 | 002, 006, 008, 012 | `specs/007-recovery-and-retention/acceptance.md#pause-resume-and-cancel` | NOT IMPLEMENTED |
-| FR-034 | Apply guidance/policy at defined boundaries and recheck controls before dispatch | 002 | 004, 005, 006, 007, 012 | `specs/002-managed-execution/acceptance.md#admission-boundary-revalidation` | NOT IMPLEMENTED |
+| FR-034 | Apply guidance/policy at defined boundaries and recheck controls before dispatch | 002 | 004, 005, 006, 007, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
 | FR-035 | Reconcile ownership, outcomes and changes before replacement; never infer permission to replay | 007 | 002, 006, 012 | `specs/007-recovery-and-retention/acceptance.md#restart-reconciliation` | NOT IMPLEMENTED |
-| FR-036 | Coordinate shared host capacity and preserve cancel/failure precedence; fail closed on uncertain cleanup | 002 | 004, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#ownership-capacity-and-failure-precedence` | NOT IMPLEMENTED |
-| FR-037 | Settle evidence/process ownership on shutdown and faults without destructive repair or model replay | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#shutdown-and-evidence-faults` | NOT IMPLEMENTED |
-| FR-038 | Preserve dirty work and branch; isolate writers and record attributable base/destination | 002 | 005, 006, 007, 012 | `specs/002-managed-execution/acceptance.md#isolation-and-dirty-work` | NOT IMPLEMENTED |
+| FR-036 | Coordinate shared host capacity and preserve cancel/failure precedence; fail closed on uncertain cleanup | 002 | 004, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-037 | Settle evidence/process ownership on shutdown and faults without destructive repair or model replay | 002 | 006, 007, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
+| FR-038 | Preserve dirty work and branch; isolate writers and record attributable base/destination | 002 | 005, 006, 007, 012 | `specs/002-managed-execution/acceptance.md#preflight-and-destination` | PARTIAL — feature002 implementation/local acceptance passed; hosted qualification and later extensions remain explicit |
 | FR-039 | Apply verified local results when authorized, otherwise deliver a precise reviewable candidate | 005 | 002, 006, 008, 012 | `specs/005-verified-delivery/acceptance.md#authorized-local-integration` | NOT IMPLEMENTED |
 | FR-040 | Revalidate evidence/destination changes and preserve both candidate and user work on conflict | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#integration-conflicts-and-freshness` | NOT IMPLEMENTED |
 | FR-041 | Require explicit scope for external delivery and reuse existing applicable authorization | 005 | 002, 004, 008, 012 | `specs/005-verified-delivery/acceptance.md#external-delivery-scope` | NOT IMPLEMENTED |

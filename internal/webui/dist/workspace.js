@@ -1,4 +1,5 @@
 import { AgentsView } from './agents.js';
+import { TasksView } from './tasks.js';
 import { DraftsView } from './drafts.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, timeLabel, verifyOwner, writeSession } from './api.js';
 function isAbsolute(path) {
@@ -8,6 +9,7 @@ class Workspace {
     projects = new Map();
     agents = new AgentsView();
     drafts = new DraftsView();
+    tasks = new TasksView(this.drafts);
     path = element('project-path');
     projectSelect = element('project-select');
     openButton = element('open-project');
@@ -76,12 +78,13 @@ class Workspace {
         feedback('app-status', 'Verifying access to the local owner…');
         element('reconnect').disabled = true;
         try {
-            await verifyOwner();
+            const meta = await verifyOwner();
             if (generation !== this.connectionGeneration)
                 return;
             this.ready = true;
             this.updateControls();
-            feedback('app-status', 'Connected to the local workspace. Task execution is unavailable in this preview.');
+            this.tasks.setOwner(meta);
+            feedback('app-status', meta.executionContract === '002-v1' ? 'Connected to the local workspace. Explicit starts share one managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
             // Recovery never replays a cached mutation automatically; each retry remains explicit.
             await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh()]);
         }
@@ -89,6 +92,7 @@ class Workspace {
             if (generation !== this.connectionGeneration)
                 return;
             this.ready = false;
+            this.tasks.disconnect();
             this.updateControls();
             feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');
         }
@@ -158,6 +162,7 @@ class Workspace {
         this.projectSelect.value = id;
         writeSession('selectedProject', id);
         this.drafts.setProject(id);
+        this.tasks.setProject(id);
         const project = this.projects.get(id);
         if (project)
             this.renderProject({ project, observation: null });
@@ -228,6 +233,7 @@ class Workspace {
                 this.selectedId = data.project.id;
                 writeSession('selectedProject', data.project.id);
                 this.drafts.setProject(data.project.id);
+                this.tasks.setProject(data.project.id);
                 this.renderProjects();
                 this.renderProject(data);
                 feedback('project-status', 'Project opened. Existing files, staging and branch are unchanged.', 'success');
@@ -257,6 +263,7 @@ class Workspace {
             if (generation !== this.policyReadGeneration)
                 return;
             this.policy = data;
+            this.tasks.setPolicy(data);
             if (editGeneration === this.policyEditGeneration && !this.pendingPolicy)
                 this.policyMode.value = data.mode;
             feedback('policy-status', 'Saved requested preference: ' + policyName(data.mode) + '. Revision ' + data.revision
@@ -292,6 +299,7 @@ class Workspace {
             const { data } = await api('/policy', 'PUT', pending.body);
             this.policyReadGeneration++;
             this.policy = data;
+            this.tasks.setPolicy(data);
             this.pendingPolicy = null;
             writeSession('pendingPolicy', null);
             if (this.policyEditGeneration === pending.editGeneration)

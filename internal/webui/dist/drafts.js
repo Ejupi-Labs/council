@@ -105,6 +105,64 @@ export class DraftsView {
         this.renderList();
         void this.refreshList();
     }
+    executionIntent() {
+        const editor = this.current;
+        if (!editor || editor.pending || this.saving.has(editor) || /^\p{White_Space}*$/u.test(editor.text))
+            throw new ApiError('draft_unavailable', 'Resolve any pending draft save and enter task text before starting.');
+        const intent = { projectId: editor.projectId, originalText: editor.text, editorKey: this.key(editor), editGeneration: editor.editGeneration };
+        if (editor.draftId) {
+            intent.sourceDraftRef = { draftId: editor.draftId, revision: editor.revision };
+            if (dirty(editor) || editor.useCurrentPolicy)
+                intent.save = {
+                    path: '/drafts/' + editor.draftId, method: 'PUT', editGeneration: editor.editGeneration,
+                    body: { requestId: requestId(), expectedRevision: editor.revision, originalText: editor.text, useCurrentPolicy: editor.useCurrentPolicy },
+                };
+        }
+        return intent;
+    }
+    reserveExecutionSave(intent) {
+        const editor = this.editors.get(intent.editorKey);
+        if (!editor || !intent.save)
+            return;
+        if (this.saving.has(editor))
+            throw new ApiError('draft_pending', 'The draft save is still in progress. Wait for its acknowledgement, then retry Start.');
+        if (editor.pending && editor.pending.body.requestId !== intent.save.body.requestId)
+            throw new ApiError('draft_pending', 'Reconcile the pending draft save before starting.');
+        editor.pending = intent.save;
+        this.saving.add(editor);
+        this.persist();
+        this.render();
+    }
+    finishExecutionSave(intent, draft, uncertain = false) {
+        const editor = this.editors.get(intent.editorKey);
+        if (!editor || !intent.save)
+            return;
+        const matchingSave = editor.pending?.body.requestId === intent.save.body.requestId;
+        if (matchingSave)
+            this.saving.delete(editor);
+        if (draft) {
+            const advancesRevision = editor.revision === null || BigInt(draft.revision) >= BigInt(editor.revision);
+            if (advancesRevision) {
+                editor.revision = draft.revision;
+                editor.savedText = draft.originalText;
+                editor.policy = draft.requestedPolicy;
+                if (editor.editGeneration === intent.editGeneration)
+                    editor.useCurrentPolicy = false;
+            }
+            editor.status = 'Saved clicked task revision ' + draft.revision + '. Starting still needs its own acknowledgement.'
+                + (!advancesRevision ? ' Your newer saved revision ' + editor.revision + ' is retained.' : dirty(editor) ? ' Your newer local text is retained.' : '');
+            editor.tone = 'success';
+            if (matchingSave)
+                editor.pending = null;
+            if (this.projectId === editor.projectId)
+                void this.refreshList();
+        }
+        else if (!uncertain && matchingSave)
+            editor.pending = null;
+        this.persist();
+        if (this.current === editor)
+            this.render();
+    }
     key(editor) {
         return editor.projectId + ':' + (editor.draftId ?? 'new') + (editor.historical ? '@' + editor.revision : '');
     }

@@ -20,6 +20,7 @@ type Policy = domain.Policy
 type Project = domain.Project
 type Draft = domain.Draft
 type Service struct {
+	Execution               ExecutionController
 	Store                   *store.Store
 	InspectProject          func(context.Context, string, string) (domain.ResolvedProject, error)
 	ValidateProjectIdentity func(string, string) error

@@ -95,7 +95,42 @@ func Acquire(root string) (*Lock, error) {
 		l.Close()
 		return nil, err
 	}
+	// Retained recovery companions are private state, not disposable temporary files.
+	// Validate only these exact names after ownership and before SQLite can open any
+	// of them. New SQLite companions inherit the already-restricted parent access;
+	// SQLite itself does not promise a protected per-file DACL or normalized owner.
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := protectExistingPrivate(l.DatabasePath() + suffix); err != nil {
+			l.Close()
+			return nil, errors.New("Cannot prepare Council's retained SQLite recovery state.")
+		}
+	}
 	return l, nil
+}
+
+func protectExistingPrivate(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Private recovery state must be an ordinary file.")
+	}
+	// Do not create, truncate or replace recovery state. Protect the retained
+	// physical object only after native link-count and path-identity validation.
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return errors.New("Private recovery state changed before protection.")
+	}
+	return ProtectPrivateFile(f, false)
 }
 
 func openPrivate(path string) (*os.File, error) {
@@ -110,7 +145,7 @@ func openPrivate(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := securePrivate(path, false); err != nil {
+	if err := ProtectPrivateFile(f, false); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -188,6 +223,12 @@ func ReadDescriptor(root string) (Descriptor, error) {
 		return d, err
 	}
 	defer f.Close()
+	if err := checkPrivatePath(f, false); err != nil {
+		return d, err
+	}
+	if err := VerifyPrivateFile(f, false); err != nil {
+		return d, err
+	}
 	data, err := io.ReadAll(io.LimitReader(f, 8193))
 	if err != nil || len(data) > 8192 {
 		return d, errors.New("Cannot read a valid owner descriptor.")
@@ -227,7 +268,7 @@ func (l *Lock) WriteDescriptor(d Descriptor) error {
 		return err
 	}
 	defer os.Remove(path)
-	if err := securePrivate(path, false); err != nil {
+	if err := ProtectPrivateFile(f, false); err != nil {
 		f.Close()
 		return err
 	}

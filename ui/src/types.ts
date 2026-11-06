@@ -49,8 +49,10 @@ export interface Meta {
   apiVersion: 1;
   appVersion: string;
   ownerInstanceId: string;
-  scope: 'workspace_foundation';
-  managedExecution: 'not_implemented';
+  scope: 'workspace_foundation' | 'managed_execution';
+  managedExecution: 'not_implemented' | 'native_codex';
+  executionContract?: string;
+  admission?: { state: string; incidentId: string | null; incident?: { code: string; message: string } };
 }
 export interface Receipt { requestId: string; operation: string; committedAt: string }
 export interface Success<T> { apiVersion: 1; requestId: string; data: T; receipt?: Receipt }
@@ -61,7 +63,7 @@ export interface ConnectionObservation {
   launcherPath?: string;
   observedAt: string;
   source: 'path_and_native_install_metadata';
-  managedExecution: 'not_implemented';
+  managedExecution: 'not_implemented' | 'native_supported_live_unqualified';
   authentication: 'unknown';
   provider: 'unknown';
   account: 'unknown';
@@ -70,7 +72,7 @@ export interface ConnectionObservation {
   externalOccupancy: 'unknown';
   allowance: 'unknown';
   usage: 'unknown';
-  nextAction: 'install_with_vendor' | 'review_launcher_support' | 'await_managed_execution';
+  nextAction: 'install_with_vendor' | 'review_launcher_support' | 'await_managed_execution' | 'start_explicit_task';
 }
 export interface DiscoveryEntry {
   harnessId: HarnessId;

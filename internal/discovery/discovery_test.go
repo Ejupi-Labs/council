@@ -36,7 +36,11 @@ func TestFilesystemOnlyFiveOrderedUnknownObservations(t *testing.T) {
 			t.Fatalf("wrong ordered observation: %+v", e)
 		}
 		o := e.Observation
-		if o.InstallationStatus != "installed" || o.Authentication != "unknown" || o.Account != "unknown" || o.Provider != "unknown" || o.Model != "unknown" || o.EffectivePermissions != "unknown" || o.ExternalOccupancy != "unknown" || o.Allowance != "unknown" || o.Usage != "unknown" || o.ManagedExecution != "not_implemented" || o.NextAction != "await_managed_execution" {
+		managed, action := "not_implemented", "await_managed_execution"
+		if e.HarnessID == "codex" {
+			managed, action = "native_supported_live_unqualified", "start_explicit_task"
+		}
+		if o.InstallationStatus != "installed" || o.Authentication != "unknown" || o.Account != "unknown" || o.Provider != "unknown" || o.Model != "unknown" || o.EffectivePermissions != "unknown" || o.ExternalOccupancy != "unknown" || o.Allowance != "unknown" || o.Usage != "unknown" || o.ManagedExecution != managed || o.NextAction != action {
 			t.Fatalf("invented readiness: %+v", o)
 		}
 	}

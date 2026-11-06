@@ -1,4 +1,5 @@
 import { AgentsView } from './agents.js';
+import { TasksView } from './tasks.js';
 import { DraftsView } from './drafts.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, timeLabel, verifyOwner, writeSession } from './api.js';
 import type { Page, Policy, Project, ProjectDetail, ProjectOpen } from './types.js';
@@ -22,6 +23,7 @@ class Workspace {
   private readonly projects = new Map<string, Project>();
   private readonly agents = new AgentsView();
   private readonly drafts = new DraftsView();
+  private readonly tasks = new TasksView(this.drafts);
   private readonly path = element<HTMLInputElement>('project-path');
   private readonly projectSelect = element<HTMLSelectElement>('project-select');
   private readonly openButton = element<HTMLButtonElement>('open-project');
@@ -85,16 +87,17 @@ class Workspace {
     feedback('app-status', 'Verifying access to the local owner…');
     element<HTMLButtonElement>('reconnect').disabled = true;
     try {
-      await verifyOwner();
+      const meta = await verifyOwner();
       if (generation !== this.connectionGeneration) return;
       this.ready = true;
       this.updateControls();
-      feedback('app-status', 'Connected to the local workspace. Task execution is unavailable in this preview.');
+      this.tasks.setOwner(meta);
+      feedback('app-status', meta.executionContract === '002-v1' ? 'Connected to the local workspace. Explicit starts share one managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
       // Recovery never replays a cached mutation automatically; each retry remains explicit.
       await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh()]);
     } catch (error) {
       if (generation !== this.connectionGeneration) return;
-      this.ready = false; this.updateControls();
+      this.ready = false; this.tasks.disconnect(); this.updateControls();
       feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');
     } finally {
       if (generation === this.connectionGeneration) {
@@ -153,7 +156,7 @@ class Workspace {
     this.selectedId = id;
     this.projectSelect.value = id;
     writeSession('selectedProject', id);
-    this.drafts.setProject(id);
+    this.drafts.setProject(id); this.tasks.setProject(id);
     const project = this.projects.get(id);
     if (project) this.renderProject({ project, observation: null });
     void this.loadProject(id);
@@ -211,7 +214,7 @@ class Workspace {
       if (selectionGeneration === this.selectionGeneration && this.path.value === pending.body.selectedPath) {
         this.selectionGeneration++; this.detailGeneration++;
         this.selectedId = data.project.id; writeSession('selectedProject', data.project.id);
-        this.drafts.setProject(data.project.id); this.renderProjects(); this.renderProject(data);
+        this.drafts.setProject(data.project.id); this.tasks.setProject(data.project.id); this.renderProjects(); this.renderProject(data);
         feedback('project-status', 'Project opened. Existing files, staging and branch are unchanged.', 'success');
       } else feedback('project-status', 'Project opened and retained. Your newer selection or folder input has been kept.', 'success');
     } catch (error) {
@@ -228,7 +231,7 @@ class Workspace {
     try {
       const { data } = await api<Policy>('/policy');
       if (generation !== this.policyReadGeneration) return;
-      this.policy = data;
+      this.policy = data; this.tasks.setPolicy(data);
       if (editGeneration === this.policyEditGeneration && !this.pendingPolicy) this.policyMode.value = data.mode;
       feedback('policy-status', 'Saved requested preference: ' + policyName(data.mode) + '. Revision ' + data.revision
         + ' · ' + (data.selectionSource === 'default' ? 'initial default' : 'owner selected') + '.'
@@ -257,7 +260,7 @@ class Workspace {
     try {
       const { data } = await api<Policy>('/policy', 'PUT', pending.body);
       this.policyReadGeneration++;
-      this.policy = data; this.pendingPolicy = null; writeSession('pendingPolicy', null);
+      this.policy = data; this.tasks.setPolicy(data); this.pendingPolicy = null; writeSession('pendingPolicy', null);
       if (this.policyEditGeneration === pending.editGeneration) this.policyMode.value = data.mode;
       feedback('policy-status', 'Saved requested preference: ' + policyName(data.mode) + '. Revision ' + data.revision + '.'
         + (this.policyMode.value !== data.mode ? ' Your newer local choice is retained and is not saved yet.' : ' Effective permissions remain unknown.'), 'success');

@@ -4,28 +4,23 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"runtime"
 	"time"
 
 	"github.com/Ejupi-Labs/council/v2/internal/app"
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
-	"github.com/Ejupi-Labs/council/v2/internal/httpapi"
 	"github.com/Ejupi-Labs/council/v2/internal/localstate"
+	"github.com/Ejupi-Labs/council/v2/internal/owner"
 	"github.com/Ejupi-Labs/council/v2/internal/store"
-	"github.com/Ejupi-Labs/council/v2/internal/webui"
 )
 
-const help = `Council — local workspace foundation
+const help = `Council — managed local workspace
 
   council ui [--no-open] [--json]
   council projects open PATH | list | get ID
@@ -38,8 +33,8 @@ const help = `Council — local workspace foundation
 
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
-Private state: <user-home>/.council/v2/. Drafts are not executed by this preview.
-`
+Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
+` + executionHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
 	c, err := parse(args, stdin)
@@ -69,6 +64,34 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if rootErr != nil {
 		return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("owner_unavailable", "Cannot locate the private Council state root.")))
 	}
+	if requiresExecutionOwner(c.op) {
+		var desc localstate.Descriptor
+		var e error
+		if c.op == "service.stop" {
+			desc, e = localstate.ReadDescriptor(root)
+			if e == nil && !verifyExecutionOwner(ctx, desc) {
+				e = errors.New("incompatible owner")
+			}
+		} else {
+			desc, e = owner.Ensure(ctx, root, verifyExecutionOwner)
+		}
+		if e != nil {
+			return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
+		}
+		if c.op == "service.stop" {
+			var bindErr *domain.Error
+			c, bindErr = bindServiceOwner(c, desc.OwnerInstanceID)
+			if bindErr != nil {
+				return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), bindErr))
+			}
+		}
+		result := forward(ctx, desc, c)
+		if ctx.Err() != nil && c.requestID == "" {
+			_ = emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("observation_interrupted", "Observation ended; owned work continues. Inspect the attempt again.")))
+			return 130
+		}
+		return emit(stdout, stderr, c.json, result)
+	}
 	lock, lockErr := localstate.Acquire(root)
 	if errors.Is(lockErr, localstate.ErrLocked) {
 		desc, e := localstate.ReadDescriptor(root)
@@ -81,7 +104,19 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if c.name == "ui" {
 			return showUI(c, desc, stdout, stderr)
 		}
-		return emit(stdout, stderr, c.json, forward(ctx, desc, c))
+		if c.op == "service.stop" {
+			var bindErr *domain.Error
+			c, bindErr = bindServiceOwner(c, desc.OwnerInstanceID)
+			if bindErr != nil {
+				return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), bindErr))
+			}
+		}
+		result := forward(ctx, desc, c)
+		if ctx.Err() != nil && c.requestID == "" {
+			_ = emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("observation_interrupted", "Observation ended; owned work continues. Inspect the attempt again.")))
+			return 130
+		}
+		return emit(stdout, stderr, c.json, result)
 	}
 	if lockErr != nil {
 		return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("owner_unavailable", "Cannot establish exclusive private state access. Check permissions and disk availability for <user-home>/.council/v2/, preserve its contents, then retry.")))
@@ -96,37 +131,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if c.name != "ui" {
 		return emit(stdout, stderr, c.json, service.Execute(ctx, c.op, c.params))
 	}
-	listener, e := net.Listen("tcp4", "127.0.0.1:0")
-	if e != nil {
-		return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
-	}
-	var token [32]byte
-	if _, e := rand.Read(token[:]); e != nil {
-		listener.Close()
-		return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
-	}
-	desc := localstate.Descriptor{OwnerInstanceID: domain.NewID(), PID: os.Getpid(), StartedAt: domain.Now(), Origin: "http://" + listener.Addr().String(), APIVersion: 1, Token: hex.EncodeToString(token[:])}
-	server := &http.Server{Handler: httpapi.New(service, httpapi.Config{Host: listener.Addr().String(), Token: desc.Token, OwnerInstanceID: desc.OwnerInstanceID, Assets: webui.Files()}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
-	if e := lock.WriteDescriptor(desc); e != nil {
-		server.Close()
-		return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
-	}
-	defer lock.RemoveOwnDescriptor(desc.OwnerInstanceID)
-	showUI(c, desc, stdout, stderr)
-	select {
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if e := server.Shutdown(shutdown); e != nil {
-			server.Close()
-		}
-		<-done
-		return 130
-	case <-done:
-		return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
-	}
+	return serveOwner(ctx, lock, db, &c, stdout, stderr)
 }
 
 func requestIdentity(c command) string {
@@ -145,39 +150,17 @@ func ownerFailure(requestIDs ...string) domain.Result {
 }
 
 func client() *http.Client {
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Timeout: 35 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 func verifyOwner(ctx context.Context, desc localstate.Descriptor) bool {
-	r, err := http.NewRequestWithContext(ctx, "GET", desc.Origin+"/api/v1/meta", nil)
-	if err != nil {
-		return false
-	}
-	r.Header.Set("Authorization", "Bearer "+desc.Token)
-	response, err := client().Do(r)
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		return false
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8193))
-	if err != nil || len(body) > 8192 {
-		return false
-	}
-	var envelope struct {
-		APIVersion int    `json:"apiVersion"`
-		RequestID  string `json:"requestId"`
-		Data       struct {
-			OwnerInstanceID  string `json:"ownerInstanceId"`
-			APIVersion       int    `json:"apiVersion"`
-			AppVersion       string `json:"appVersion"`
-			Scope            string `json:"scope"`
-			ManagedExecution string `json:"managedExecution"`
-		} `json:"data"`
-	}
-	return json.Unmarshal(body, &envelope, json.RejectUnknownMembers(true)) == nil && envelope.APIVersion == 1 && envelope.Data.APIVersion == 1 && envelope.Data.OwnerInstanceID == desc.OwnerInstanceID && envelope.Data.AppVersion == domain.AppVersion && envelope.Data.Scope == "workspace_foundation" && envelope.Data.ManagedExecution == "not_implemented" && domain.ValidID(envelope.RequestID)
+	metadata, ok := readOwnerMetadata(ctx, desc)
+	return ok && ((metadata.Scope == "workspace_foundation" && metadata.ManagedExecution == "not_implemented" && (metadata.AppVersion == domain.AppVersion || metadata.AppVersion == "2.0.0-dev")) || executionMetadata(metadata))
+}
+
+func verifyExecutionOwner(ctx context.Context, desc localstate.Descriptor) bool {
+	metadata, ok := readOwnerMetadata(ctx, desc)
+	return ok && executionMetadata(metadata)
 }
 
 func forward(ctx context.Context, desc localstate.Descriptor, c command) domain.Result {
@@ -215,7 +198,7 @@ func forward(ctx context.Context, desc localstate.Descriptor, c command) domain.
 	if envelope.Error != nil && response.StatusCode != domain.Status(envelope.Error.Code) {
 		return uncertain()
 	}
-	if envelope.Error == nil && (response.StatusCode != 200 && response.StatusCode != 201) {
+	if envelope.Error == nil && (response.StatusCode != 200 && response.StatusCode != 201 && response.StatusCode != 202) {
 		return uncertain()
 	}
 	if envelope.Error != nil || c.requestID == "" {

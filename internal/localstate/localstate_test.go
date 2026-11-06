@@ -173,7 +173,8 @@ func TestRejectRedirectedPrivateFileTargets(t *testing.T) {
 	if err := os.WriteFile(sentinel, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"owner.lock", "workspace.sqlite3"} {
+	beforeProtection := protectionFingerprint(t, sentinel)
+	for _, name := range []string{"owner.lock", "workspace.sqlite3", "workspace.sqlite3-journal", "workspace.sqlite3-wal", "workspace.sqlite3-shm"} {
 		t.Run(name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "private")
 			if err := os.Mkdir(root, 0700); err != nil {
@@ -191,6 +192,9 @@ func TestRejectRedirectedPrivateFileTargets(t *testing.T) {
 	if lock, err := Acquire(sentinel); err == nil {
 		lock.Close()
 		t.Fatal("accepted a regular file as the private directory")
+	}
+	if got := protectionFingerprint(t, sentinel); got != beforeProtection {
+		t.Fatal("redirect rejection changed outside target metadata")
 	}
 	after, err := os.ReadFile(sentinel)
 	if err != nil || string(after) != string(original) {

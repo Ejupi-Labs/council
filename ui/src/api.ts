@@ -98,7 +98,9 @@ export async function api<T>(path: string, method = 'GET', body?: object): Promi
 export async function verifyOwner(): Promise<Meta> {
   verified = false;
   const { data } = await api<Meta>('/meta');
-  if (data.apiVersion !== 1 || data.scope !== 'workspace_foundation' || data.managedExecution !== 'not_implemented') {
+  const foundation = data.scope === 'workspace_foundation' && data.managedExecution === 'not_implemented';
+  const execution = data.scope === 'managed_execution' && data.managedExecution === 'native_codex' && data.executionContract === '002-v1';
+  if (data.apiVersion !== 1 || (!foundation && !execution)) {
     throw new ApiError('incompatible_owner', 'Open this workspace with a compatible Council owner.');
   }
   verified = true;

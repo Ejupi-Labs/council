@@ -2,7 +2,8 @@
 
 **Version**: 1.1.0 | **Date**: 2026-11-05 | **Feature**: 002 | **Branch**: `refactor`
 
-These ADRs are accepted for the 002 design. Implementation, native process qualification and live
+These ADRs are accepted for the 002 design. Integration corrections and their review basis are
+recorded in [implementation decision amendments](implementation-decisions.md). Implementation, native process qualification and live
 provider qualification remain pending. Foundation93c8c25 passed all seven hosted jobs in
 run42115752948; its prerequisite validation gate is closed. Changes to a decision require an attributed ADR revision, not an
 implicit adapter fallback. The [specification](spec.md) governs product behavior.
@@ -36,7 +37,7 @@ contract; they do not qualify an installed vendor binary or a provider account.
 ## ADR-002-03 v1 — Apply saved autonomy and preserve unknowns
 
 **Decision:** map saved autonomous full access to supported `--sandbox danger-full-access` and
-`--ask-for-approval never`. The documented `--sandbox read-only` option does not provide
+the invocation-scoped `--config approval_policy=\"never\"` override. The documented `--sandbox read-only` option does not provide
 supervision and is not advertised as a supported 002 policy mode. Unsupported supervision blocks
 before launch: 002 provides no interactive tool-approval relay.
 Honor an explicit `--model` selector or block it; Auto uses native configured selection, with

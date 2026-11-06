@@ -77,7 +77,8 @@ export class AgentsView {
       const actions = {
         install_with_vendor: 'Install using the vendor’s instructions, then refresh installations.',
         review_launcher_support: 'Review the vendor’s native launcher options. Shell wrappers are unsupported.',
-        await_managed_execution: 'Installation found. Managed execution is unavailable in this preview.',
+        await_managed_execution: 'Installation found. Managed execution for this harness follows a later feature.',
+        start_explicit_task: 'Native execution is supported. Start a task explicitly; live provider compatibility remains unqualified.',
       };
       nextAction.textContent = actions[observation.nextAction];
     } else {
@@ -87,7 +88,7 @@ export class AgentsView {
     const facts = document.createElement('dl'); facts.className = 'facts';
     for (const label of ['Authentication', 'Model', 'Allowance', 'Effective permissions']) addFact(facts, label, 'Unknown');
     const limitation = document.createElement('p'); limitation.className = 'agent-limitation';
-    limitation.textContent = 'Managed execution: not implemented';
+    limitation.textContent = observation?.managedExecution === 'native_supported_live_unqualified' ? 'Managed execution: native Codex supported · live provider unqualified' : 'Managed execution: not implemented';
     const details = document.createElement('details');
     const summary = document.createElement('summary'); summary.textContent = 'Observation details';
     details.append(summary);

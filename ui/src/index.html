@@ -22,11 +22,11 @@
         <a href="#agents"><img src="/assets/icons/plug.svg" alt="" width="24" height="24">Agents</a>
         <a href="#preferences"><img src="/assets/icons/settings.svg" alt="" width="24" height="24">Preferences</a>
       </nav>
-      <div class="sidebar-note"><img src="/assets/icons/shield.svg" alt="" width="24" height="24"><p>Local preparation.<br>Agent execution is not available yet.</p></div>
+      <div class="sidebar-note"><img src="/assets/icons/shield.svg" alt="" width="24" height="24"><p>Local workspace.<br>One explicit worker at a time.</p></div>
     </aside>
     <main id="tasks">
       <header class="page-header">
-        <div><p class="eyebrow">Workspace</p><h1>Tasks</h1><p class="subheading">Choose a project. Keep the full task ready for later.</p></div>
+        <div><p class="eyebrow">Workspace</p><h1>Tasks</h1><p class="subheading">Choose a project. Describe the outcome. Start when ready.</p></div>
         <span class="local-badge"><span aria-hidden="true"></span> Local preview</span>
       </header>
       <div class="app-feedback" id="app-status" data-testid="app-status" role="status" aria-live="polite">Connecting to the local owner…</div>
@@ -47,13 +47,27 @@
       <div class="task-grid">
         <section class="panel composer-panel" aria-labelledby="composer-heading">
           <div class="section-heading heading-between"><h2 id="composer-heading">Task draft</h2><button id="new-draft" data-testid="new-draft" class="quiet compact" type="button" disabled><img src="/assets/icons/plus.svg" alt="" width="20" height="20">New draft</button></div>
-          <div class="composer-context"><span class="chip">Auto</span><span class="draft-state">Draft / Not run</span></div>
+          <div class="composer-context"><span class="chip">Auto · Native Codex</span><span class="draft-state">Draft / Not run</span></div>
           <form id="draft-form">
             <label for="task-text">What would you like to work on?</label>
             <textarea id="task-text" data-testid="task-text" rows="9" placeholder="Describe the change, what matters, and how you will know it works." aria-describedby="execution-note draft-status" disabled></textarea>
+            <details class="execution-options"><summary>Task details (optional)</summary>
+              <div class="option-grid">
+                <div><label for="task-model">Model selector</label><input id="task-model" type="text" placeholder="Native default" autocomplete="off"></div>
+                <div><label for="task-timeout">Total deadline (seconds)</label><input id="task-timeout" type="number" min="1" max="86400" placeholder="1800"></div>
+                <div><label for="task-deliverable">Deliverable</label><select id="task-deliverable"><option value="candidate">Candidate change</option><option value="response_only">Response only</option></select></div>
+              </div>
+              <label for="task-conditions">Acceptance conditions</label><textarea id="task-conditions" rows="3"></textarea>
+              <label for="task-required-evidence">Required evidence (one per line)</label><textarea id="task-required-evidence" rows="2" placeholder="check&#10;independent_review"></textarea>
+              <label class="checkbox-label"><input id="task-final-only" type="checkbox">Require a final deliverable; do not prepare a candidate</label>
+              <label class="checkbox-label"><input id="task-fake" type="checkbox">Use a labelled local fake worker (no provider call)</label>
+              <label for="task-fake-scenario">Local fake scenario</label><select id="task-fake-scenario"><option value="response">Response</option><option value="candidate">Candidate change</option><option value="slow">Slow response</option><option value="partial_failure">Partial failure</option><option value="late_success">Late success after Stop</option><option value="owned_descendant">Owned descendant</option><option value="cleanup_unknown">Cleanup unknown</option></select>
+              <p class="help">Requested model selectors remain separate from observed model/account facts. Default deadline includes queue time. Provider call counts, cost and remaining allowance stay unknown unless reported.</p>
+            </details>
             <label class="checkbox-label" for="use-current-policy"><input id="use-current-policy" data-testid="use-current-policy" type="checkbox" disabled>Use the current preference for this new version</label>
-            <div class="composer-footer"><p id="execution-note" class="help">Task execution is unavailable in this preview.</p><button id="save-draft" data-testid="save-draft" class="primary" type="submit" disabled>Save draft</button></div>
+            <div class="composer-footer"><p id="execution-note" class="help">Start uses the captured preference and current source. A saved draft alone never starts work.</p><div class="button-row"><button id="save-draft" data-testid="save-draft" class="secondary" type="submit" disabled>Save draft</button><button id="start-task" data-testid="start-task" class="primary" type="button" disabled>Start</button></div></div>
           </form>
+          <p id="execution-status" data-testid="execution-status" class="feedback" role="status" aria-live="polite">Open a project to see retained work.</p><a id="execution-link" class="text-button" href="#task-detail" hidden>View selected execution and retained evidence</a>
           <div id="draft-status" data-testid="draft-status" class="feedback" role="status" aria-live="polite">Open a project to prepare a task.</div>
           <dl id="draft-meta" data-testid="draft-meta" class="facts draft-facts"></dl>
           <div id="draft-conflict" class="conflict-box" hidden>
@@ -76,6 +90,27 @@
         </section>
       </div>
 
+      <section id="executions" class="panel executions-panel" aria-labelledby="executions-heading">
+        <div class="section-heading heading-between"><h2 id="executions-heading">Task executions</h2><button id="refresh-tasks" class="secondary compact" type="button">Refresh tasks</button></div>
+
+        <p id="task-list-status" class="feedback" role="status" aria-live="polite"></p><ul id="task-list" class="draft-list"></ul><button id="more-tasks" class="quiet" type="button" hidden>Load more tasks</button>
+        <article id="task-detail" hidden aria-labelledby="task-detail-heading">
+          <h3 id="task-detail-heading" tabindex="-1">Task detail</h3>
+          <dl id="task-facts" class="facts project-facts"></dl>
+          <details><summary>Full original task and current conditions</summary><pre id="task-original" class="evidence-text"></pre><pre id="task-conditions-view" class="evidence-text"></pre></details>
+          <div class="button-row"><button id="stop-attempt" class="secondary" type="button" disabled>Stop</button><button id="run-attempt" class="secondary" type="button" disabled>Start another execution</button><button id="refresh-attempt" class="quiet" type="button">Refresh detail</button></div>
+          <div id="attempt-status" class="feedback" role="status" aria-live="polite"></div><dl id="attempt-summary" class="facts project-facts"></dl>
+          <div id="response-area"></div>
+          <details><summary>Source, candidate and observed account details</summary><dl id="attempt-facts" class="facts project-facts"></dl></details>
+          <details><summary>Execution history and reported usage</summary><ul id="attempt-list" class="draft-list"></ul><button id="more-attempts" class="quiet" type="button" hidden>Load more executions</button><p id="usage-total" class="help"></p></details>
+          <details><summary>Add guidance for a new task version</summary><form id="guidance-form"><label for="task-guidance">Complete guidance for the next version</label><textarea id="task-guidance" rows="4"></textarea><button id="save-guidance" class="secondary" type="submit">Save guidance</button></form><p id="guidance-status" class="feedback" role="status" aria-live="polite"></p><p class="help">Saving guidance retains prior outcomes and does not start another worker.</p></details>
+          <details><summary>Events and retained artifacts</summary><ol id="attempt-events"></ol><button id="more-events" class="quiet" type="button" hidden>Load more events</button><ul id="artifact-list" class="draft-list"></ul><button id="more-artifacts" class="quiet" type="button" hidden>Load more artifacts</button></details>
+          <div class="button-row"><button id="read-response" class="secondary" type="button" disabled>Read full response</button><button id="download-artifact" class="quiet" type="button" disabled>Download exact bytes</button></div>
+          <p id="artifact-status" class="feedback" role="status" aria-live="polite"></p><pre id="artifact-output" data-testid="artifact-output" class="evidence-text" tabindex="0"></pre>
+          <div id="response-acceptance" hidden><label class="checkbox-label"><input id="reviewed-response" type="checkbox">I reviewed this exact response and its conditions</label><button id="accept-response" class="secondary" type="button" disabled>Accept reviewed response</button><p class="help">Available only for a complete response with no authored change, verified cleanup and no outstanding required evidence.</p></div>
+        </article>
+      </section>
+
       <section id="agents" class="agents-section" aria-labelledby="agents-heading">
         <div class="section-header"><div><p class="eyebrow">Connections</p><h2 id="agents-heading">Agents</h2><p class="help">Installation evidence only. Authentication, model access and allowance remain unknown.</p></div><button id="refresh-agents" data-testid="refresh-agents" class="secondary" type="button" disabled><img src="/assets/icons/refresh.svg" alt="" width="20" height="20">Refresh installations</button></div>
         <div id="agents-status" data-testid="agents-status" class="feedback" role="status" aria-live="polite">Waiting for local access.</div>
@@ -89,7 +124,7 @@
         <div id="policy-status" data-testid="policy-status" class="feedback" role="status" aria-live="polite">Loading saved preference…</div>
         <button id="reload-policy" class="quiet" type="button" hidden>Reload saved preference</button>
       </section>
-      <footer class="page-footer">Council · Workspace preview <span>Drafts are saved locally. No agent task has run.</span></footer>
+      <footer class="page-footer">Council · Workspace preview <span>Work and evidence stay local. Candidate changes require verification.</span></footer>
     </main>
   </div>
 </body>

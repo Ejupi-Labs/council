@@ -29,8 +29,18 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		}
 	}
 	positionals := []string{}
+	taskVersionCommand := false
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "tasks" && args[i+1] == "version" {
+			taskVersionCommand = true
+		}
+	}
+	repeated := map[string][]string{}
 	bools := map[string]bool{"json": true, "no-open": true, "use-current-policy": true, "help": true, "version": true}
 	values := map[string]bool{"api-version": true, "request-id": true, "expected-revision": true, "limit": true, "cursor": true, "project": true, "task": true, "task-file": true, "revision": true}
+	addExecutionFlags(bools, values)
+	bools["version"] = !taskVersionCommand
+	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -42,7 +52,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 			continue
 		}
 		key := strings.TrimPrefix(arg, "--")
-		if _, exists := flags[key]; exists {
+		if _, exists := flags[key]; exists && key != "require-evidence" {
 			return c, domain.Invalid("nonduplicate command options")
 		}
 		if bools[key] {
@@ -54,11 +64,14 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		}
 		i++
 		flags[key] = args[i]
+		if key == "require-evidence" {
+			repeated[key] = append(repeated[key], args[i])
+		}
 	}
 	c.json = flags["json"] == "true"
 	c.noOpen = flags["no-open"] == "true"
 	for key, value := range flags {
-		if values[key] && value == "" {
+		if values[key] && value == "" && key != "guidance" {
 			return c, domain.Invalid("nonempty option values")
 		}
 	}
@@ -69,7 +82,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		c.name = "help"
 		return c, nil
 	}
-	if flags["version"] != "" {
+	if flags["version"] != "" && !taskVersionCommand {
 		for key := range flags {
 			if key != "version" && key != "json" && key != "api-version" {
 				return c, domain.Invalid("version command options")
@@ -85,6 +98,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		return c, domain.Invalid("command")
 	}
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
+	if executionCommand(c.name) {
+		return parseExecution(c, positionals, flags, repeated, stdin)
+	}
 	allowed := map[string]bool{"json": true, "api-version": true}
 	allow := func(keys ...string) {
 		for _, key := range keys {
@@ -297,7 +313,7 @@ func exitCode(code string) int {
 	case 401, 403:
 		return 5
 	case 503:
-		if code == "owner_unavailable" {
+		if code == "owner_unavailable" || code == "dispatch_fenced" || code == "owner_closing" {
 			return 5
 		}
 	}
@@ -316,5 +332,5 @@ func human(result domain.Result) string {
 	if err != nil {
 		return "Operation completed.\n"
 	}
-	return string(encoded) + "\n"
+	return executionHumanPrefix(result.Envelope) + string(encoded) + "\n"
 }

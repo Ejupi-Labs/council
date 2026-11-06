@@ -114,7 +114,9 @@ export async function api(path, method = 'GET', body) {
 export async function verifyOwner() {
     verified = false;
     const { data } = await api('/meta');
-    if (data.apiVersion !== 1 || data.scope !== 'workspace_foundation' || data.managedExecution !== 'not_implemented') {
+    const foundation = data.scope === 'workspace_foundation' && data.managedExecution === 'not_implemented';
+    const execution = data.scope === 'managed_execution' && data.managedExecution === 'native_codex' && data.executionContract === '002-v1';
+    if (data.apiVersion !== 1 || (!foundation && !execution)) {
         throw new ApiError('incompatible_owner', 'Open this workspace with a compatible Council owner.');
     }
     verified = true;

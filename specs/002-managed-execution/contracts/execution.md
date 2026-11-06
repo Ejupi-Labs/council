@@ -6,7 +6,7 @@
 
 **Application**: `2.0.0-dev.2`; API 1; state schema 2
 
-**Status**: Design for root review; not implementation or live qualification evidence
+**Status**: Implementation contract; qualification and remaining limits are recorded in acceptance.md. No live provider qualification is implied.
 
 This extends [foundation.md](../../001-workspace-foundation/contracts/foundation.md) and uses
 [data-model.md](../data-model.md). Foundation project/policy/draft routes retain their behavior,
@@ -195,6 +195,13 @@ All routes are relative to `/api/v1`; undocumented members/queries reject. No GE
 | `POST /tasks/{id}/response-acceptance` | Acceptance input below | 200: `{task:TaskSummary, acceptance:ResponseAcceptance}` plus receipt. |
 | `POST /service/stop` | `{requestId, ownerInstanceId}` | 202: `{ownerInstanceId, shutdownAccepted:true, admission:"closing"}` plus receipt; not a verified cleanup receipt. |
 
+Attempt GET, bounded-wait and current-task detail additionally resolve optional `sourceSnapshot`,
+`candidate` and `incident` objects. Source metadata includes baseCommit, branch, manifest hash and
+selected relative folder. Candidate metadata includes managed workspaceRef, delta/index flags,
+verification and integration state. Incident includes its exact retained id/code/message/time;
+metadata admission also exposes its optional incident. These are descriptive typed records, never
+arbitrary filesystem read targets. Lists remain compact; no full artifact body is embedded.
+
 TaskSummary excludes original/guidance/conditions bodies. It includes id, projectId, currentVersion,
 revision, stateRevision, latestAttemptId, captured requested mode/source, timestamps, status, stage
 and nextAction. Task detail exposes complete original text and the current exact version.
@@ -228,6 +235,10 @@ cleanup states remain separate. Unknown cleanup globally fences new dispatch; th
 released because an HTTP acknowledgement arrived. A primary failure observed before Stop stays
 primary. Induced exits/later cleanup faults remain linked secondary events; a Stop accepted first
 still remains accepted if later cleanup/evidence faults produce an explicit blocked incident.
+
+CLI `service stop --owner-instance ID` optionally preserves an explicit owner target for exact
+receipt replay; otherwise the verified current descriptor supplies it. A replay is checked before
+current-owner compatibility and cannot close a replacement owner.
 
 Service stop validates the exact current ownerInstanceId, durably closes admission and requests
 settlement for its owned work before shutting down. Request identity includes the target owner.
@@ -286,6 +297,14 @@ The example's hash placeholder is explanatory, not a permitted wire value. eof m
 snapshot bound was reached; streamClosed separately says whether additional bytes can arrive.
 Offsets are byte counts, so chunks need not end on UTF-8 boundaries. Clients reassemble bytes or
 use a streaming decoder; invalid raw output remains available without replacement corruption.
+For closed complete artifacts, sha256 is the retained expected whole-artifact hash. The first
+range read derives bounded aligned-chunk digests in the same pass that verifies that whole hash.
+Subsequent reads reopen/validate physical identity and size and hash the complete aligned chunks
+spanning the requested range before returning bytes. This proves requested-range integrity; damage
+to an unrelated chunk is detected when accessed or by fresh whole-artifact verification. Response
+acceptance always verifies the complete current file and bypasses the range cache. Internal source
+materialization and full-response copying hash the bytes actually copied in one linear pass.
+
 Reading a live artifact again without through obtains a newer durable prefix. An explicit empty
 artifact returns empty base64 and equal offsets. No result preview replaces retained bytes.
 

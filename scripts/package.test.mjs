@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, lstat, rm, writeFile } from 
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -54,9 +55,9 @@ function privateEnvironment(home, emptyPath) {
   const environment = { ...process.env };
   // Windows environment names are case-insensitive, unlike JavaScript object keys.
   for (const key of Object.keys(environment)) {
-    if (['path', 'home', 'userprofile', 'homedrive', 'homepath', 'node_options'].includes(key.toLowerCase())) delete environment[key];
+    if (['path', 'home', 'userprofile', 'homedrive', 'homepath', 'node_options'].includes(key.toLowerCase()) || key.toLowerCase().startsWith('git_')) delete environment[key];
   }
-  return { ...environment, PATH: emptyPath, HOME: home, USERPROFILE: home, GOPROXY: 'off', GOSUMDB: 'off' };
+  return { ...environment, PATH: emptyPath, HOME: home, USERPROFILE: home, GOPROXY: 'off', GOSUMDB: 'off', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
 }
 
 async function stop(child) {
@@ -66,23 +67,44 @@ async function stop(child) {
   await exited;
 }
 
-test('native preview has exact contents, complete notices and an independently verifiable checksum', { timeout: 120_000 }, async t => {
+test('native preview has exact contents, complete notices and an independently verifiable checksum', { timeout: 180_000 }, async t => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'council-package-'));
   let child;
+  let ownerOptions;
+  let ownerInstanceId;
+  const runBinary = (binary, args, options) => {
+    const envelope = JSON.parse(execFileSync(binary, [...args, '--json'], { ...options, timeout: 30_000 }));
+    assert.ok(!envelope.error, 'extracted operation has an acknowledged result');
+    return envelope;
+  };
+  const stopOwnedService = async binary => {
+    const current = child;
+    const exited = current && current.exitCode === null && current.signalCode === null ? once(current, 'exit') : Promise.resolve([current?.exitCode, current?.signalCode]);
+    const acknowledgement = runBinary(binary, ['service', 'stop', '--owner-instance', ownerInstanceId], ownerOptions);
+    assert.equal(acknowledgement.data.shutdownAccepted, true);
+    const [code, signal] = await Promise.race([exited, delay(20_000, undefined, { ref: false }).then(() => { throw new Error('Extracted owner did not finish clean service shutdown.'); })]);
+    assert.equal(code, 0, 'explicit service shutdown exits the actual foreground owner cleanly');
+    assert.equal(signal, null);
+    child = undefined;
+    ownerInstanceId = undefined;
+  };
   t.after(async () => {
-    if (child) await stop(child);
+    if (child) {
+      try { if (ownerOptions && ownerInstanceId) await stopOwnedService(path.join(temporary, 'extracted', executable)); else await stop(child); }
+      catch { await stop(child); }
+    }
     const resolved = await realpath(temporary);
     const temporaryRoot = await realpath(os.tmpdir());
     if (path.relative(temporaryRoot, path.dirname(resolved)) !== '' || !path.basename(resolved).startsWith('council-package-') || (await lstat(temporary)).isSymbolicLink()) {
       throw new Error('Refusing cleanup outside the created package fixture.');
     }
-    await rm(resolved, { recursive: true, force: true });
+    await rm(resolved, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
   execFileSync('go', ['test', './scripts/packagearchive'], { cwd: root, shell: false, stdio: 'pipe' });
   const release = await packagePreview({ outputDirectory: path.join(temporary, 'releases') });
   const data = await readFile(release.archive);
   assert.equal(await readFile(release.checksum, 'utf8'), `${sha256(data)}  ${release.archiveName}\n`);
-  assert.match(release.archiveName, /^council-2\.0\.0-dev-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
+  assert.match(release.archiveName, /^council-2\.0\.0-dev\.2-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
   const entries = readZip(data);
   const manifest = entries.get('SHA256SUMS.txt').contents.toString('utf8');
   const records = manifest.trimEnd().split('\n').map(line => line.match(/^([a-f0-9]{64})  (.+)$/));
@@ -99,7 +121,9 @@ test('native preview has exact contents, complete notices and an independently v
   for (const notice of ['Go 1.27.3/LICENSE', 'Go 1.27.3/PATENTS', 'LICENSE-3RD-PARTY.md', 'LICENSE-SQLITE', 'LICENSE-MMAP-GO']) {
     assert.ok(notices.includes(notice), `retained upstream notice ${notice}`);
   }
-  assert.match(entries.get('README.md').contents.toString('utf8'), /Task execution is unavailable in this preview/);
+  assert.match(entries.get('README.md').contents.toString('utf8'), /managed execution preview/);
+  assert.match(entries.get('README.md').contents.toString('utf8'), /live provider compatibility remains unqualified/);
+  assert.match(entries.get('README.md').contents.toString('utf8'), /fixed fake mode uses only local processes/);
   for (const { contents } of entries.values()) {
     for (const forbidden of [root.replaceAll('\\', '/').replace(/\/$/, ''), root.replaceAll('/', '\\').replace(/\\$/, '')]) {
       assert.equal(contents.includes(Buffer.from(forbidden)), false, 'release contains no developer workspace path');
@@ -128,13 +152,21 @@ test('native preview has exact contents, complete notices and an independently v
   const policy = JSON.parse(execFileSync(binary, ['policy', 'get', '--json'], options));
   assert.ok(policy.data && !policy.error, 'extracted binary can initialize private storage without Node, Go or Git on PATH');
 
-  child = spawn(binary, ['ui', '--no-open', '--json'], { cwd: elsewhere, env: environment, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  const lines = createInterface({ input: child.stdout });
-  const launch = await Promise.race([
-    once(lines, 'line').then(([line]) => JSON.parse(line)),
-    once(child, 'exit').then(() => { throw new Error('Extracted preview stopped before reporting UI startup.'); }),
-  ]);
-  lines.close();
+  const launchOwner = async runtimeOptions => {
+    ownerOptions = runtimeOptions;
+    child = spawn(binary, ['ui', '--no-open', '--json'], { cwd: runtimeOptions.cwd, env: runtimeOptions.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const lines = createInterface({ input: child.stdout });
+    try {
+      const launch = await Promise.race([
+        once(lines, 'line').then(([line]) => JSON.parse(line)),
+        once(child, 'exit').then(() => { throw new Error('Extracted preview stopped before reporting UI startup.'); }),
+        delay(15_000, undefined, { ref: false }).then(() => { throw new Error('Extracted preview did not report bounded UI readiness.'); }),
+      ]);
+      ownerInstanceId = launch.data?.ownerInstanceId;
+      return launch;
+    } finally { lines.close(); }
+  };
+  const launch = await launchOwner(options);
   assert.ok(launch.data?.url && !launch.error, 'extracted binary reports native UI startup');
   const url = new URL(launch.data.url);
   assert.equal(url.hostname, '127.0.0.1');
@@ -149,5 +181,80 @@ test('native preview has exact contents, complete notices and an independently v
     assert.equal(asset.origin, url.origin, 'runtime resources remain local and embedded');
     assert.equal((await fetch(asset, { signal: AbortSignal.timeout(10_000) })).status, 200, 'extracted preview serves its embedded assets');
   }
-  await stop(child);
+  await stopOwnedService(binary);
+
+  // Node and Go are qualification tools above; the extracted application needs neither.
+  // This stage's PATH contains the resolved Git installation directory only. That
+  // directory may also contain Git helpers or system tools; it is not advertised as
+  // a directory containing exclusively one executable.
+  const hostPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? '';
+  let git;
+  for (const directory of hostPath.split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(directory.replace(/^"(.*)"$/, '$1'), process.platform === 'win32' ? 'git.exe' : 'git');
+    try { const physical = await realpath(candidate); if ((await lstat(physical)).isFile()) { git = physical; break; } } catch {}
+  }
+  assert.ok(git, 'native Git is a declared prerequisite for extracted source capture');
+  const gitDirectory = path.dirname(git);
+  const colocatedDevelopmentTools = [];
+  for (const name of process.platform === 'win32' ? ['node.exe', 'go.exe', 'npm.cmd'] : ['node', 'go', 'npm']) {
+    try { await lstat(path.join(gitDirectory, name)); colocatedDevelopmentTools.push(name); } catch {}
+  }
+  t.diagnostic(colocatedDevelopmentTools.length ? `Git's directory also contains ${colocatedDevelopmentTools.join(', ')}; empty-PATH startup above is independently verified.` : 'Execution PATH excludes Node, npm and Go; only the Git installation directory is supplied.');
+  const gitEnvironment = privateEnvironment(home, gitDirectory);
+  const runtimeOptions = { cwd: elsewhere, env: gitEnvironment, shell: false, encoding: 'utf8', timeout: 30_000 };
+  const repository = path.join(temporary, 'runtime-project');
+  await mkdir(repository);
+  for (const args of [['init', '-b', 'fixture'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
+    execFileSync(git, ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', repository, ...args], runtimeOptions);
+  }
+  await launchOwner(runtimeOptions);
+  const project = runBinary(binary, ['projects', 'open', repository], runtimeOptions).data.project;
+  const admitted = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted offline fake response fixture.', '--deliverable', 'response_only', '--fake', '--timeout-seconds', '60'], runtimeOptions).data;
+  assert.equal(admitted.attempt.executionMode, 'fake');
+  const settled = async attemptId => {
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline) {
+      const attempt = runBinary(binary, ['attempts', 'get', attemptId], runtimeOptions).data;
+      if (attempt.phase === 'settled') return attempt;
+      await delay(40);
+    }
+    throw new Error('Extracted fake attempt did not settle within its qualification bound.');
+  };
+  const result = await settled(admitted.attempt.id);
+  assert.equal(result.outcome, 'succeeded', 'fake authoring succeeds without implying task acceptance');
+  assert.equal(result.cleanup.state, 'verified');
+  assert.ok(result.responseArtifactId);
+  const metadataArtifact = runBinary(binary, ['artifacts', 'get', result.responseArtifactId], runtimeOptions).data;
+  const responseChunk = runBinary(binary, ['artifacts', 'read', result.responseArtifactId], runtimeOptions).data;
+  const responseBytes = Buffer.from(responseChunk.bytesBase64, 'base64');
+  assert.equal(responseChunk.eof, true);
+  assert.equal(responseBytes.toString('utf8'), 'Council deterministic fake response (002-v1).\nComplete fixture evidence: café, 東京, π.\nThis is a local fixture, not a provider result.\n');
+  assert.equal(sha256(responseBytes), metadataArtifact.sha256);
+  assert.equal(BigInt(metadataArtifact.byteLength), BigInt(responseBytes.length));
+  assert.equal(metadataArtifact.closed, true);
+
+  // The same extracted binary can restart and read retained bytes without rerunning work.
+  await stopOwnedService(binary);
+  await launchOwner(runtimeOptions);
+  const retained = runBinary(binary, ['artifacts', 'read', result.responseArtifactId, '--through', responseChunk.through], runtimeOptions).data;
+  assert.equal(retained.bytesBase64, responseChunk.bytesBase64);
+  const retainedAttempt = runBinary(binary, ['attempts', 'get', result.id], runtimeOptions).data;
+  assert.equal(retainedAttempt.outcome, 'succeeded');
+
+  const slow = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted cancellation fixture.', '--fake', '--fake-scenario', 'slow', '--timeout-seconds', '60'], runtimeOptions).data;
+  const runningDeadline = Date.now() + 15_000;
+  let running = false;
+  while (Date.now() < runningDeadline) {
+    const observed = runBinary(binary, ['attempts', 'get', slow.attempt.id], runtimeOptions).data;
+    if (observed.phase === 'running') { running = true; break; }
+    assert.notEqual(observed.phase, 'settled');
+    await delay(40);
+  }
+  assert.equal(running, true, 'extracted fixed slow fixture reaches actual native launch');
+  const stopped = runBinary(binary, ['attempts', 'stop', slow.attempt.id], runtimeOptions);
+  assert.equal(stopped.data.stopAccepted, true);
+  const cancelled = await settled(slow.attempt.id);
+  assert.equal(cancelled.outcome, 'cancelled');
+  assert.equal(cancelled.cleanup.state, 'verified');
+  await stopOwnedService(binary);
 });

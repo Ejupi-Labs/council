@@ -122,7 +122,21 @@ func New(service Executor, config Config) http.Handler {
 			return
 		}
 		if op == "meta" {
-			write(w, domain.Success(200, domain.NewID(), map[string]any{"appVersion": domain.AppVersion, "apiVersion": domain.APIVersion, "ownerInstanceId": config.OwnerInstanceID, "scope": "workspace_foundation", "managedExecution": "not_implemented"}, nil))
+			metadata := map[string]any{"scope": "workspace_foundation", "managedExecution": "not_implemented"}
+			if provider, ok := service.(interface {
+				Metadata(context.Context) (map[string]any, error)
+			}); ok {
+				var err error
+				metadata, err = provider.Metadata(r.Context())
+				if err != nil {
+					write(w, domain.Failure(domain.NewID(), domain.SafeError(err)))
+					return
+				}
+			}
+			metadata["appVersion"] = domain.AppVersion
+			metadata["apiVersion"] = domain.APIVersion
+			metadata["ownerInstanceId"] = config.OwnerInstanceID
+			write(w, domain.Success(200, domain.NewID(), metadata, nil))
 			return
 		}
 		write(w, service.Execute(r.Context(), op, app.Params{ID: id, Query: args, Body: body}))
@@ -139,6 +153,9 @@ func contains(values []string, value string) bool {
 }
 
 func route(p, requestedMethod string) (operation, id, method string, queries []string) {
+	if op, identity, methods, keys := executionRoute(p, requestedMethod); op != "" {
+		return op, identity, methods, keys
+	}
 	switch p {
 	case "/api/v1/meta":
 		return "meta", "", "GET", nil
