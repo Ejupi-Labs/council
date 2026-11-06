@@ -30,8 +30,16 @@ func TestWorkflowCaptureAutoDefaultAndExplicitEmptyChecks(t *testing.T) {
 	if authority.OptionSnapshot.Checks == nil || len(*authority.OptionSnapshot.Checks) != 0 || len(authority.Checks) != 0 || len(authority.CheckGaps) != 0 {
 		t.Fatal("Explicit empty checks were replaced by inferred commands", authority)
 	}
-	if authority.Delivery.LocalMode != "review_only" || authority.Delivery.ProjectID != projectID || authority.Delivery.ProjectIdentity == "" || authority.Delivery.RepositoryIdentity == "" || authority.Delivery.Destination != projectPath {
-		t.Fatal("Default delivery scope is missing or grants application", authority.Delivery)
+	savedProject, projectIdentity, err := e.db.Project(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// TEMP may use an alias (Windows short paths or Darwin /var). The captured
+	// destination must use the saved canonical path and name the selected folder.
+	selectedInfo, selectedErr := os.Stat(projectPath)
+	capturedInfo, capturedErr := os.Stat(authority.Delivery.Destination)
+	if authority.Delivery.LocalMode != "review_only" || authority.Delivery.ProjectID != projectID || authority.Delivery.ProjectIdentity != projectIdentity || authority.Delivery.RepositoryIdentity == "" || authority.Delivery.Destination != savedProject.ResolvedPath || selectedErr != nil || capturedErr != nil || !os.SameFile(selectedInfo, capturedInfo) {
+		t.Fatalf("Default delivery scope lost its canonical/physical binding or granted application: selected=%q canonical=%q captured=%+v selectedError=%v capturedError=%v", projectPath, savedProject.ResolvedPath, authority.Delivery, selectedErr, capturedErr)
 	}
 }
 

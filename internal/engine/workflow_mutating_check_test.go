@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,7 +95,14 @@ func TestWorkflowOwnedMutatingCheckRetainsNewSubjectAndInvalidatesOldEvidence(t 
 			(*input.Workflow.Checks)[0].Arguments = []string{mutatingCheckTestArg, "--case", mutation}
 			var taskID string
 			ready := make(chan struct{})
-			before := make(chan beforeMutatingCheck, 1)
+			var readyOnce sync.Once
+			releaseReady := func() { readyOnce.Do(func() { close(ready) }) }
+			// Registered after testEngine cleanup, so failure releases this
+			// fixture gate before exact Engine.Close waits for its workers.
+			t.Cleanup(releaseReady)
+			// Retain unexpected finite correction/recheck observations rather
+			// than blocking a worker and masking its actual failed receipt.
+			before := make(chan beforeMutatingCheck, 8)
 			e.prepareGate.Lock()
 			e.config.Prepare = func(ctx context.Context, spec process.NativeSpec) (*process.Owned, error) {
 				if len(spec.Args) == 3 && spec.Args[0] == mutatingCheckTestArg {
@@ -111,19 +119,23 @@ func TestWorkflowOwnedMutatingCheckRetainsNewSubjectAndInvalidatesOldEvidence(t 
 						capture.Review = reviews.Items[0]
 						capture.Bytes, capture.Err = os.ReadFile(filepath.Join(spec.Cwd, fixture.WorkflowFile))
 					}
-					before <- capture
+					select {
+					case before <- capture:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
 				}
 				return process.Prepare(ctx, spec)
 			}
 			e.prepareGate.Unlock()
 			result := e.StartTask(context.Background(), input)
 			if result.Status != 201 {
-				close(ready)
+				releaseReady()
 				t.Fatal(result)
 			}
 			admission := decodeAdmission(t, result)
 			taskID = admission.Task.ID
-			close(ready)
+			releaseReady()
 			view := waitWorkflowReviewState(t, e, taskID, func(view domain.WorkflowDetail, steps []domain.WorkflowStep) bool {
 				return view.Workflow != nil && view.Workflow.NextAction == "candidate_stale" && view.Workflow.NextOwner == "user" && len(steps) == 3 && steps[2].SettledAt != nil
 			})
@@ -132,6 +144,9 @@ func TestWorkflowOwnedMutatingCheckRetainsNewSubjectAndInvalidatesOldEvidence(t 
 			case captured = <-before:
 			default:
 				t.Fatal("actual owned mutating check was not prepared")
+			}
+			if len(before) != 0 {
+				t.Fatal("source/index-mutating check unexpectedly prepared another check or correction cycle", len(before))
 			}
 			if captured.Err != nil || string(captured.Bytes) != fixture.WorkflowInvalid || captured.Review.Outcome != "changes_required" || captured.Review.CandidateBinding == nil {
 				t.Fatal("mutating check lacked the actual blocked selected predecessor", captured, captured.Err)

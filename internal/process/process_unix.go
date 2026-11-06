@@ -24,7 +24,8 @@ type wireSpec struct {
 	Executable string   `json:"executable"`
 	Args       []string `json:"args"`
 	Cwd        string   `json:"cwd"`
-	Env        []string `json:"env"`
+	// JSON v2 otherwise encodes nil as [], losing exec.Cmd inheritance semantics.
+	Env []string `json:"env,omitzero"`
 }
 type controlRecord struct {
 	Kind     string    `json:"kind"`

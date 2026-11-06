@@ -1,6 +1,6 @@
 # Verified delivery qualification
 
-Status: implementation and focused qualification in progress. Feature 005 is **not accepted**.
+Status: hosted failures corrected and independently reviewed; corrected-source local release gate passed. New hosted qualification remains required. Feature 005 is **not accepted**.
 The immutable design gate is `24b0cf1`. The physical development branch remains `refactor`;
 `main` remains `27822baa3aee663366a870bde7fb1190649d3418`.
 
@@ -30,7 +30,7 @@ are ignored local work, not packaged product evidence. A focused pass is not the
 | External acknowledgement faults | PASS | Actual explicit fixed publisher marker survives output-metadata failure before/after Save; uncertain attributed result stays visible, replay and new owner do not repeat execution. `005-external-ack-fault.log`, 5.072s. |
 | Explicit native blocked-slot retry | PASS | Domain0.070s/store0.515s plus actual engine1.606s: new immutable execution, same role/cycle/input, finite manual debit/common window, old blocked terminal unchanged; launched/Stopped/uncertain/stale controls denied. `005-native-manual-retry-green.log`, `005-engine-manual-retry-green.log`. |
 | Incident linkage | PASS | Known unknown-effects settlement retains the exact newly recorded operation incident; conflicting replacement is refused. `005-operation-incident-green.log`, 0.132s. |
-| Minimal browser Start | Focused PASS | Omitted workflow starts Auto; one author/builtin/review-only path, default remains minimal. `005-browser-direct-green.log`, one case, 3.627s. Ten of eleven new cases passed in42.309s; the remaining schema4 test setup assertion was corrected to preserve historical1 + explicit additional2 = granted3/remaining2 while saved policy default remains2, then both history cases passed in9.191s. Two independently found late-response UI races and the full original/browser release rerun remain open. |
+| Minimal browser Start | Focused PASS | Omitted workflow starts Auto; one author/builtin/review-only path, default remains minimal. `005-browser-direct-green.log`, one case, 3.627s. Ten of eleven new cases passed in42.309s; the remaining schema4 test setup assertion was corrected to preserve historical1 + explicit additional2 = granted3/remaining2 while saved policy default remains2, then both history cases passed in9.191s. The two late-response UI races subsequently closed locally in IR005-12/13 and the pre-hosted full release run passed; the new post-hosted suite remains separately pending below. |
 
 Some earlier failures were test setup/compiler failures, not behavioral RED: incorrect JSON case
 tags, reserved declaration keys, unavailable APIs and reading a destination while the application
@@ -99,9 +99,9 @@ AMD64/ARM64, Darwin AMD64/ARM64 and Windows AMD64 in9.326s. These are compile-on
 not actual Unix filesystem qualification. The independent reviewer closed the source correction;
 the complete source-matching local suite has now passed before push.
 
-## Completed local release gate
+## Pre-hosted f512368 local release gate
 
-Final corrected-source Windows ARM64 commands completed successfully:
+Pre-hosted source Windows ARM64 commands completed successfully:
 
 | Command | Terminal evidence |
 | --- | --- |
@@ -117,12 +117,68 @@ directory and excludes Node, npm and Go. This is local Windows ARM64 evidence, n
 required hosted native results. The final staged fixture EOF cleanup is whitespace only and
 does not change the accepted SQLite DDL statements.
 
+## First hosted qualification: failed, retained
+
+Implementation `f512368924eaec3b36f9683768055858d25a9e57` was committed and pushed to
+`refactor`. [Run 42220170361](https://github.com/Ejupi-Labs/council/actions/runs/42220170361)
+finished with all seven jobs failed. None is credited as native acceptance:
+
+| Actual job | Observed failure |
+| --- | --- |
+| Windows ARM64, Windows AMD64 | Canonical-path fixture compared the selected TEMP alias with the saved canonical path. Three actual replacement-publication cases also returned uncertain before retained observed evidence; the deadline case failed before its deadline. The underlying metadata phase is under investigation. |
+| Darwin ARM64, Darwin AMD64 | Same canonical-path fixture mismatch (`/var` versus `/private/var`); engine package then reached its ten-minute timeout during the owned index-mutating check case. |
+| Linux ARM64, Linux AMD64, Linux AMD64 race | Engine package reached its ten-minute timeout during the owned index-mutating check case. The stack includes a blocked fixture channel send and engine shutdown waiting for the owned operation. No race-detector report is present; a timeout is not a race pass. |
+
+The narrow path assertion now requires the exact saved canonical path/project identity and
+`os.SameFile` binding to the originally selected directory. Its local focused case passes0.859s;
+the foreign reviewer closed its source scope. The Unix cause is JSON v2's nil-slice encoding at
+the private guardian boundary: inherited `Env=nil` became explicit `Env=[]`, so a local check
+lost PATH and failed its Git subprocess. A second fixture observation then blocked on its full
+one-slot channel and masked the failed check during shutdown. The wire now omits only a zero
+(nil) environment, retaining explicit empty environments; a real owned-child regression checks
+inherited/empty/selected behavior using only a test-owned sentinel. The fixture retains bounded
+repeat diagnostics and cancellation-aware sends without hiding extra invocations. Focused local
+Windows process0.448s and engine7.400s pass; those do not qualify the actual Unix correction.
+
+The Windows legacy-control fixture independently reproduced exact metadata drift after a valid
+setup: expected control8004 versus actual8404, with owner/group/mode unchanged. Ambient,
+CREATOR_OWNER and mixed explicit/inherited fixtures pass locally. A candidate universal native
+setter failed its prerequisite in the opposite direction (8404→8004), so it is not activated as
+a universal replacement. The final correction selects the existing setter for auto-inherited
+descriptors and the retained-handle native OWNER/DACL setter only for unprotected legacy
+descriptors; protected behavior is unchanged and exact final metadata equality remains required.
+Actual production application/helper cases pass Workspace26.690s and the deadline/settlement
+case passes Engine15.938s. A final post-edit production current/legacy plus future-parent
+inheritance case passes0.101s. The foreign platform reviewer closed the exact final source/test
+scope; corrected hosted Windows confirmation is still required. No exact original hosted
+descriptor bytes were available, so the controlled reproduction is not claimed to be that
+runner's inspected descriptor.
+Known failures will not be hidden with skips,
+weakened application evidence or a blanket timeout increase. Corrected source must receive a new
+commit and a complete matching seven-job run; this failed revision stays in the ledger.
+
+## Corrected-source local gate
+
+The first hosted failures produced three bounded corrections, independently source-reviewed:
+exact physical/canonical fixture binding, preserved nil/empty Unix command environments with
+cancellation-aware fixture observation, and exact Windows descriptor-model restoration.
+
+| Corrected-source command | Terminal evidence |
+| --- | --- |
+| `npm run build` | PASS3.485s; regenerated embedded UI/native entrypoint. `005-hosted-corrections-build.log`. |
+| `npm run check` | PASS3.153s; source formatting, Go vet and authored TypeScript. `005-hosted-corrections-check.log`. |
+| `npm test` | PASS all Go packages, including CLI58.190s, Engine195.143s, Process13.800s, Store12.265s and Workspace42.935s. All53 browser cases pass195.317s; the extracted archive case passes22.103s. Browser/archive failures, skips and cancellations are all zero. `005-hosted-corrections-npm-test.log`. |
+
+The UI source/assets did not change in these corrections; the recorded 44-image visual review
+remains scoped evidence. Generated release output still requires the current build and integrity
+check. Actual corrected Unix and Windows runtimes require the complete new hosted revision.
+
 ## Remaining gates
 
-All recorded corrections and the independently inspected local visual/keyboard/brand gate
-are closed, including the independent Unix-boundary correction and complete source-matching
-local build/test/check/archive gate. The matching source/dist commit, exact push and hosted
-source/runtime qualification remain open. The checked implementation must be committed and pushed to `refactor`, then
+The previously recorded visual/keyboard/brand evidence remains scoped to its source/captures.
+All three hosted-failure corrections have foreign source review and affected actual local
+evidence; the complete corrected-source build/test/check/archive gate now passes. The corrected
+implementation must be committed and pushed to `refactor`, then
 pass all six actual native jobs and the supported Linux AMD64 race job at the exact revision.
 The evidence matrix must close all 25 VFD and ten SC mappings before acceptance is committed.
 Feature 006 implementation remains closed until those gates pass. Completion of 005 does not

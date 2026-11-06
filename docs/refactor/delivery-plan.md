@@ -6,8 +6,11 @@ Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
 Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172669381.
 Its 38-row evidence matrix and independent review are closed. Feature 005 design was committed
-at `24b0cf1`; dev.5/005-v1 implementation is under qualification. Its independent correction,
-render, package and native/race acceptance gates remain open. Features 006–012 remain planned.
+at `24b0cf1`; dev.5/005-v1 implementation is under qualification. Initial source `f512368`
+failed its seven-job hosted run; bounded Windows metadata, Unix environment and canonical-path
+corrections are independently reviewed and pass the fresh complete local gate; a new exact-source
+seven-job hosted run remains required. Its earlier local
+visual evidence remains scoped to its recorded source/captures. Features 006–012 remain planned.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 

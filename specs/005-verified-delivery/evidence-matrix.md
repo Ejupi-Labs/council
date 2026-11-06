@@ -1,9 +1,13 @@
 # Verified delivery evidence matrix
 
-Status: **implementation and focused qualification; feature 005 NOT ACCEPTED**.
+Status: **corrected-source qualification after failed hosted run; feature 005 NOT ACCEPTED**.
 Design gate: `24b0cf1`; current source is on `refactor`, dev.5 with execution/workflow
 contracts `005-v1`. The final checked implementation revision and matching release artifacts
 are not frozen by this draft. Feature 006 implementation stays closed.
+
+The first implementation `f512368` was pushed, but all seven jobs in run42220170361 failed.
+The acceptance/review ledgers retain the actual failures, controlled reproduction, independent
+corrections and pending new-source gate. An earlier local pass does not close any final row.
 
 The requirement text below is copied verbatim from [spec.md](spec.md), and task mappings come
 from [tasks.md](tasks.md#requirement-traceability). Actual filenames and case identifiers were
@@ -89,7 +93,7 @@ change the frozen requirement text or silently rewrite the task-plan mapping.
 | **VFD-021**: Mutations preserve request identity, replay before fresh prerequisites, reject conflicting/stale input and share owner/capacity. Observation/full bounded reads use no model or new execution authority. | T005–T006, T008–T009, T011, T016, T026–T027, T031–T033, T036–T037, T045–T051 | [E01](#e01), [E03](#e03), [E10](#e10), [E12](#e12), [E15](#e15), [E17](#e17), [E18](#e18) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
 | **VFD-022**: Upgrade preserves prior projects/drafts/versions/budgets/observations/artifacts/receipts and older-owner Stop meanings; it grants no integration/review approval, auto-resume or extra budget. | T002, T006–T007, T011, T015–T016, T018–T019, T021–T023, T045–T051 | [E02](#e02), [E03](#e03), [E16](#e16), [E18](#e18) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
 | **VFD-023**: UI/CLI share stage/control/finding/check/delivery semantics. Normal Start stays project/task/saved preference; optional details explain reasons/limits rather than requiring a stage editor. Pending intent/newer input/selection remain protected. | T003, T011, T016, T021–T023, T027, T033–T034, T037, T042–T043, T045–T052 | [E15](#e15), [E16](#e16), [E17](#e17), [E18](#e18) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
-| **VFD-024**: Keep approved Ejupi Labs assets/icons, concise English, accessible text states, keyboard/focus and 360px flow. Full evidence remains available; usage/model facts/estimates/unknown charges stay distinct. | T016, T022, T027, T033, T037, T043, T045, T050–T054 | [E15](#e15), [E16](#e16), [E17](#e17), [E19](#e19), [E20](#e20) | PARTIAL: source/client/usage mapped; actual 005 visual, keyboard and asset-hash closure OPEN; **release/7CI OPEN; local visual QA CLOSED**. |
+| **VFD-024**: Keep approved Ejupi Labs assets/icons, concise English, accessible text states, keyboard/focus and 360px flow. Full evidence remains available; usage/model facts/estimates/unknown charges stay distinct. | T016, T022, T027, T033, T037, T043, T045, T050–T054 | [E15](#e15), [E16](#e16), [E17](#e17), [E19](#e19), [E20](#e20) | Source/client/usage mapped; actual 005 visual, keyboard and asset-hash review closed locally for the recorded 44 captures; **release/7CI OPEN; local visual QA CLOSED**. |
 | **VFD-025**: Use labelled local agents/verifiers/publishers and real owned process/evidence paths, with no vendor credentials/probes/live calls. Independent source/failure/UI review, developer checks, six native targets/race and complete evidence close before 006 implementation. | T001–T003, T010, T023, T034, T044, T051–T059 | [E01](#e01), [E06](#e06), [E07](#e07), [E11](#e11), [E13](#e13), [E14](#e14), [E17](#e17), [E18](#e18), [E20](#e20) | OPEN qualification gate; local focused evidence cannot close release or live-provider claims; **release/7CI OPEN; local visual QA CLOSED**. |
 
 ## Success criterion mapping
@@ -103,7 +107,7 @@ change the frozen requirement text or silently rewrite the task-plan mapping.
 | **SC-005**: Lost replies at admission/correction/check/delivery replay identical known operations without duplicate worker/debit/Council launch. A fault after possible effects remains uncertain and causes no automatic re-execution rather than a fabricated exactly-once external guarantee. | T006, T008, T015–T016, T026–T027, T034, T036–T037, T044–T046, T051 | [E03](#e03), [E10](#e10), [E12](#e12), [E13](#e13), [E14](#e14), [E17](#e17), [E18](#e18), [E20](#e20) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
 | **SC-006**: Stop/owner/evidence/persistence faults prevent next stages, preserve failures/output/unknown cleanup and restart no historical work. | T012, T026, T034, T035–T037, T044–T046, T051 | [E10](#e10), [E12](#e12), [E13](#e13), [E14](#e14) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
 | **SC-007**: Unscoped publisher suggestions launch nothing. One explicitly scoped publisher fixture is launched once by Council and exposes its distinct result; unknown external acknowledgement remains uncertain without automatic retry. | T010, T037, T041–T044, T053 | [E01](#e01), [E14](#e14), [E18](#e18), [E20](#e20) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
-| **SC-008**: Actual UI/CLI agree on next action/owner/evidence; 360px, keyboard/focus, reduced motion, lost replies/late reads and approved hashes pass. | T016, T027, T037, T045–T046, T051–T052 | [E15](#e15), [E16](#e16), [E17](#e17), [E18](#e18), [E19](#e19), [E20](#e20) | PARTIAL interface qualification; actual visual/keyboard/reduced-motion/brand closure OPEN; **release/7CI OPEN; local visual QA CLOSED**. |
+| **SC-008**: Actual UI/CLI agree on next action/owner/evidence; 360px, keyboard/focus, reduced motion, lost replies/late reads and approved hashes pass. | T016, T027, T037, T045–T046, T051–T052 | [E15](#e15), [E16](#e16), [E17](#e17), [E18](#e18), [E19](#e19), [E20](#e20) | Interface qualification mapped; visual/keyboard/reduced-motion/brand review closed locally for the recorded 44 captures; **release/7CI OPEN; local visual QA CLOSED**. |
 | **SC-009**: Populated 004 state upgrades without rewritten rows/receipts/counters or added review/integration/budget authority; current/maintenance clients stay distinct. | T002, T006–T007, T011, T015–T016, T023, T045–T046, T051 | [E02](#e02), [E03](#e03), [E16](#e16), [E18](#e18) | Implementation / focused qualification mapped; **release/7CI OPEN; local visual QA CLOSED**. |
 | **SC-010**: Every VFD/SC has actual check/review/exact-source evidence; developer, six native/race gates pass without blocking review findings. | T001, T023, T034, T044, T051–T059 | [E01](#e01), [E06](#e06), [E07](#e07), [E11](#e11), [E13](#e13), [E17](#e17), [E18](#e18), [E20](#e20) | OPEN final evidence and acceptance gate; **release/7CI OPEN; local visual QA CLOSED**. |
 
@@ -151,8 +155,9 @@ change the frozen requirement text or silently rewrite the task-plan mapping.
   tokens/charges. Native model previews, top-level counters, reference prices, client estimates
   and unknown actual charges remain distinct. Fixed fixtures establish no cost saving.
 - Actual 005 desktop/360px images, keyboard/focus/contrast/non-colour states, reduced motion,
-  overflow, source/dist/served approved hashes and independent image review remain OPEN here.
-  Accepted 001–004 brand/runtime evidence is preserved, not reused as a 005 pass.
+  overflow, source/dist/served approved hashes and independent image review are closed locally
+  for the recorded 44 captures. Final source/native gates remain open. Accepted 001–004
+  brand/runtime evidence is preserved, not reused as a 005 pass.
 
 These are explicit evidence/capability boundaries, not an assertion that every untested path is
 a product defect. Add new actual case/source/result references when the owner qualifies a gap;
@@ -162,10 +167,10 @@ do not silently relabel another scenario as that proof.
 
 | Gate | Status and required evidence |
 | --- | --- |
-| T052 actual 005 UI/keyboard/brand review | **OPEN** — actual desktop/360px renders, interaction, approved source/dist/served hashes and independent inspection. |
+| T052 actual 005 UI/keyboard/brand review | **CLOSED locally** — 44 actual desktop/360px renders, 35 Tab/focus checks, ten source/dist/served hashes and independent full image inspection; recorded source/capture scope only. |
 | T053 matching extracted release | **OPEN final gate** — focused local Windows ARM64 archive journeys are recorded; frozen-source matching archive/notices/checksums must be revalidated as required. |
-| T055 final independent closure | **OPEN** — local IR findings have recorded corrections/rechecks; final complete source/failure/UI review and remaining coverage must close. |
-| T056 developer/source/dist gates | **OPEN** — terminal serial build, full original/new tests and check against current matching compiled assets. |
+| T055 final independent closure | **CLOSED at local/source scope** — all recorded findings including the hosted-failure corrections have foreign review and actual affected rechecks. Final acceptance still requires the matching hosted revision. |
+| T056 developer/source/dist gates | **CLOSED locally** — corrected-source serial build, all Go packages, all53 browser cases, one extracted archive case and check pass; matching compiled assets verified before staging. |
 | T057 frozen implementation commit/push | **OPEN** — exact reviewed source and matching assets pushed on physical `refactor`; design commit is not the implementation result. |
 | T058 Windows AMD64 native | **OPEN** — exact source, actual runner/job and terminal runtime result required. |
 | T058 Windows ARM64 native | **OPEN** — local focused results do not close the exact hosted revision/job. |

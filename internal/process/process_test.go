@@ -48,6 +48,20 @@ func runTestChild(args []string) int {
 		os.Stdout.Write([]byte(strings.Repeat("o", 2*1024*1024) + "stdout tail π\n"))
 		os.Stderr.Write([]byte(strings.Repeat("e", 512*1024) + "stderr tail 東京\n"))
 		return 0
+	case "environment":
+		if len(args) != 1 {
+			return 2
+		}
+		// Inspect only a test-owned sentinel; never print the inherited environment.
+		value, present := os.LookupEnv("COUNCIL_PROCESS_TEST_ENV_V1")
+		if !present {
+			fmt.Fprint(os.Stdout, "absent")
+		} else if value == "controlled-presence" {
+			fmt.Fprint(os.Stdout, "present")
+		} else {
+			fmt.Fprint(os.Stdout, "unexpected")
+		}
+		return 0
 	case "argv":
 		data, _ := json.Marshal(args[1:])
 		os.Stdout.Write(data)

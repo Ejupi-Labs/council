@@ -322,26 +322,61 @@ func applyPrepareMetadata(stage *os.File, expected applyFileInfo) error {
 	return nil
 }
 
+// NtSetSecurityObject preserves the captured legacy descriptor model without
+// SetSecurityInfo's conversion to SE_DACL_AUTO_INHERITED. The native setter is
+// intentionally limited to unprotected, non-auto-inherited descriptors: the
+// current model continues through SetSecurityInfo below. Both require exact
+// owner/DACL/control readback, including future-inheritance flags.
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetsecurityobject
+func applySetLegacySecurity(stage *os.File, descriptor *windows.SECURITY_DESCRIPTOR) error {
+	control, _, err := descriptor.Control()
+	if err != nil || control&(windows.SE_DACL_PROTECTED|windows.SE_DACL_AUTO_INHERITED) != 0 {
+		return ErrApplyUnsupported
+	}
+	if _, err = applyNativeInfo(stage, false); err != nil {
+		return err
+	}
+	if err = applySetNativeSecurity.Find(); err != nil {
+		return fmt.Errorf("%w The legacy descriptor setter is unavailable: %v", ErrApplyUnsupported, err)
+	}
+	status, _, _ := applySetNativeSecurity.Call(stage.Fd(), uintptr(windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION), uintptr(unsafe.Pointer(descriptor)))
+	runtime.KeepAlive(descriptor)
+	runtime.KeepAlive(stage)
+	if status != 0 {
+		return windows.NTStatus(status).Errno()
+	}
+	return nil
+}
+
 func applyRestoreMetadata(stage *os.File, expected applyFileInfo) error {
 	sd, ok := expected.Native.(*windows.SECURITY_DESCRIPTOR)
 	if !ok {
 		return ErrApplyUnsupported
 	}
 	if expected.Control&uint32(windows.SE_DACL_PROTECTED) == 0 {
-		if err := applySetSecurity(stage, sd, windows.UNPROTECTED_DACL_SECURITY_INFORMATION); err != nil {
-			return err
+		var err error
+		if expected.Control&uint32(windows.SE_DACL_AUTO_INHERITED) == 0 {
+			err = applySetLegacySecurity(stage, sd)
+		} else {
+			err = applySetSecurity(stage, sd, windows.UNPROTECTED_DACL_SECURITY_INFORMATION)
+		}
+		if err != nil {
+			return fmt.Errorf("Final Windows inheritance restoration failed: %w", err)
 		}
 	}
 	after, err := applyNativeInfo(stage, false)
 	if err != nil {
-		return err
+		return fmt.Errorf("Final Windows metadata inspection failed: %w", err)
 	}
 	if !applyMetadataEqual(after, expected) {
-		return ErrApplyUnsupported
+		// Retain strict equality while identifying the mismatched field without
+		// publishing account SIDs or raw ACL contents in a user-facing error.
+		return fmt.Errorf("%w Final Windows metadata readback differs (owner_equal=%t group_equal=%t mode_equal=%t security_equal=%t expected_control=%04x actual_control=%04x).", ErrApplyUnsupported, after.Owner == expected.Owner, after.Group == expected.Group, after.Mode == expected.Mode, after.Security == expected.Security, expected.Control, after.Control)
 	}
 	return nil
 }
 
+var applySetNativeSecurity = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtSetSecurityObject")
 var applySecurityDLL = windows.NewLazySystemDLL("advapi32.dll")
 var applyCreatePrivateSecurity = applySecurityDLL.NewProc("CreatePrivateObjectSecurityEx")
 var applyDestroyPrivateSecurity = applySecurityDLL.NewProc("DestroyPrivateObjectSecurity")
