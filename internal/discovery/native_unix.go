@@ -2,5 +2,23 @@
 
 package discovery
 
-// Unix CLI installations are exposed through PATH; no vendor home/config trees are inspected.
-func nativeCandidates(string) ([]string, error) { return nil, nil }
+import (
+	"os"
+	"path/filepath"
+)
+
+// Inspect only the documented native Claude launcher in addition to PATH. No
+// vendor configuration, authentication tree or launcher contents are read.
+func nativeCandidates(id string) ([]string, error) {
+	if id != "claude-code" {
+		return nil, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(home) {
+		return nil, nil
+	}
+	return []string{filepath.Join(home, ".local", "bin", "claude")}, nil
+}

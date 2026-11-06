@@ -24,6 +24,9 @@ import (
 const cliTestArg = "__council_cli_test_v1"
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == maintenanceFixtureArg {
+		os.Exit(runMaintenanceFixture(os.Args[2:]))
+	}
 	if handled, code := process.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}

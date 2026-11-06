@@ -7,6 +7,16 @@ import (
 )
 
 const CodexContract = "codex-exec-jsonl/002-v1"
+const ClaudeContract = "claude-print-stream-json/003-v1"
+
+// Parser finalizes only protocol evidence; native root/input/drain/cleanup proof
+// remains the caller's responsibility.
+type Parser interface {
+	Write([]byte) (int, error)
+	Finish() error
+	Result() ProtocolResult
+	Failed() <-chan struct{}
+}
 
 type Launch struct {
 	Executable   string
@@ -26,8 +36,11 @@ type Event struct {
 }
 
 type ProtocolResult struct {
-	Terminal     bool
-	Succeeded    bool
-	Failure      *domain.PrimaryFailure
-	Observations domain.TargetObservations
+	// FinalResponse is native terminal text; nil is absent, while an empty value
+	// can accompany a useful authored candidate. Codex retains its file import.
+	FinalResponse *string
+	Terminal      bool
+	Succeeded     bool
+	Failure       *domain.PrimaryFailure
+	Observations  domain.TargetObservations
 }

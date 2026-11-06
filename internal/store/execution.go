@@ -256,7 +256,7 @@ func (s *Store) gate(ctx context.Context, q queryer) (domain.ExecutionGate, erro
 		g.IncidentID = &incident.String
 	}
 	var active string
-	e = q.QueryRowContext(ctx, "SELECT attempt_id FROM capacity_claims WHERE connection_id='codex-native'").Scan(&active)
+	e = q.QueryRowContext(ctx, "SELECT attempt_id FROM capacity_claims WHERE resource_id='managed-native'").Scan(&active)
 	if e == nil {
 		g.ActiveAttemptID = &active
 	} else if !errors.Is(e, sql.ErrNoRows) {
@@ -301,8 +301,9 @@ func newAttempt(t domain.Task, v domain.TaskVersion, requestID, ownerID, mode, s
 		scenario = "response"
 	}
 	now := time.Now().UTC()
+	connectionID, _ := domain.ResolveConnectionID(v.Pins) // Authoring capability was checked before admission.
 	unknown := domain.ObservedFact{Status: "unknown"}
-	return domain.Attempt{ID: domain.NewID(), TaskID: t.ID, TaskVersion: v.Version, PreviousAttemptID: t.LatestAttemptID, StartRequestID: requestID, OwnerInstanceID: ownerID, ConnectionID: "codex-native", ExecutionMode: mode, FakeScenario: scenario, Phase: "queued", Revision: "1", AdmittedAt: now.Format("2006-01-02T15:04:05.000Z"), DeadlineAt: now.Add(time.Duration(v.TimeoutSeconds) * time.Second).Format("2006-01-02T15:04:05.000Z"), RequestedTarget: v.Pins, TargetObservations: domain.TargetObservations{Provider: unknown, Account: unknown, Model: unknown, NativeSession: unknown, Permissions: domain.PermissionObservation{RequestedMode: v.RequestedPolicy.Mode, Limitations: []string{}}, Usage: domain.UsageObservation{Completeness: "unknown"}}, Cleanup: domain.Cleanup{State: "not_started", Scope: "not_launched"}, EvidenceStatus: "collecting"}
+	return domain.Attempt{ID: domain.NewID(), TaskID: t.ID, TaskVersion: v.Version, PreviousAttemptID: t.LatestAttemptID, StartRequestID: requestID, OwnerInstanceID: ownerID, ConnectionID: connectionID, ExecutionMode: mode, FakeScenario: scenario, Phase: "queued", Revision: "1", AdmittedAt: now.Format("2006-01-02T15:04:05.000Z"), DeadlineAt: now.Add(time.Duration(v.TimeoutSeconds) * time.Second).Format("2006-01-02T15:04:05.000Z"), RequestedTarget: v.Pins, TargetObservations: domain.TargetObservations{Provider: unknown, Account: unknown, Model: unknown, NativeSession: unknown, Permissions: domain.PermissionObservation{RequestedMode: v.RequestedPolicy.Mode, Limitations: []string{}}, Usage: domain.UsageObservation{Completeness: "unknown"}}, Cleanup: domain.Cleanup{State: "not_started", Scope: "not_launched"}, EvidenceStatus: "collecting"}
 }
 func (s *Store) insertAttempt(ctx context.Context, tx *sql.Tx, a domain.Attempt) error {
 	seq, e := nextSequence(ctx, tx, "attempts")

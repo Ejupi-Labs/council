@@ -56,6 +56,9 @@ func (s *Store) CreateTask(ctx context.Context, ownerID string, in domain.StartT
 		if e := domain.CheckAuthoringCapability(v); e != nil {
 			return 0, nil, e
 		}
+		if e := domain.CheckExecutionScenario(v.Pins, in.ExecutionMode, in.FakeScenario); e != nil {
+			return 0, nil, e
+		}
 		seq, e := nextSequence(ctx, tx, "tasks")
 		if e != nil {
 			return 0, nil, e
@@ -185,6 +188,9 @@ func (s *Store) StartAttempt(ctx context.Context, ownerID, taskID string, in dom
 			return 0, nil, e
 		}
 		if e := domain.CheckAuthoringCapability(v); e != nil {
+			return 0, nil, e
+		}
+		if e := domain.CheckExecutionScenario(v.Pins, in.ExecutionMode, in.FakeScenario); e != nil {
 			return 0, nil, e
 		}
 		a := newAttempt(t, v, in.RequestID, ownerID, in.ExecutionMode, in.FakeScenario)

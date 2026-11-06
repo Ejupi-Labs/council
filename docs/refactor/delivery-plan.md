@@ -2,7 +2,9 @@
 
 Status: features001–002 are implemented, independently reviewed and accepted with six-platform
 native CI and Linux race checks. Feature002 qualified at f5edd96 in run42140818152.
-Features003–012 remain planned. Date: 6 November 2026.
+Feature 003 Claude interoperability is implemented and independently reviewed; integrated local
+checks and its six-platform/race qualification are in progress. Features 004–012 remain planned.
+Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -125,7 +127,8 @@ results and cleanup state. No real Codex call is required for this gate.
 
 ### 003 — Claude Code interoperability
 
-Planned context: `specs/003-claude-interoperability/`.
+Active context: `specs/003-claude-interoperability/`. Reviewed design committed before application
+implementation; local and hosted qualification are tracked in its acceptance and review records.
 
 Add Claude Code through its supported interface to the existing lifecycle, with explicit
 permission, model-selection, result, usage, cancellation and continuity capabilities. Use existing

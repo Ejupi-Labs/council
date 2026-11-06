@@ -42,7 +42,7 @@ type protocolWriter struct {
 	engine *Engine
 	id     string
 	raw    *evidence.Stream
-	parser *adapters.CodexParser
+	parser adapters.Parser
 }
 
 func (w protocolWriter) Write(b []byte) (int, error) {
@@ -82,6 +82,11 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, failure, err)
 		return
 	}
+	connectionID, pinErr := domain.ResolveConnectionID(detail.Version.Pins)
+	if pinErr != nil || connectionID != a.ConnectionID {
+		e.settleUnlaunched(a, primary("pin_unavailable", "The captured task target does not match its admitted native connection. No target was substituted."))
+		return
+	}
 	p, identity, err := e.db.Project(ctx, mustTaskProject(e.db, ctx, a.TaskID))
 	if err != nil {
 		e.settleUnlaunched(a, primary("project_unavailable", "The saved project cannot be read."))
@@ -91,27 +96,36 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("project_identity_changed", "The saved project identity changed. Restore its original folder before another explicit attempt."))
 		return
 	}
-	outputPath, err := e.evidence.OutputPath(ctx, a.ID)
-	if err != nil {
-		e.settleUnlaunched(a, primary("evidence_failed", "Cannot prepare a private final response location."), err)
-		return
-	}
-	defer func() {
-		if releaseErr := e.evidence.ReleaseOutput(a.ID, outputPath); releaseErr != nil {
-			e.fence(a.ID, "response_reservation_uncertain", "The private response reservation could not be released cleanly. Preserve its evidence and inspect the retained incident before further dispatch.")
+	// Codex alone writes its private response file. Claude returns terminal text
+	// through the parsed stdout protocol and never receives a response path.
+	outputPath := ""
+	if a.ConnectionID == "codex-native" {
+		outputPath, err = e.evidence.OutputPath(ctx, a.ID)
+		if err != nil {
+			e.settleUnlaunched(a, primary("evidence_failed", "Cannot prepare a private final response location."), err)
+			return
 		}
-	}()
+		defer func() {
+			if releaseErr := e.evidence.ReleaseOutput(a.ID, outputPath); releaseErr != nil {
+				e.fence(a.ID, "response_reservation_uncertain", "The private response reservation could not be released cleanly. Preserve its evidence and inspect the retained incident before further dispatch.")
+			}
+		}()
+	}
 	resolve := e.config.Resolve
 	if a.ExecutionMode == "fake" {
 		resolve = func(context.Context, domain.ExecutionPins) (string, error) { return os.Executable() }
 	}
-	launch, err := adapters.BuildCodex(ctx, detail.OriginalText, detail.Version, outputPath, resolve)
+	launch, err := adapters.BuildNative(ctx, detail.OriginalText, detail.Version, outputPath, resolve)
 	if err != nil {
 		e.settleUnlaunched(a, primary(domain.SafeError(err).Code, domain.SafeError(err).Message))
 		return
 	}
 	if a.ExecutionMode == "fake" {
-		launch.Args, err = fixture.Args(a.FakeScenario, outputPath)
+		auxiliaryPath := outputPath
+		if a.ConnectionID == "claude-native" {
+			auxiliaryPath = e.lock.Root()
+		}
+		launch.Args, err = fixture.ArgsForHarness(detail.Version.Pins.HarnessID, a.FakeScenario, auxiliaryPath)
 		if err != nil {
 			e.settleUnlaunched(a, primary("capability_unavailable", "The requested fixed fixture is unsupported."))
 			return
@@ -163,7 +177,7 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		e.settleUnlaunched(a, primary("evidence_failed", "Cannot create the private stderr artifact."), errors.Join(err, closeErr))
 		return
 	}
-	parser := adapters.NewCodexParser(detail.Version.Pins, func(event adapters.Event) error {
+	parser, err := adapters.NewParser(a.ConnectionID, detail.Version.Pins, out.ID(), func(event adapters.Event) error {
 		if err := out.Checkpoint(context.Background()); err != nil {
 			return err
 		}
@@ -172,6 +186,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		}
 		return e.record(a.ID, domain.AttemptUpdate{Kind: event.Kind, Metadata: jsontext.Value(event.Metadata), TargetObservations: event.Observations, Failure: event.Failure})
 	})
+	if err != nil {
+		_, outCloseErr := out.Close(context.Background(), false)
+		_, stderrCloseErr := stderr.Close(context.Background(), false)
+		e.settleUnlaunched(a, primary("capability_unavailable", "The captured native parser is unavailable."), errors.Join(err, outCloseErr, stderrCloseErr))
+		return
+	}
 	e.control.Lock()
 	_, guardErr := e.db.RecordLaunchIntent(ctx, a.ID)
 	e.control.Unlock()
@@ -304,8 +324,16 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	_ = stdoutMeta
 	var response evidence.Metadata
 	usable := false
-	if clean.Verified {
-		response, err = e.evidence.ImportResponse(settlementCtx, a.ID, outputPath, 64<<20)
+	retainResponse := clean.Verified
+	if a.ConnectionID == "claude-native" {
+		retainResponse = retainResponse && protocolErr == nil && r.Terminal && r.Succeeded && r.FinalResponse != nil && inputComplete && clean.Root != nil && clean.Root.Known && clean.Root.ExitCode == 0 && evidenceState == "complete"
+	}
+	if retainResponse {
+		if a.ConnectionID == "claude-native" {
+			response, err = e.evidence.Put(settlementCtx, a.ID, "final_response", []byte(*r.FinalResponse))
+		} else {
+			response, err = e.evidence.ImportResponse(settlementCtx, a.ID, outputPath, 64<<20)
+		}
 		if err == nil {
 			_, err = e.evidence.VerifyClosed(settlementCtx, response.ID)
 			if err == nil {
@@ -327,6 +355,12 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 		if uncertainEvidence(err) {
 			evidenceState = "uncertain"
 			e.fence(a.ID, "storage_failed", "Final response registration could not be acknowledged durably. Further dispatch remains fenced.")
+		}
+		if err != nil && a.ConnectionID == "claude-native" {
+			if evidenceState != "uncertain" {
+				evidenceState = "incomplete"
+			}
+			e.recordFailure(a.ID, primary("evidence_failed", "The native terminal response could not be retained and verified durably."))
 		}
 	}
 	var candidate *workspace.Candidate

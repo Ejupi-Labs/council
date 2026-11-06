@@ -463,6 +463,23 @@ func bindServiceOwner(c command, ownerInstanceID string) (command, *domain.Error
 	return encodeExecution(c, body)
 }
 
+// A CLI process cannot carry its in-memory captured target into another process.
+// Report the complete non-secret retry intent instead of telling the caller to
+// repeat a targetless Stop, which could bind a replacement owner.
+func stopRetryMessage(c command) string {
+	if c.op != "service.stop" {
+		return ""
+	}
+	var in struct {
+		RequestID       string `json:"requestId"`
+		OwnerInstanceID string `json:"ownerInstanceId"`
+	}
+	if domain.StrictDecode(c.params.Body, &in) != nil || !domain.ValidID(in.RequestID) || !domain.ValidID(in.OwnerInstanceID) {
+		return ""
+	}
+	return "The owner Stop acknowledgement is uncertain. Preserve its captured target. Retry exactly: council service stop --owner-instance " + in.OwnerInstanceID + " --request-id " + in.RequestID
+}
+
 func executionHumanPrefix(envelope domain.Envelope) string {
 	if receipt := envelope.Receipt; receipt != nil && (receipt.Operation == "tasks.start" || receipt.Operation == "tasks.attempts.start") {
 		return "Admitted. Inspect the attempt for progress and its retained outcome.\n"

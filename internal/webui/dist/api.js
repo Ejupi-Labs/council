@@ -111,11 +111,20 @@ export async function api(path, method = 'GET', body) {
     }
     return envelope;
 }
+export function supportsManagedExecution(meta) {
+    return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.3' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
+        && meta.scope === 'managed_execution' && meta.managedExecution === 'native_codex_claude'
+        && meta.executionContract === '003-v1' && meta.maintenanceContract === 'owner-stop/1'
+        && Array.isArray(meta.capabilities) && meta.capabilities.includes('workspace_foundation') && meta.capabilities.includes('managed_execution')
+        && !!meta.admission && ['open', 'closing', 'fenced'].includes(meta.admission.state)
+        && meta.capacity?.resourceId === 'managed-native' && meta.capacity.limit === 1
+        && (meta.capacity.activeAttemptId === null || /^[a-f0-9]{32}$/.test(meta.capacity.activeAttemptId));
+}
 export async function verifyOwner() {
     verified = false;
     const { data } = await api('/meta');
     const foundation = data.scope === 'workspace_foundation' && data.managedExecution === 'not_implemented';
-    const execution = data.scope === 'managed_execution' && data.managedExecution === 'native_codex' && data.executionContract === '002-v1';
+    const execution = supportsManagedExecution(data);
     if (data.apiVersion !== 1 || (!foundation && !execution)) {
         throw new ApiError('incompatible_owner', 'Open this workspace with a compatible Council owner.');
     }

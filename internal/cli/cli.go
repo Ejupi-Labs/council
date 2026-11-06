@@ -46,6 +46,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			failure := domain.Fail("internal_error", "The operation could not complete. Report this request identity.")
 			if c.requestID != "" {
 				failure = domain.Fail("write_uncertain", "The mutation outcome is uncertain. Retry the same request identity and input.")
+				if retry := stopRetryMessage(c); retry != "" {
+					failure.Message = retry
+				}
 			}
 			exit = emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), failure))
 		}
@@ -69,7 +72,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		var e error
 		if c.op == "service.stop" {
 			desc, e = localstate.ReadDescriptor(root)
-			if e == nil && !verifyExecutionOwner(ctx, desc) {
+			if e == nil && !verifyMaintenanceOwner(ctx, desc) {
 				e = errors.New("incompatible owner")
 			}
 		} else {
@@ -146,7 +149,7 @@ func ownerFailure(requestIDs ...string) domain.Result {
 	if len(requestIDs) > 0 && domain.ValidID(requestIDs[0]) {
 		id = requestIDs[0]
 	}
-	return domain.Failure(id, domain.Fail("owner_unavailable", "The private Council owner is unavailable or incompatible. Close its foreground process normally, then retry; do not remove its lock."))
+	return domain.Failure(id, domain.Fail("owner_unavailable", "The private Council owner is unavailable or incompatible. Use council service stop for a recognized managed owner, or close its foreground process normally, then retry; do not remove its lock."))
 }
 
 func client() *http.Client {
@@ -166,7 +169,11 @@ func verifyExecutionOwner(ctx context.Context, desc localstate.Descriptor) bool 
 func forward(ctx context.Context, desc localstate.Descriptor, c command) domain.Result {
 	uncertain := func() domain.Result {
 		if c.requestID != "" {
-			return domain.Failure(c.requestID, domain.Fail("write_uncertain", "The owner acknowledgement is uncertain. Retry the same command with the same --request-id and input."))
+			message := "The owner acknowledgement is uncertain. Retry the same command with the same --request-id and input."
+			if retry := stopRetryMessage(c); retry != "" {
+				message = retry
+			}
+			return domain.Failure(c.requestID, domain.Fail("write_uncertain", message))
 		}
 		return ownerFailure(c.requestID)
 	}
@@ -204,6 +211,11 @@ func forward(ctx context.Context, desc localstate.Descriptor, c command) domain.
 	if envelope.Error != nil || c.requestID == "" {
 		if envelope.Receipt != nil {
 			return uncertain()
+		}
+		if envelope.Error != nil && (envelope.Error.Code == "write_uncertain" || envelope.Error.Code == "storage_failed" || envelope.Error.Code == "internal_error") {
+			if retry := stopRetryMessage(c); retry != "" {
+				envelope.Error.Message = retry
+			}
 		}
 	} else {
 		if envelope.Receipt == nil || envelope.Receipt.RequestID != c.requestID || envelope.Receipt.Operation != c.op {

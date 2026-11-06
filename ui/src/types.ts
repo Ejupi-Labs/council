@@ -50,8 +50,11 @@ export interface Meta {
   appVersion: string;
   ownerInstanceId: string;
   scope: 'workspace_foundation' | 'managed_execution';
-  managedExecution: 'not_implemented' | 'native_codex';
+  managedExecution: 'not_implemented' | 'native_codex' | 'native_codex_claude';
+  capabilities?: string[];
   executionContract?: string;
+  maintenanceContract?: string;
+  capacity?: { resourceId?: string; connectionId?: string; limit: number; activeAttemptId: string | null };
   admission?: { state: string; incidentId: string | null; incident?: { code: string; message: string } };
 }
 export interface Receipt { requestId: string; operation: string; committedAt: string }

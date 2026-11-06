@@ -1,5 +1,7 @@
 import { addFact, api, element, errorMessage, feedback, timeLabel } from './api.js';
 import type { DiscoveryEntry, DiscoveryResult, HarnessId } from './types.js';
+import type { ExecutionCapabilities } from './execution-types.js';
+import { appendConnectionFacts } from './native-observations.js';
 
 const harnesses: readonly [HarnessId, string][] = [
   ['codex', 'Codex'], ['claude-code', 'Claude Code'], ['deepseek-harness', 'DeepSeek Harness'],
@@ -9,9 +11,10 @@ const harnesses: readonly [HarnessId, string][] = [
 export class AgentsView {
   private generation = 0;
   private lastResult: DiscoveryResult | null = null;
+  private capabilities: ExecutionCapabilities | null = null;
   private readonly refreshButton = element<HTMLButtonElement>('refresh-agents');
 
-  constructor() {
+  constructor(private readonly chooseTarget: (id: 'codex' | 'claude-code') => void, private readonly onCapabilities: (capabilities: ExecutionCapabilities) => void) {
     this.refreshButton.addEventListener('click', () => { void this.refresh(); });
     this.render();
   }
@@ -24,13 +27,15 @@ export class AgentsView {
       ? 'Refreshing installation metadata. Previous observations remain visible below.'
       : 'Inspecting local installation metadata. No agent is being started.');
     try {
-      const { data } = await api<DiscoveryResult>('/agents');
+      const [discovery, declared] = await Promise.allSettled([api<DiscoveryResult>('/agents'), api<ExecutionCapabilities>('/execution/capabilities')]);
       if (generation !== this.generation) return;
-      this.lastResult = data;
+      if (declared.status === 'fulfilled') { this.capabilities = declared.value.data; this.onCapabilities(declared.value.data); }
+      if (discovery.status === 'rejected') throw discovery.reason;
+      const data = discovery.value.data; this.lastResult = data;
       this.render();
       const hasErrors = data.observations.some(entry => entry.error !== null);
       feedback('agents-status', 'Observed ' + timeLabel(data.observedAt) + '. '
-        + (hasErrors ? 'Some installations could not be inspected. See each card for the next action.' : 'No live connection or account access was verified.'), hasErrors ? 'error' : 'neutral');
+        + (hasErrors ? 'Some installations could not be inspected. See each card for the next action.' : 'No live connection or account access was verified.') + (declared.status === 'rejected' ? ' Current capability declarations could not be refreshed; prior declarations may be shown.' : ''), hasErrors ? 'error' : 'neutral');
     } catch (error) {
       if (generation !== this.generation) return;
       feedback('agents-status', errorMessage(error) + (this.lastResult
@@ -88,7 +93,7 @@ export class AgentsView {
     const facts = document.createElement('dl'); facts.className = 'facts';
     for (const label of ['Authentication', 'Model', 'Allowance', 'Effective permissions']) addFact(facts, label, 'Unknown');
     const limitation = document.createElement('p'); limitation.className = 'agent-limitation';
-    limitation.textContent = observation?.managedExecution === 'native_supported_live_unqualified' ? 'Managed execution: native Codex supported · live provider unqualified' : 'Managed execution: not implemented';
+    limitation.textContent = observation?.managedExecution === 'native_supported_live_unqualified' ? 'Managed execution: native ' + name + ' supported · live provider unqualified' : 'Managed execution: not implemented';
     const details = document.createElement('details');
     const summary = document.createElement('summary'); summary.textContent = 'Observation details';
     details.append(summary);
@@ -101,7 +106,16 @@ export class AgentsView {
     ]) {
       const paragraph = document.createElement('p'); paragraph.textContent = value; details.append(paragraph);
     }
+    const profile = this.capabilities?.connections.find(connection => connection.harnessId === id);
+    if (profile) {
+      const declaration = document.createElement('dl'); declaration.className = 'facts'; appendConnectionFacts(declaration, profile);
+      addFact(declaration, 'Observed installed version', 'Unknown. Installation metadata does not verify the native protocol.'); details.append(declaration);
+    }
     card.append(header, status, nextAction, facts, limitation, details);
+    if (profile && (id === 'codex' || id === 'claude-code')) {
+      const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'secondary';
+      choose.textContent = 'Use ' + name + ' for next task'; choose.addEventListener('click', () => this.chooseTarget(id)); card.append(choose);
+    }
     return card;
   }
 }

@@ -104,7 +104,7 @@ test('native preview has exact contents, complete notices and an independently v
   const release = await packagePreview({ outputDirectory: path.join(temporary, 'releases') });
   const data = await readFile(release.archive);
   assert.equal(await readFile(release.checksum, 'utf8'), `${sha256(data)}  ${release.archiveName}\n`);
-  assert.match(release.archiveName, /^council-2\.0\.0-dev\.2-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
+  assert.match(release.archiveName, /^council-2\.0\.0-dev\.3-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
   const entries = readZip(data);
   const manifest = entries.get('SHA256SUMS.txt').contents.toString('utf8');
   const records = manifest.trimEnd().split('\n').map(line => line.match(/^([a-f0-9]{64})  (.+)$/));
@@ -122,7 +122,7 @@ test('native preview has exact contents, complete notices and an independently v
     assert.ok(notices.includes(notice), `retained upstream notice ${notice}`);
   }
   assert.match(entries.get('README.md').contents.toString('utf8'), /managed execution preview/);
-  assert.match(entries.get('README.md').contents.toString('utf8'), /live provider compatibility remains unqualified/);
+  assert.match(entries.get('README.md').contents.toString('utf8'), /live\s+provider compatibility remains (?:separately )?unqualified/i);
   assert.match(entries.get('README.md').contents.toString('utf8'), /fixed fake mode uses only local processes/);
   for (const { contents } of entries.values()) {
     for (const forbidden of [root.replaceAll('\\', '/').replace(/\/$/, ''), root.replaceAll('/', '\\').replace(/\\$/, '')]) {
@@ -170,6 +170,16 @@ test('native preview has exact contents, complete notices and an independently v
   assert.ok(launch.data?.url && !launch.error, 'extracted binary reports native UI startup');
   const url = new URL(launch.data.url);
   assert.equal(url.hostname, '127.0.0.1');
+  const accessToken = new URLSearchParams(url.hash.slice(1)).get('token');
+  const ownerMetadata = await (await fetch(url.origin + '/api/v1/meta', { headers: { Authorization: 'Bearer ' + accessToken }, signal: AbortSignal.timeout(10_000) })).json();
+  assert.equal(ownerMetadata.data.appVersion, '2.0.0-dev.3');
+  assert.equal(ownerMetadata.data.executionContract, '003-v1');
+  assert.equal(ownerMetadata.data.maintenanceContract, 'owner-stop/1');
+  assert.equal(ownerMetadata.data.managedExecution, 'native_codex_claude');
+  assert.equal(ownerMetadata.data.capacity.resourceId, 'managed-native');
+  const declared = await (await fetch(url.origin + '/api/v1/execution/capabilities', { headers: { Authorization: 'Bearer ' + accessToken }, signal: AbortSignal.timeout(10_000) })).json();
+  assert.deepEqual(declared.data.connections.map(connection => connection.connectionId), ['codex-native', 'claude-native']);
+  assert.equal(declared.data.connections[1].liveQualification, 'unqualified');
   const response = await fetch(url.origin, { signal: AbortSignal.timeout(10_000) });
   assert.equal(response.status, 200);
   const html = await response.text();
@@ -233,6 +243,24 @@ test('native preview has exact contents, complete notices and an independently v
   assert.equal(BigInt(metadataArtifact.byteLength), BigInt(responseBytes.length));
   assert.equal(metadataArtifact.closed, true);
 
+  const claude = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted offline Claude fixture.', '--harness', 'claude-code', '--deliverable', 'response_only', '--fake', '--timeout-seconds', '60'], runtimeOptions).data;
+  assert.equal(claude.attempt.connectionId, 'claude-native');
+  assert.equal(claude.version.pins.harnessId, 'claude-code');
+  const claudeResult = await settled(claude.attempt.id);
+  assert.equal(claudeResult.outcome, 'succeeded');
+  assert.equal(claudeResult.cleanup.state, 'verified');
+  assert.equal(claudeResult.targetObservations.provider.status, 'unknown');
+  assert.equal(claudeResult.targetObservations.usage.inputTokens, null);
+  const claudeMetadata = runBinary(binary, ['artifacts', 'get', claudeResult.responseArtifactId], runtimeOptions).data;
+  const claudeChunk = runBinary(binary, ['artifacts', 'read', claudeResult.responseArtifactId], runtimeOptions).data;
+  const claudeBytes = Buffer.from(claudeChunk.bytesBase64, 'base64');
+  assert.equal(claudeChunk.eof, true);
+  assert.equal(sha256(claudeBytes), claudeMetadata.sha256);
+  assert.equal(BigInt(claudeMetadata.byteLength), BigInt(claudeBytes.length));
+  assert.match(claudeBytes.toString('utf8'), /^\ufeff/);
+  assert.match(claudeBytes.toString('utf8'), /café, 東京, π/);
+  assert.match(claudeBytes.toString('utf8'), /\r\n/);
+
   // The same extracted binary can restart and read retained bytes without rerunning work.
   await stopOwnedService(binary);
   await launchOwner(runtimeOptions);
@@ -240,8 +268,10 @@ test('native preview has exact contents, complete notices and an independently v
   assert.equal(retained.bytesBase64, responseChunk.bytesBase64);
   const retainedAttempt = runBinary(binary, ['attempts', 'get', result.id], runtimeOptions).data;
   assert.equal(retainedAttempt.outcome, 'succeeded');
+  const retainedClaude = runBinary(binary, ['artifacts', 'read', claudeResult.responseArtifactId, '--through', claudeChunk.through], runtimeOptions).data;
+  assert.equal(retainedClaude.bytesBase64, claudeChunk.bytesBase64);
 
-  const slow = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted cancellation fixture.', '--fake', '--fake-scenario', 'slow', '--timeout-seconds', '60'], runtimeOptions).data;
+  const slow = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted cancellation fixture.', '--harness', 'claude-code', '--fake', '--fake-scenario', 'slow', '--timeout-seconds', '60'], runtimeOptions).data;
   const runningDeadline = Date.now() + 15_000;
   let running = false;
   while (Date.now() < runningDeadline) {

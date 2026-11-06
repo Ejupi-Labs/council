@@ -11,7 +11,7 @@ test('discovery remains truthful and refresh failure preserves composition and k
     await page.waitForFunction(() => document.querySelectorAll('#agents-list > *').length === 5);
     const project = await page.locator('#project-select').inputValue();
     assert.match(await page.locator('#agents-list').innerText(), /Unknown/);
-    assert.equal(await page.locator('#agents-list').getByText('Managed execution: not implemented', { exact: true }).count(), 4);
+    assert.equal(await page.locator('#agents-list').getByText('Managed execution: not implemented', { exact: true }).count(), 3);
     assert.match(await page.getByTestId('agent-codex').textContent(), /native Codex supported.*live provider unqualified/);
     await page.locator('#task-text').fill('Keep this original draft');
     await page.route('**/api/v1/agents', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ apiVersion: 1, requestId: '11111111111111111111111111111111', error: { code: 'discovery_unavailable', message: 'Installation inspection is unavailable. Retry later.' } }) }));

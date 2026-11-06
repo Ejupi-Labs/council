@@ -8,16 +8,18 @@ main remains unchanged.
 
 ## Current preview
 
-Preview **2.0.0-dev.2** opens existing Git projects, remembers the autonomy preference and runs
-explicit native Codex authoring in managed isolated workspaces. The Ejupi Labs UI and CLI share
+Preview **2.0.0-dev.3** adds explicitly selected native Claude Code alongside Codex in managed
+isolated workspaces, with one shared execution slot. Claude interoperability has passed focused local
+checks and independent review; full platform qualification is in progress. The accepted baseline is
+feature 002. The Ejupi Labs UI and CLI share
 versioned instructions, exact output, source-relative candidates, history, Stop and recovery
 incidents. A response-only result can be explicitly accepted after review; authored changes remain
 verification pending. Work is never automatically replayed, merged or published by this slice.
 
-Native Codex live provider compatibility remains **unqualified**. Installation discovery does not
+Native Codex and Claude live provider compatibility remains **unqualified**. Installation discovery does not
 verify authentication, models, account capacity or subscription allowance. An explicit local fake
 mode exercises the real ownership/workspace/evidence lifecycle without a provider. Economical
-routing, additional harnesses, independent verification/integration and MCP follow the feature plan.
+routing, further harnesses, independent verification/integration and MCP follow the feature plan.
 
 ## Run a native preview
 

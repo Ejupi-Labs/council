@@ -61,7 +61,7 @@ func (s Scanner) Discover(ctx context.Context) (DiscoveryResult, error) {
 				action = "review_launcher_support"
 			}
 			managed := "not_implemented"
-			if h.id == "codex" {
+			if h.id == "codex" || h.id == "claude-code" {
 				managed = "native_supported_live_unqualified"
 				if status == "installed" {
 					action = "start_explicit_task"

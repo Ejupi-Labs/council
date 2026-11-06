@@ -61,43 +61,23 @@ func Open(path string) (*Store, error) {
 		if err = db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil || tables != 0 {
 			return fail()
 		}
-		tx, e := db.Begin()
-		if e != nil {
-			return fail()
-		}
-		if _, e = tx.Exec(schema); e != nil {
-			tx.Rollback()
-			return fail()
-		}
-		p := domain.Policy{Mode: "autonomous", SelectionSource: "default", Revision: "1", UpdatedAt: domain.Now()}
-		if _, e = tx.Exec("INSERT INTO policy(singleton,revision,data) VALUES(1,1,?)", encode(p)); e != nil {
-			tx.Rollback()
-			return fail()
-		}
-		if _, e = tx.Exec(executionSchema); e != nil {
-			tx.Rollback()
-			return fail()
-		}
-		if e = tx.Commit(); e != nil {
-			return fail()
-		}
+		err = s.initializeSchema(context.Background(), true)
 	} else if version == 1 && appID == applicationID {
 		if err = s.validateFoundation(context.Background()); err != nil {
 			return fail()
 		}
-		tx, e := db.Begin()
-		if e != nil {
+		err = s.initializeSchema(context.Background(), false)
+	} else if version == 2 && appID == applicationID {
+		if err = s.validateFoundation(context.Background()); err != nil {
 			return fail()
 		}
-		if _, e = tx.Exec(executionSchema); e != nil {
-			tx.Rollback()
-			return fail()
-		}
-		if e = tx.Commit(); e != nil {
-			return fail()
-		}
+		err = s.migrateSharedCapacity(context.Background())
 	} else if version != schemaVersion || appID != applicationID {
 		return fail()
+	}
+	if err != nil {
+		db.Close()
+		return nil, err // An actual Commit failure remains uncertain.
 	}
 	var fk int
 	if err = db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {

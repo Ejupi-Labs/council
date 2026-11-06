@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -117,10 +118,33 @@ func ValidateExecutionMode(mode, scenario string) *Error {
 			return Invalid("fakeScenario only in fake mode")
 		}
 		switch scenario {
-		case "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown":
+		case "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown",
+			"trailing_observation", "malformed", "missing_result", "repeated_result", "trailing_error", "success_error", "model_usage", "empty_response", "empty_candidate":
 		default:
 			return Invalid("fakeScenario")
 		}
+	}
+	return nil
+}
+
+// CheckExecutionScenario is a launch capability check, deliberately after replay.
+func CheckExecutionScenario(pins ExecutionPins, mode, scenario string) *Error {
+	if err := ValidateExecutionMode(mode, scenario); err != nil {
+		return err
+	}
+	if mode != "fake" || scenario == "" {
+		return nil
+	}
+	switch scenario {
+	case "response", "candidate", "partial_failure", "slow", "late_success", "owned_descendant", "cleanup_unknown":
+		return nil
+	}
+	connectionID, err := ResolveConnectionID(pins)
+	if err != nil {
+		return err
+	}
+	if connectionID != "claude-native" {
+		return Fail("capability_unavailable", "This fixed fake scenario requires Claude Code. Select its harness explicitly or use a supported fixture.")
 	}
 	return nil
 }
@@ -209,12 +233,24 @@ func ValidateResponseAcceptance(in ResponseAcceptanceInput) *Error {
 	}
 	return nil
 }
+
+// ValidateModelArgument applies launch-only safety without changing the accepted
+// structural request syntax used by historical receipt fingerprints.
+func ValidateModelArgument(model string) *Error {
+	if strings.HasPrefix(strings.TrimSpace(model), "-") {
+		return Fail("pin_unavailable", "The model selector resembles a native option. Supply a supported literal model selector; no launch was made.")
+	}
+	return nil
+}
 func CheckAuthoringCapability(v TaskVersion) *Error {
+	if err := ValidateModelArgument(v.Pins.Model); err != nil {
+		return err
+	}
 	if v.RequestedPolicy.Mode != "autonomous" || v.TaskPolicyOverride != nil {
 		return Fail("permission_unavailable", "This connection cannot provide interactive supervised approvals. Retain the task and choose a supported policy explicitly.")
 	}
-	if v.Pins.HarnessID != "" && v.Pins.HarnessID != "codex" {
-		return Fail("pin_unavailable", "This preview can execute Codex only. Choose Codex or retain this request for a later connection.")
+	if _, err := ResolveConnectionID(v.Pins); err != nil {
+		return err
 	}
 	if v.Pins.AccountID != "" || v.Pins.PaymentPath == "paid_api" {
 		return Fail("pin_unavailable", "Explicit account selection and paid API execution are unavailable. No account or payment substitution was made.")

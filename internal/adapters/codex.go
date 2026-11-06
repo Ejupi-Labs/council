@@ -20,6 +20,9 @@ func UnknownObservations(mode string) domain.TargetObservations {
 }
 
 func BuildCodex(ctx context.Context, original string, version domain.TaskVersion, responsePath string, resolve Resolver) (Launch, error) {
+	if err := domain.ValidateModelArgument(version.Pins.Model); err != nil {
+		return Launch{}, err
+	}
 	mode := version.RequestedPolicy.Mode
 	if version.TaskPolicyOverride != nil {
 		mode = *version.TaskPolicyOverride

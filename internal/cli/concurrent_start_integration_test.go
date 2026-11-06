@@ -61,7 +61,8 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 	barrier := make(chan struct{})
 	results := make(chan concurrentCLIResult, 2)
 	for index := range requestIDs {
-		args := []string{"tasks", "start", "--project", project.Project.ID,
+		harness := []string{"codex", "claude-code"}[index]
+		args := []string{"tasks", "start", "--project", project.Project.ID, "--harness", harness,
 			"--task", fmt.Sprintf("independent concurrent fake task %d", index), "--deliverable", "response_only",
 			"--fake", "--fake-scenario", "slow", "--timeout-seconds", "60", "--request-id", requestIDs[index]}
 		go func(index int, args []string) {
@@ -79,6 +80,9 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 			decodeCLIData(t, envelope, &admissions[result.index])
 			processIDs[result.index] = result.pid
 			admitted := admissions[result.index]
+			if admitted.Version.Pins.HarnessID != []string{"codex", "claude-code"}[result.index] || admitted.Attempt.ConnectionID != []string{"codex-native", "claude-native"}[result.index] {
+				t.Fatalf("independent clients lost their captured different targets: %+v", admitted)
+			}
 			if envelope.RequestID != requestIDs[result.index] || envelope.Receipt == nil || envelope.Receipt.RequestID != requestIDs[result.index] || envelope.Receipt.Operation != "tasks.start" || admitted.Attempt.StartRequestID != requestIDs[result.index] {
 				t.Fatalf("concurrent admission did not retain its distinct request identity: %+v", admitted)
 			}

@@ -75,7 +75,7 @@ func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain
 		}
 		resolve := e.config.Resolve
 		if resolve == nil {
-			resolve = adapters.ResolveCodex
+			resolve = adapters.ResolveNative
 		}
 		if _, err := resolve(ctx, pins); err != nil {
 			return e.failure(in.RequestID, err)

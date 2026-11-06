@@ -3,7 +3,8 @@
 Status: feature001 foundation is accepted on all six native targets at93c8c25. Feature002 managed
 execution is implemented, independently reviewed and accepted on all six native targets plus Linux
 AMD64 race checks at f5edd96 in run42140818152. Other parent requirements remain partial or not
-implemented as marked. Date: 6 November 2026.
+implemented as marked. Feature 003 has reviewed design and implementation records; its integrated
+qualification is in progress and does not yet change accepted parent status. Date: 6 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
 [the delivery plan](delivery-plan.md). It does not credit the legacy runtime at
@@ -19,7 +20,8 @@ failure/cancellation precedence, complete evidence, isolation and fail-closed cl
 002. Slice 007 adds deliberate recovery and retention operations to that established base.
 
 Feature001 and feature002 acceptance.md and review.md records include their actual hosted
-qualification. Other evidence paths are **planned and not yet created**; a path alone is not evidence.
+qualification. Feature 003 records its current local evidence and pending qualification separately.
+Evidence paths for features 004–012 are **planned and not yet created**; a path alone is not evidence.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,

@@ -7,11 +7,33 @@ export interface TaskSummary {
 export interface Task extends TaskSummary { originalText: string }
 export interface TaskVersion {
   taskId: string; version: string; guidanceText: string; requestedPolicy: Policy; timeoutSeconds: number;
-  pins: { model?: string }; acceptance: { deliverable: string; conditionsText: string; requiredEvidence: string[]; allowCandidatePreparation: boolean };
+  pins: ExecutionPins; acceptance: { deliverable: string; conditionsText: string; requiredEvidence: string[]; allowCandidatePreparation: boolean };
 }
-interface Fact { status: string; value: string | null; source: string | null; observedAt: string | null }
+export interface ExecutionPins { harnessId?: string; model?: string; accountId?: string; paymentPath?: string }
+export interface Fact { status: 'observed' | 'unknown'; value: string | null; source: string | null; observedAt: string | null }
+export interface UsageObservation {
+  inputTokens: string | null; outputTokens: string | null; cachedInputTokens: string | null;
+  cacheCreationInputTokens?: string | null; scope?: 'top_level' | 'whole_tree' | 'unknown';
+  source: string | null; observedAt: string | null; completeness: string;
+}
+export interface NativeModelUsage {
+  model: string; inputTokens: string | null; outputTokens: string | null; cachedInputTokens: string | null;
+  cacheCreationInputTokens: string | null; costEstimateUsd: string | null;
+}
+export interface NativeModelsObservation {
+  scope: 'whole_tree'; source: string; observedAt: string; completeness: 'complete' | 'partial' | 'unknown';
+  evidenceArtifactIds: string[]; omittedModelCount: string | null; models: NativeModelUsage[];
+}
+export interface ConnectionCapability {
+  connectionId: string; harnessId: string; interface: 'native_exec'; nativeContract: string;
+  minimumVersion: string | null; documentedVersion: string | null; versionSource: string;
+  supportedPolicyModes: string[]; modelSelection: string; accountSelection: string;
+  sessionContinuity: string; sessionPersistence: string; cancellationScope: string;
+  liveQualification: string; fakeMode: boolean; limits: Record<string, number>;
+}
+export interface ExecutionCapabilities { resourceId: 'managed-native'; limit: 1; defaultHarnessId: 'codex'; connections: ConnectionCapability[] }
 export interface Attempt {
-  id: string; taskId: string; taskVersion: string; phase: string; outcome: string | null; revision: string;
+  id: string; taskId: string; taskVersion: string; connectionId: string; phase: string; outcome: string | null; revision: string;
   executionMode: string; deadlineAt: string; remainingSeconds: number; observedAt: string; settledAt: string | null;
   sourceSnapshotId: string | null; candidateId: string | null; responseArtifactId: string | null;
   evidenceStatus: string; authoredDelta: boolean;
@@ -21,11 +43,12 @@ export interface Attempt {
   primaryFailure: { code: string; message: string } | null;
   stop: { acceptedAt: string } | null;
   cleanup: { state: string; scope: string; incidentId: string | null };
-  requestedTarget: { model?: string };
+  requestedTarget: ExecutionPins;
   targetObservations: {
     provider: Fact; account: Fact; model: Fact; nativeSession: Fact;
+    configuredModel?: Fact; nativeVersion?: Fact; nativeModels?: NativeModelsObservation;
     permissions: { requestedMode: string; configuredMode: string | null; nativeReportedMode: string | null; limitations: string[] };
-    usage: { inputTokens: string | null; outputTokens: string | null; cachedInputTokens: string | null; source: string | null; observedAt: string | null; completeness: string };
+    usage: UsageObservation;
   };
 }
 export interface TaskDetail { task: Task; version: TaskVersion; latestAttempt: Attempt | null; acceptance: { responseArtifactId: string; acceptedAt: string } | null }

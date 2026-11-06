@@ -1,7 +1,8 @@
-import { addFact, api, ApiError, element, errorMessage, feedback, policyName, readSession, requestId, timeLabel, writeSession } from './api.js';
+import { addFact, api, ApiError, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, writeSession } from './api.js';
 import type { DraftsView, ExecutionIntent } from './drafts.js';
 import type { Draft, Meta, Page, Policy } from './types.js';
-import type { Admission, Artifact, ArtifactChunk, Attempt, AttemptEvent, TaskDetail, TaskSummary } from './execution-types.js';
+import type { Admission, Artifact, ArtifactChunk, Attempt, AttemptEvent, ExecutionCapabilities, ExecutionPins, TaskDetail, TaskSummary } from './execution-types.js';
+import { appendConnectionFacts, factLabel, harnessName, renderNativeModels, usageLabel } from './native-observations.js';
 
 interface PendingStart { intent: ExecutionIntent; body: Record<string, unknown>; unresolved?: boolean }
 interface PendingMutation { path: string; method: string; body: Record<string, unknown>; unresolved?: boolean }
@@ -11,9 +12,7 @@ function label(attempt: Attempt): string {
   if (attempt.outcome === 'succeeded') return 'Verification pending';
   return attempt.outcome ?? attempt.phase;
 }
-function fact(value: { status: string; value: string | null; source: string | null; observedAt: string | null }): string {
-  return value.status === 'known' ? (value.value ?? 'Unknown') + ' · ' + (value.source ?? 'source unknown') + (value.observedAt ? ' · ' + timeLabel(value.observedAt) : '') : 'Unknown';
-}
+
 function row(list: HTMLElement, title: string, action: () => void): void {
   const li = document.createElement('li'); const button = document.createElement('button');
   button.type = 'button'; button.textContent = title; button.addEventListener('click', action); li.append(button); list.append(li);
@@ -24,6 +23,7 @@ export class TasksView {
   private policy: Policy | null = null;
   private available = false;
   private admission = 'open';
+  private capabilities: ExecutionCapabilities | null = null;
   private busy = false;
   private projectGeneration = 0;
   private detailGeneration = 0;
@@ -48,6 +48,7 @@ export class TasksView {
   private downloadURL: string | null = null;
   private guidanceEdited = false;
   private guidanceEditors = readSession<Record<string, string>>('taskGuidanceEditors') ?? {};
+  private guidanceHarnessEditors = readSession<Record<string, string>>('taskGuidanceHarnessEditors') ?? {};
 
   constructor(private readonly drafts: DraftsView) {
     const responseArea = element('response-area');
@@ -55,6 +56,15 @@ export class TasksView {
     for (const node of [readButtonRow, element('artifact-status'), element('artifact-output'), element('response-acceptance')]) responseArea.append(node);
     if (this.pendingStart) this.pendingStart.unresolved = true;
     for (const pending of Object.values(this.pending)) pending.unresolved = true;
+    const savedHarness = readSession<string>('taskHarnessChoice');
+    if (savedHarness && ['codex', 'claude-code'].includes(savedHarness)) element<HTMLSelectElement>('task-harness').value = savedHarness;
+    element('composer-target').textContent = harnessName(input('task-harness'));
+    element('task-harness').addEventListener('change', () => {
+      writeSession('taskHarnessChoice', input('task-harness')); element('composer-target').textContent = harnessName(input('task-harness'));
+    });
+    element('guidance-harness').addEventListener('change', () => {
+      if (this.selectedTaskId) { this.guidanceHarnessEditors[this.selectedTaskId] = input('guidance-harness'); writeSession('taskGuidanceHarnessEditors', this.guidanceHarnessEditors); }
+    });
     element('start-task').addEventListener('click', () => { void this.start(); });
     element('refresh-tasks').addEventListener('click', () => { void this.refreshTasks(); });
     element('more-tasks').addEventListener('click', () => { void this.refreshTasks(true); });
@@ -77,11 +87,23 @@ export class TasksView {
     this.controls();
   }
 
+  selectHarness(id: 'codex' | 'claude-code'): void {
+    element<HTMLSelectElement>('task-harness').value = id; writeSession('taskHarnessChoice', id);
+    element('composer-target').textContent = harnessName(id);
+    element<HTMLDetailsElement>('execution-options').open = true; element('task-harness').focus();
+    element('task-harness').scrollIntoView({ block: 'center' });
+    feedback('execution-status', harnessName(id) + ' selected for the next Start.' + (this.pendingStart ? ' The pending start keeps its original clicked target.' : ' Enter a task and start explicitly when ready.'));
+  }
+
+  setCapabilities(capabilities: ExecutionCapabilities): void {
+    this.capabilities = capabilities; if (this.attempt) this.renderAttempt();
+  }
+
   setOwner(meta: Meta): void {
     this.admission = meta.admission?.state ?? 'open';
-    this.available = meta.executionContract === '002-v1' && meta.managedExecution === 'native_codex';
+    this.available = supportsManagedExecution(meta);
     if (meta.admission && meta.admission.state !== 'open') feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
-    if (!this.available) feedback('execution-status', 'This owner does not advertise managed execution 002-v1. Reopen with a compatible Council owner.', 'error');
+    if (!this.available) feedback('execution-status', 'This owner does not advertise managed execution 003-v1. Reopen with a compatible Council owner.', 'error');
     this.controls(); if (this.available && this.projectId) void this.refreshTasks();
   }
   disconnect(): void { this.available = false; this.attemptGeneration++; this.controls(); }
@@ -118,7 +140,7 @@ export class TasksView {
     const required = input('task-required-evidence').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
     if (required.some(v => !['check', 'independent_review', 'local_integration', 'external_delivery'].includes(v)) || new Set(required).size !== required.length) throw new ApiError('invalid_input', 'Required evidence entries are unique values: check, independent_review, local_integration, external_delivery.');
     return {
-      ...(input('task-model') ? { pins: { model: input('task-model') } } : {}),
+      ...(input('task-harness') || input('task-model') ? { pins: { ...(input('task-harness') ? { harnessId: input('task-harness') } : {}), ...(input('task-model') ? { model: input('task-model') } : {}) } } : {}),
       ...(timeout ? { timeoutSeconds: Number(timeout) } : {}),
       acceptance: { deliverable: input('task-deliverable'), conditionsText: input('task-conditions'), requiredEvidence: required, allowCandidatePreparation: !checked('task-final-only') },
       ...(checked('task-fake') ? { executionMode: 'fake', fakeScenario: input('task-fake-scenario') } : {}),
@@ -135,6 +157,7 @@ export class TasksView {
       }
     } catch (e) { feedback('execution-status', errorMessage(e), 'error'); return; }
     const pending = this.pendingStart; const wasUnresolved = pending.unresolved === true;
+    const detailGeneration = this.detailGeneration; const projectGeneration = this.projectGeneration; const selectedTaskId = this.selectedTaskId;
     pending.unresolved = true; this.busy = true; this.controls(); writeSession('pendingExecutionStart', pending);
     feedback('execution-status', 'Preparing this exact clicked task. Saving a draft and admitting an execution have separate acknowledgements.');
     try {
@@ -149,7 +172,11 @@ export class TasksView {
       const { data } = await api<Admission>('/tasks', 'POST', pending.body);
       this.pendingStart = null; writeSession('pendingExecutionStart', null);
       feedback('execution-status', 'Admitted task ' + data.task.id + ' · ' + data.attempt.phase + '. One explicit worker; completion is not yet accepted.', 'success');
-      if (data.task.projectId === this.projectId) { await this.refreshTasks(); await this.openTask(data.task.id); }
+      if (data.task.projectId === this.projectId) {
+        await this.refreshTasks();
+        // A late acknowledgement must not replace a selection made during admission or refresh.
+        if (detailGeneration === this.detailGeneration && projectGeneration === this.projectGeneration && selectedTaskId === this.selectedTaskId) await this.openTask(data.task.id);
+      }
     } catch (e) {
       const uncertain = wasUnresolved || e instanceof ApiError && e.uncertain;
       this.drafts.finishExecutionSave(pending.intent, null, uncertain);
@@ -193,7 +220,10 @@ export class TasksView {
     element('task-detail-heading').textContent = 'Task ' + data.task.id.slice(0, 8) + ' · version ' + data.task.currentVersion;
     const facts = element('task-facts'); facts.replaceChildren();
     addFact(facts, 'Task identity', data.task.id); addFact(facts, 'Captured requested preference', policyName(data.version.requestedPolicy.mode) + ' · revision ' + data.version.requestedPolicy.revision);
-    addFact(facts, 'Requested model', data.version.pins.model || 'Auto · Native default'); addFact(facts, 'Current task version', data.task.currentVersion);
+    addFact(facts, 'Captured harness choice', harnessName(data.version.pins.harnessId));
+    addFact(facts, 'Requested model', data.version.pins.model || 'Native configured default'); addFact(facts, 'Current task version', data.task.currentVersion);
+    element('guidance-keep-target').textContent = 'Keep captured target · ' + harnessName(data.version.pins.harnessId);
+    element<HTMLSelectElement>('guidance-harness').value = this.guidanceHarnessEditors[data.task.id] ?? 'keep';
     addFact(facts, 'Acceptance', data.acceptance ? 'Reviewed response accepted · ' + timeLabel(data.acceptance.acceptedAt) : 'Not accepted');
     element('task-original').textContent = data.task.originalText;
     element('task-conditions-view').textContent = data.version.acceptance.conditionsText + (data.version.acceptance.requiredEvidence.length ? '\nRequired evidence: ' + data.version.acceptance.requiredEvidence.join(', ') : '');
@@ -207,12 +237,12 @@ export class TasksView {
     this.attempts = append ? [...this.attempts, ...data.items] : data.items; this.attemptCursor = data.nextCursor;
     const list = element('attempt-list'); list.replaceChildren(); let total = 0n; let unknown = false;
     for (const attempt of this.attempts) {
-      row(list, attempt.id.slice(0, 8) + ' · task version ' + attempt.taskVersion + ' · ' + label(attempt) + ' · ' + (attempt.executionMode === 'fake' ? 'Local fake' : 'Native Codex'), () => { void this.selectAttempt(attempt); });
+      row(list, attempt.id.slice(0, 8) + ' · task version ' + attempt.taskVersion + ' · ' + label(attempt) + ' · ' + (attempt.executionMode === 'fake' ? 'Local fake · ' : '') + attempt.connectionId, () => { void this.selectAttempt(attempt); });
       const usage = attempt.targetObservations.usage;
       for (const count of [usage.inputTokens, usage.outputTokens]) { if (count !== null && /^\d+$/.test(count)) total += BigInt(count); else unknown = true; }
     }
     element('more-attempts').hidden = !this.attemptCursor;
-    element('usage-total').textContent = 'Reported input + output across loaded executions: ' + total + ' tokens.' + (unknown ? ' Some usage is unknown.' : '') + (this.attemptCursor ? ' More history is available.' : '') + ' Cached input is included in input, not added twice. Native call counts, cost and allowance remain unknown.';
+    element('usage-total').textContent = 'Reported input + output across loaded executions (native scopes may differ): ' + total + ' tokens.' + (unknown ? ' Some usage is unknown.' : '') + (this.attemptCursor ? ' More history is available.' : '') + ' Cached input is not added twice. Whole-tree previews are not added to these counters. Native call counts, cost and allowance remain unknown.';
   }
 
   private async selectAttempt(attempt: Attempt): Promise<void> {
@@ -232,13 +262,21 @@ export class TasksView {
     const summary = element('attempt-summary'); summary.replaceChildren();
     addFact(summary, 'Cleanup and evidence', a.cleanup.state.replaceAll('_', ' ') + ' · ' + a.evidenceStatus);
     addFact(summary, 'Deadline', timeLabel(a.deadlineAt) + ' · ' + a.remainingSeconds + ' seconds remaining at ' + timeLabel(a.observedAt));
-    addFact(summary, 'Reported usage', 'Input ' + (usage.inputTokens ?? 'unknown') + ' · output ' + (usage.outputTokens ?? 'unknown') + (usage.source ? ' · ' + usage.source : ''));
+    addFact(summary, 'Captured connection', a.connectionId + ' · ' + (a.executionMode === 'fake' ? 'Local fake' : 'Native execution'));
+    addFact(summary, 'Reported usage', usageLabel(usage));
     const facts = element('attempt-facts'); facts.replaceChildren();
     addFact(facts, 'Execution identity', a.id); addFact(facts, 'Authoring outcome', label(a)); addFact(facts, 'Deadline', timeLabel(a.deadlineAt) + ' · ' + a.remainingSeconds + ' seconds remaining at ' + timeLabel(a.observedAt));
     addFact(facts, 'Cleanup', a.cleanup.state + ' · ' + a.cleanup.scope.replaceAll('_', ' ') + (a.cleanup.incidentId ? ' · incident ' + a.cleanup.incidentId : ''));
     addFact(facts, 'Evidence', a.evidenceStatus); addFact(facts, 'Source snapshot', a.sourceSnapshotId ?? 'Not captured'); addFact(facts, 'Candidate', a.candidateId ?? 'No candidate retained');
-    addFact(facts, 'Requested model selector', a.requestedTarget.model || 'Auto · Native default');
-    for (const key of ['provider', 'account', 'model', 'nativeSession'] as const) addFact(facts, 'Observed ' + key, fact(a.targetObservations[key]));
+    addFact(facts, 'Captured connection', a.connectionId); addFact(facts, 'Requested harness choice', harnessName(a.requestedTarget.harnessId));
+    addFact(facts, 'Requested model selector', a.requestedTarget.model || 'Native configured default');
+    addFact(facts, 'Observed provider', factLabel(a.targetObservations.provider)); addFact(facts, 'Observed account', factLabel(a.targetObservations.account));
+    addFact(facts, 'Observed actual primary model', factLabel(a.targetObservations.model));
+    addFact(facts, 'Native configured model setting', factLabel(a.targetObservations.configuredModel));
+    addFact(facts, 'Observed invocation version', factLabel(a.targetObservations.nativeVersion));
+    addFact(facts, 'Observed native session ID', factLabel(a.targetObservations.nativeSession));
+    appendConnectionFacts(facts, this.capabilities?.connections.find(connection => connection.connectionId === a.connectionId));
+    renderNativeModels(a, id => { void this.readBytes(id); });
     if (a.sourceSnapshot) {
       addFact(facts, 'Captured source base', a.sourceSnapshot.baseCommit);
       addFact(facts, 'Captured source branch', a.sourceSnapshot.branch ?? 'Detached HEAD');
@@ -254,7 +292,8 @@ export class TasksView {
     const permissions = a.targetObservations.permissions;
     addFact(facts, 'Permissions', 'Requested ' + permissions.requestedMode + ' · configured ' + (permissions.configuredMode ?? 'unknown') + ' · native reported ' + (permissions.nativeReportedMode ?? 'unknown'));
     if (permissions.limitations.length) addFact(facts, 'Permission scope', permissions.limitations.join(' '));
-    addFact(facts, 'Reported usage', 'Input ' + (usage.inputTokens ?? 'unknown') + ' · output ' + (usage.outputTokens ?? 'unknown') + ' · cached input ' + (usage.cachedInputTokens ?? 'unknown') + ' · ' + usage.completeness + (usage.source ? ' · ' + usage.source : '') + (usage.observedAt ? ' · ' + timeLabel(usage.observedAt) : ''));
+    addFact(facts, 'Reported usage', usageLabel(usage));
+    addFact(facts, 'Usage and billing limits', 'Top-level counters and whole-tree model previews have separate scopes. Native client estimates are not billed charges, subscription allowance or an independent accounting receipt.');
     this.controls();
   }
 
@@ -367,10 +406,18 @@ export class TasksView {
   private async guidance(): Promise<void> {
     const detail = this.detail; if (!detail) return;
     const key = 'guidance:' + detail.task.id;
-    const p = this.pending[key] ?? { path: '/tasks/' + detail.task.id + '/guidance', method: 'PUT', body: { requestId: requestId(), expectedRevision: detail.task.revision, guidanceText: input('task-guidance') } };
+    const target = input('guidance-harness'); const pins: ExecutionPins = { ...detail.version.pins };
+    if (target !== 'keep') { if (target) pins.harnessId = target; else delete pins.harnessId; }
+    const p = this.pending[key] ?? { path: '/tasks/' + detail.task.id + '/guidance', method: 'PUT', body: { requestId: requestId(), expectedRevision: detail.task.revision, guidanceText: input('task-guidance'), ...(target !== 'keep' ? { pins } : {}) } };
     this.pending[key] = p; const clickedText = String(p.body['guidanceText']);
+    const clickedTarget = p.body['pins'] ? (p.body['pins'] as ExecutionPins).harnessId ?? '' : 'keep';
     const result = await this.mutate(key, p.path, p.body);
-    if (result && this.selectedTaskId === detail.task.id) { this.guidanceEdited = input('task-guidance') !== clickedText; if (!this.guidanceEdited) { delete this.guidanceEditors[detail.task.id]; writeSession('taskGuidanceEditors', this.guidanceEditors); } await this.openTask(detail.task.id); feedback('guidance-status', 'Guidance saved as a new immutable version. Prior outcomes remain historical. Start another execution explicitly when ready.'); }
+    if (result && this.selectedTaskId === detail.task.id) {
+      this.guidanceEdited = input('task-guidance') !== clickedText;
+      if (!this.guidanceEdited) { delete this.guidanceEditors[detail.task.id]; writeSession('taskGuidanceEditors', this.guidanceEditors); }
+      if (input('guidance-harness') === clickedTarget) { delete this.guidanceHarnessEditors[detail.task.id]; writeSession('taskGuidanceHarnessEditors', this.guidanceHarnessEditors); }
+      await this.openTask(detail.task.id); feedback('guidance-status', 'Guidance and any explicit target change saved as a new immutable version. Prior outcomes remain historical. Start another execution explicitly when ready.');
+    }
     if (result) await this.refreshTasks();
   }
   private async accept(): Promise<void> {

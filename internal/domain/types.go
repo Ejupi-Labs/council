@@ -9,7 +9,7 @@ import (
 )
 
 const APIVersion = 1
-const AppVersion = "2.0.0-dev.2"
+const AppVersion = "2.0.0-dev.3"
 const MaxTextBytes = 4 * 1024 * 1024
 const MaxBodyBytes = 32 * 1024 * 1024
 

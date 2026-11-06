@@ -47,16 +47,18 @@
       <div class="task-grid">
         <section class="panel composer-panel" aria-labelledby="composer-heading">
           <div class="section-heading heading-between"><h2 id="composer-heading">Task draft</h2><button id="new-draft" data-testid="new-draft" class="quiet compact" type="button" disabled><img src="/assets/icons/plus.svg" alt="" width="20" height="20">New draft</button></div>
-          <div class="composer-context"><span class="chip">Auto · Native Codex</span><span class="draft-state">Draft / Not run</span></div>
+          <div class="composer-context"><span class="chip" id="composer-target">Auto · Codex native default</span><span class="draft-state">Draft / Not run</span></div>
           <form id="draft-form">
             <label for="task-text">What would you like to work on?</label>
             <textarea id="task-text" data-testid="task-text" rows="9" placeholder="Describe the change, what matters, and how you will know it works." aria-describedby="execution-note draft-status" disabled></textarea>
-            <details class="execution-options"><summary>Task details (optional)</summary>
+            <details class="execution-options" id="execution-options"><summary>Task details (optional)</summary>
               <div class="option-grid">
+                <div><label for="task-harness">Harness</label><select id="task-harness" aria-describedby="task-harness-help"><option value="">Auto · Codex native default</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option></select></div>
                 <div><label for="task-model">Model selector</label><input id="task-model" type="text" placeholder="Native default" autocomplete="off"></div>
                 <div><label for="task-timeout">Total deadline (seconds)</label><input id="task-timeout" type="number" min="1" max="86400" placeholder="1800"></div>
                 <div><label for="task-deliverable">Deliverable</label><select id="task-deliverable"><option value="candidate">Candidate change</option><option value="response_only">Response only</option></select></div>
               </div>
+              <p class="help" id="task-harness-help">Auto uses Codex. Automatic selection between harnesses is not available. Explicit choices are retained for this execution; native authentication and billing remain vendor-owned.</p>
               <label for="task-conditions">Acceptance conditions</label><textarea id="task-conditions" rows="3"></textarea>
               <label for="task-required-evidence">Required evidence (one per line)</label><textarea id="task-required-evidence" rows="2" placeholder="check&#10;independent_review"></textarea>
               <label class="checkbox-label"><input id="task-final-only" type="checkbox">Require a final deliverable; do not prepare a candidate</label>
@@ -101,9 +103,10 @@
           <div class="button-row"><button id="stop-attempt" class="secondary" type="button" disabled>Stop</button><button id="run-attempt" class="secondary" type="button" disabled>Start another execution</button><button id="refresh-attempt" class="quiet" type="button">Refresh detail</button></div>
           <div id="attempt-status" class="feedback" role="status" aria-live="polite"></div><dl id="attempt-summary" class="facts project-facts"></dl>
           <div id="response-area"></div>
-          <details><summary>Source, candidate and observed account details</summary><dl id="attempt-facts" class="facts project-facts"></dl></details>
+          <details><summary>Source, candidate and observed native details</summary><dl id="attempt-facts" class="facts project-facts"></dl></details>
+          <details id="native-models-panel" hidden><summary>Native model use (whole-tree preview)</summary><p class="help">This native-reported preview is separate from the actual primary model and top-level counters. Estimates are not billed charges. Read raw evidence for omitted detail.</p><dl id="native-models-facts" class="facts project-facts"></dl><ul id="native-models-list" class="native-model-list"></ul><div id="native-models-evidence" class="button-row"></div></details>
           <details><summary>Execution history and reported usage</summary><ul id="attempt-list" class="draft-list"></ul><button id="more-attempts" class="quiet" type="button" hidden>Load more executions</button><p id="usage-total" class="help"></p></details>
-          <details><summary>Add guidance for a new task version</summary><form id="guidance-form"><label for="task-guidance">Complete guidance for the next version</label><textarea id="task-guidance" rows="4"></textarea><button id="save-guidance" class="secondary" type="submit">Save guidance</button></form><p id="guidance-status" class="feedback" role="status" aria-live="polite"></p><p class="help">Saving guidance retains prior outcomes and does not start another worker.</p></details>
+          <details><summary>Add guidance for a new task version</summary><form id="guidance-form"><label for="task-guidance">Complete guidance for the next version</label><textarea id="task-guidance" rows="4"></textarea><label for="guidance-harness">Harness for the next task version (optional)</label><select id="guidance-harness" aria-describedby="guidance-target-help"><option id="guidance-keep-target" value="keep">Keep captured target</option><option value="">Auto · Codex native default</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option></select><p class="help" id="guidance-target-help">A target change creates a new immutable version. Existing executions keep their captured connection. Start the new version explicitly.</p><button id="save-guidance" class="secondary" type="submit">Save guidance</button></form><p id="guidance-status" class="feedback" role="status" aria-live="polite"></p><p class="help">Saving guidance retains prior outcomes and does not start another worker.</p></details>
           <details><summary>Events and retained artifacts</summary><ol id="attempt-events"></ol><button id="more-events" class="quiet" type="button" hidden>Load more events</button><ul id="artifact-list" class="draft-list"></ul><button id="more-artifacts" class="quiet" type="button" hidden>Load more artifacts</button></details>
           <div class="button-row"><button id="read-response" class="secondary" type="button" disabled>Read full response</button><button id="download-artifact" class="quiet" type="button" disabled>Download exact bytes</button></div>
           <p id="artifact-status" class="feedback" role="status" aria-live="polite"></p><pre id="artifact-output" data-testid="artifact-output" class="evidence-text" tabindex="0"></pre>

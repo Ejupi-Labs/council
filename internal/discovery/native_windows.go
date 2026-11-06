@@ -5,6 +5,8 @@ package discovery
 import (
 	"errors"
 	"golang.org/x/sys/windows/registry"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,6 +25,15 @@ func nativeCandidates(id string) ([]string, error) {
 	}
 	var paths []string
 	var scanErr error
+	if id == "claude-code" {
+		// Documented native installation entry only; never inspect .claude or
+		// read npm wrapper/configuration/credential contents to guess a target.
+		if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+			paths = append(paths, filepath.Join(home, ".local", "bin", "claude.exe"))
+		} else if err != nil {
+			scanErr = err
+		}
+	}
 	for _, root := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
 		key, err := registry.OpenKey(root, `Software\Microsoft\Windows\CurrentVersion\App Paths\`+name, registry.QUERY_VALUE)
 		if errors.Is(err, registry.ErrNotExist) {

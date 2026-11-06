@@ -1,9 +1,10 @@
 # Council managed execution preview
 
-Version 2.0.0-dev.2. This native preview opens local Git projects, remembers an
-operating preference and runs explicit native Codex authoring in isolated managed
-workspaces. It retains exact output, source-relative candidates, cancellation and
-recovery evidence. Codex live provider compatibility remains unqualified; the
+Version 2.0.0-dev.3. This native preview opens local Git projects, remembers an
+operating preference and runs explicit native Codex or Claude Code authoring in
+isolated managed workspaces. Both use one shared managed slot and retain exact
+output, source-relative candidates, cancellation and recovery evidence. Live
+provider compatibility remains separately unqualified for both connections; the
 included fixed fake mode uses only local processes and is labelled throughout.
 
 Extract every file, then run `./council --version` and `./council ui`. On Windows,
@@ -15,7 +16,9 @@ requests shutdown. No OS service installer is required.
 
 Council needs no Node.js, npm or Go installation. Git must be installed and on PATH
 for projects and source capture. Native execution additionally needs a supported
-native Codex executable and its existing vendor login. Shell wrappers are not
+native executable for the selected Codex or Claude Code connection and its existing
+vendor login. Claude uses the documented 2.1.259+ native print interface; a discovered
+unknown version is not verified compatibility. Shell wrappers are not
 launched. Vendor authentication stays vendor-owned; Council never copies credentials.
 The UI and SQLite 3.54.1 are embedded; startup and observation make no model calls.
 Use the package matching your operating system and processor. Native runtime
@@ -23,8 +26,10 @@ qualification is recorded separately from cross-compilation in repository eviden
 
 Choose autonomous full access once. That preference maps to the supported native
 harness permission controls, with no universal OS sandbox promise. Supervised
-approval is unavailable in this slice. Auto delegates model choice to native Codex;
-unknown model, account, allowance and usage stay unknown. A candidate remains
+approval is unavailable in this slice. Auto retains native Codex selection until
+later economical routing; Claude can be selected explicitly without a transport
+form. Unknown model, account, allowance and usage stay unknown. Native Claude cost
+estimates are not billed charges, and native session IDs do not imply resume. A candidate remains
 verification pending. Review/integration and economical multi-harness routing are
 later specified features, rather than claims of this preview.
 

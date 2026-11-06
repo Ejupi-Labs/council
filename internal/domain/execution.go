@@ -2,7 +2,7 @@ package domain
 
 import "encoding/json/jsontext"
 
-const ExecutionContract = "002-v1"
+const ExecutionContract = "003-v1"
 const MaxPromptBytes = 256 * 1024
 const MaxEventBytes = 16 * 1024
 
@@ -134,12 +134,35 @@ type ObservedFact struct {
 	ObservedAt *string `json:"observedAt"`
 }
 type UsageObservation struct {
-	InputTokens       *string `json:"inputTokens"`
-	OutputTokens      *string `json:"outputTokens"`
-	CachedInputTokens *string `json:"cachedInputTokens"`
-	Source            *string `json:"source"`
-	ObservedAt        *string `json:"observedAt"`
-	Completeness      string  `json:"completeness"`
+	InputTokens              *string `json:"inputTokens"`
+	OutputTokens             *string `json:"outputTokens"`
+	CachedInputTokens        *string `json:"cachedInputTokens"`
+	CacheCreationInputTokens *string `json:"cacheCreationInputTokens,omitempty"`
+	Scope                    string  `json:"scope,omitempty"`
+	Source                   *string `json:"source"`
+	ObservedAt               *string `json:"observedAt"`
+	Completeness             string  `json:"completeness"`
+}
+
+// NativeModelUsage is a preview of one native-reported whole-tree model entry.
+// CostEstimateUSD is the exact native JSON-number lexeme, never a billed charge.
+type NativeModelUsage struct {
+	Model                    string  `json:"model"`
+	InputTokens              *string `json:"inputTokens"`
+	OutputTokens             *string `json:"outputTokens"`
+	CachedInputTokens        *string `json:"cachedInputTokens"`
+	CacheCreationInputTokens *string `json:"cacheCreationInputTokens"`
+	CostEstimateUSD          *string `json:"costEstimateUsd"`
+}
+
+type NativeModelsObservation struct {
+	Scope               string             `json:"scope"`
+	Source              string             `json:"source"`
+	ObservedAt          string             `json:"observedAt"`
+	Completeness        string             `json:"completeness"`
+	EvidenceArtifactIDs []string           `json:"evidenceArtifactIds"`
+	OmittedModelCount   *string            `json:"omittedModelCount"`
+	Models              []NativeModelUsage `json:"models"`
 }
 type PermissionObservation struct {
 	RequestedMode      string   `json:"requestedMode"`
@@ -148,12 +171,15 @@ type PermissionObservation struct {
 	Limitations        []string `json:"limitations"`
 }
 type TargetObservations struct {
-	Provider      ObservedFact          `json:"provider"`
-	Account       ObservedFact          `json:"account"`
-	Model         ObservedFact          `json:"model"`
-	NativeSession ObservedFact          `json:"nativeSession"`
-	Permissions   PermissionObservation `json:"permissions"`
-	Usage         UsageObservation      `json:"usage"`
+	Provider        ObservedFact             `json:"provider"`
+	Account         ObservedFact             `json:"account"`
+	Model           ObservedFact             `json:"model"`
+	NativeSession   ObservedFact             `json:"nativeSession"`
+	Permissions     PermissionObservation    `json:"permissions"`
+	Usage           UsageObservation         `json:"usage"`
+	ConfiguredModel *ObservedFact            `json:"configuredModel,omitempty"`
+	NativeVersion   *ObservedFact            `json:"nativeVersion,omitempty"`
+	NativeModels    *NativeModelsObservation `json:"nativeModels,omitempty"`
 }
 type Cleanup struct {
 	State      string  `json:"state"`

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"io"
 	"net/http"
@@ -11,26 +12,34 @@ import (
 )
 
 type ownerMetadata struct {
-	OwnerInstanceID   string   `json:"ownerInstanceId"`
-	APIVersion        int      `json:"apiVersion"`
-	AppVersion        string   `json:"appVersion"`
-	Scope             string   `json:"scope"`
-	ManagedExecution  string   `json:"managedExecution"`
-	Capabilities      []string `json:"capabilities,omitempty"`
-	ExecutionContract string   `json:"executionContract,omitempty"`
-	Admission         *struct {
+	OwnerInstanceID     string   `json:"ownerInstanceId"`
+	APIVersion          int      `json:"apiVersion"`
+	AppVersion          string   `json:"appVersion"`
+	Scope               string   `json:"scope"`
+	ManagedExecution    string   `json:"managedExecution"`
+	Capabilities        []string `json:"capabilities,omitempty"`
+	ExecutionContract   string   `json:"executionContract,omitempty"`
+	MaintenanceContract string   `json:"maintenanceContract,omitempty"`
+	Admission           *struct {
 		State      string                    `json:"state"`
 		IncidentID *string                   `json:"incidentId"`
 		Incident   *domain.ExecutionIncident `json:"incident,omitempty"`
 	} `json:"admission,omitempty"`
 	Capacity *struct {
 		ConnectionID    string  `json:"connectionId"`
+		ResourceID      string  `json:"resourceId"`
 		Limit           int     `json:"limit"`
 		ActiveAttemptID *string `json:"activeAttemptId"`
 	} `json:"capacity,omitempty"`
 }
 
 func readOwnerMetadata(ctx context.Context, desc localstate.Descriptor) (ownerMetadata, bool) {
+	return readMetadata(ctx, desc, false)
+}
+
+// Maintenance alone tolerates additive members. Known compatibility fields and
+// duplicate JSON members remain strict; task execution uses the current decoder.
+func readMetadata(ctx context.Context, desc localstate.Descriptor, maintenance bool) (ownerMetadata, bool) {
 	r, err := http.NewRequestWithContext(ctx, "GET", desc.Origin+"/api/v1/meta", nil)
 	if err != nil {
 		return ownerMetadata{}, false
@@ -49,15 +58,23 @@ func readOwnerMetadata(ctx context.Context, desc localstate.Descriptor) (ownerMe
 		return ownerMetadata{}, false
 	}
 	var envelope struct {
-		APIVersion int           `json:"apiVersion"`
-		RequestID  string        `json:"requestId"`
-		Data       ownerMetadata `json:"data"`
+		APIVersion int            `json:"apiVersion"`
+		RequestID  string         `json:"requestId"`
+		Data       jsontext.Value `json:"data"`
 	}
-	err = json.Unmarshal(body, &envelope, json.RejectUnknownMembers(true))
-	return envelope.Data, err == nil && envelope.APIVersion == 1 && envelope.Data.APIVersion == 1 && envelope.Data.OwnerInstanceID == desc.OwnerInstanceID && domain.ValidID(envelope.RequestID)
+	if err = json.Unmarshal(body, &envelope, json.RejectUnknownMembers(true)); err != nil || envelope.APIVersion != 1 || !domain.ValidID(envelope.RequestID) {
+		return ownerMetadata{}, false
+	}
+	var metadata ownerMetadata
+	err = json.Unmarshal(envelope.Data, &metadata, json.RejectUnknownMembers(!maintenance))
+	return metadata, err == nil && metadata.APIVersion == 1 && metadata.OwnerInstanceID == desc.OwnerInstanceID
 }
 
 func executionMetadata(m ownerMetadata) bool {
+	return managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.MaintenanceContract == "owner-stop/1" && m.Capacity.ResourceID == domain.ManagedNativeResourceID && m.Capacity.ConnectionID == ""
+}
+
+func managedMetadata(m ownerMetadata) bool {
 	has := func(s string) bool {
 		for _, c := range m.Capabilities {
 			if c == s {
@@ -66,5 +83,17 @@ func executionMetadata(m ownerMetadata) bool {
 		}
 		return false
 	}
-	return m.AppVersion == domain.AppVersion && m.Scope == "managed_execution" && m.ManagedExecution == "native_codex" && m.ExecutionContract == domain.ExecutionContract && has("workspace_foundation") && has("managed_execution") && m.Admission != nil && (m.Admission.State == "open" || m.Admission.State == "closing" || m.Admission.State == "fenced") && m.Capacity != nil && m.Capacity.ConnectionID == "codex-native" && m.Capacity.Limit == 1
+	return m.Scope == "managed_execution" && has("workspace_foundation") && has("managed_execution") && m.Admission != nil && (m.Admission.State == "open" || m.Admission.State == "closing" || m.Admission.State == "fenced") && m.Capacity != nil && m.Capacity.Limit == 1 && (m.Capacity.ActiveAttemptID == nil || domain.ValidID(*m.Capacity.ActiveAttemptID)) && (m.Admission.IncidentID == nil || domain.ValidID(*m.Admission.IncidentID))
+}
+
+func maintenanceMetadata(m ownerMetadata) bool {
+	if executionMetadata(m) {
+		return true
+	}
+	return managedMetadata(m) && m.AppVersion == "2.0.0-dev.2" && m.ManagedExecution == "native_codex" && m.ExecutionContract == "002-v1" && m.MaintenanceContract == "" && m.Capacity.ConnectionID == "codex-native" && m.Capacity.ResourceID == ""
+}
+
+func verifyMaintenanceOwner(ctx context.Context, desc localstate.Descriptor) bool {
+	metadata, ok := readMetadata(ctx, desc, true)
+	return ok && maintenanceMetadata(metadata)
 }

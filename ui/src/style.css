@@ -131,6 +131,9 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: .85rem; }
 .executions-panel { margin-top: 24px; }
 #task-detail { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 24px; }
 .evidence-text { font-family: ui-monospace, monospace; font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; background: var(--night); padding: 16px; border-radius: 8px; line-height: 1.6; }
+.native-model-list { list-style: none; padding: 0; overflow-wrap: anywhere; }
+.native-model-list > li { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.native-model-list h4 { font-size: .9rem; margin: 0 0 12px; overflow-wrap: anywhere; }
 #attempt-events { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 @media (min-width: 1600px) { main { padding-left: 48px; padding-right: 48px; } }
 @media (max-width: 1250px) { .workspace-shell { grid-template-columns: 272px minmax(0, 1fr); } .sidebar { padding-inline: 16px; } main { padding: 32px 24px 24px; } .task-grid { grid-template-columns: minmax(0, 1fr); } .agents-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .draft-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ejupi-Labs/council/v2/internal/adapters"
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/evidence"
 )
@@ -34,7 +35,7 @@ func (e *Engine) Meta(ctx context.Context) (map[string]any, error) {
 		}
 		incident = &found
 	}
-	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex", "capabilities": []string{"workspace_foundation", "managed_execution"}, "executionContract": domain.ExecutionContract, "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": map[string]any{"connectionId": "codex-native", "limit": 1, "activeAttemptId": g.ActiveAttemptID}}, nil
+	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution"}, "executionContract": domain.ExecutionContract, "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 1, "activeAttemptId": g.ActiveAttemptID}}, nil
 }
 
 func cancellationScope() string {
@@ -44,7 +45,14 @@ func cancellationScope() string {
 	return "unix_process_group"
 }
 func capabilities() map[string]any {
-	return map[string]any{"connectionId": "codex-native", "harnessId": "codex", "interface": "native_exec", "supportedPolicyModes": []string{"autonomous"}, "modelSelection": "explicit_selector", "accountSelection": "unsupported", "cancellationScope": cancellationScope(), "liveQualification": "unqualified", "fakeMode": true, "limits": map[string]any{"defaultTimeoutSeconds": 1800, "maxTimeoutSeconds": 86400, "promptBytes": domain.MaxPromptBytes, "stdoutBytes": evidence.StdoutLimit, "stderrBytes": evidence.StderrLimit, "jsonlLineBytes": evidence.LineLimit, "eventBytes": domain.MaxEventBytes, "chunkBytes": evidence.ChunkLimit}}
+	connection := func(id, harness, contract string, minimum, documented *string, source string, responseLimit int64) map[string]any {
+		return map[string]any{"connectionId": id, "harnessId": harness, "interface": "native_exec", "nativeContract": contract, "minimumVersion": minimum, "documentedVersion": documented, "versionSource": source, "supportedPolicyModes": []string{"autonomous"}, "modelSelection": "explicit_selector", "accountSelection": "unsupported", "sessionContinuity": "unsupported", "sessionPersistence": "disabled_for_managed_attempt", "cancellationScope": cancellationScope(), "liveQualification": "unqualified", "fakeMode": true, "limits": map[string]any{"defaultTimeoutSeconds": 1800, "maxTimeoutSeconds": 86400, "promptBytes": domain.MaxPromptBytes, "stdoutBytes": evidence.StdoutLimit, "stderrBytes": evidence.StderrLimit, "jsonlLineBytes": evidence.LineLimit, "eventBytes": domain.MaxEventBytes, "chunkBytes": evidence.ChunkLimit, "finalResponseBytesUpperBound": responseLimit}}
+	}
+	minimum, documented := "2.1.259", "2.1.318"
+	return map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 1, "defaultHarnessId": "codex", "connections": []any{
+		connection("codex-native", "codex", adapters.CodexContract, nil, nil, "accepted_002_contract", evidence.StdoutLimit),
+		connection("claude-native", "claude-code", adapters.ClaudeContract, &minimum, &documented, "official_documentation_2026-11-06", evidence.LineLimit),
+	}}
 }
 
 func (e *Engine) Read(ctx context.Context, op, id string, q map[string]string) domain.Result {

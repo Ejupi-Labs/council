@@ -44,9 +44,9 @@ func (s *Store) ClaimAttempt(ctx context.Context, id, ownerID string) (domain.At
 			return e
 		}
 		if g.ActiveAttemptID != nil {
-			return domain.Fail("attempt_active", "The Codex connection already has an owned attempt. Keep this attempt queued.")
+			return domain.Fail("attempt_active", "The managed native resource already has an owned attempt. Keep this attempt queued.")
 		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO capacity_claims VALUES('codex-native',?)", id); e != nil {
+		if _, e = tx.ExecContext(ctx, "INSERT INTO capacity_claims VALUES('managed-native',?)", id); e != nil {
 			return storageError()
 		}
 		a.Phase = "preparing"
@@ -180,7 +180,11 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, u domain.AttemptUp
 			a.ResponseArtifactID = u.ResponseArtifactID
 		}
 		if u.TargetObservations != nil {
-			a.TargetObservations = *u.TargetObservations
+			observations, err := s.checkedObservations(ctx, tx, a, *u.TargetObservations)
+			if err != nil {
+				return err
+			}
+			a.TargetObservations = observations
 		}
 		if u.EvidenceStatus != "" {
 			switch u.EvidenceStatus {

@@ -35,6 +35,9 @@ func testEngine(t *testing.T) (*Engine, string, string) {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = repo
+		// Git for Windows recognizes /dev/null as a config path; Go's NUL
+		// device spelling is not accepted by its configuration reader.
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_COUNT=0")
 		if b, e := cmd.CombinedOutput(); e != nil {
 			t.Fatalf("git %v: %s (%v)", args, b, e)
 		}

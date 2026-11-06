@@ -1,13 +1,19 @@
 import { addFact, api, element, errorMessage, feedback, timeLabel } from './api.js';
+import { appendConnectionFacts } from './native-observations.js';
 const harnesses = [
     ['codex', 'Codex'], ['claude-code', 'Claude Code'], ['deepseek-harness', 'DeepSeek Harness'],
     ['junie', 'Junie'], ['antigravity', 'Antigravity'],
 ];
 export class AgentsView {
+    chooseTarget;
+    onCapabilities;
     generation = 0;
     lastResult = null;
+    capabilities = null;
     refreshButton = element('refresh-agents');
-    constructor() {
+    constructor(chooseTarget, onCapabilities) {
+        this.chooseTarget = chooseTarget;
+        this.onCapabilities = onCapabilities;
         this.refreshButton.addEventListener('click', () => { void this.refresh(); });
         this.render();
     }
@@ -19,14 +25,21 @@ export class AgentsView {
             ? 'Refreshing installation metadata. Previous observations remain visible below.'
             : 'Inspecting local installation metadata. No agent is being started.');
         try {
-            const { data } = await api('/agents');
+            const [discovery, declared] = await Promise.allSettled([api('/agents'), api('/execution/capabilities')]);
             if (generation !== this.generation)
                 return;
+            if (declared.status === 'fulfilled') {
+                this.capabilities = declared.value.data;
+                this.onCapabilities(declared.value.data);
+            }
+            if (discovery.status === 'rejected')
+                throw discovery.reason;
+            const data = discovery.value.data;
             this.lastResult = data;
             this.render();
             const hasErrors = data.observations.some(entry => entry.error !== null);
             feedback('agents-status', 'Observed ' + timeLabel(data.observedAt) + '. '
-                + (hasErrors ? 'Some installations could not be inspected. See each card for the next action.' : 'No live connection or account access was verified.'), hasErrors ? 'error' : 'neutral');
+                + (hasErrors ? 'Some installations could not be inspected. See each card for the next action.' : 'No live connection or account access was verified.') + (declared.status === 'rejected' ? ' Current capability declarations could not be refreshed; prior declarations may be shown.' : ''), hasErrors ? 'error' : 'neutral');
         }
         catch (error) {
             if (generation !== this.generation)
@@ -95,7 +108,7 @@ export class AgentsView {
             addFact(facts, label, 'Unknown');
         const limitation = document.createElement('p');
         limitation.className = 'agent-limitation';
-        limitation.textContent = observation?.managedExecution === 'native_supported_live_unqualified' ? 'Managed execution: native Codex supported · live provider unqualified' : 'Managed execution: not implemented';
+        limitation.textContent = observation?.managedExecution === 'native_supported_live_unqualified' ? 'Managed execution: native ' + name + ' supported · live provider unqualified' : 'Managed execution: not implemented';
         const details = document.createElement('details');
         const summary = document.createElement('summary');
         summary.textContent = 'Observation details';
@@ -111,7 +124,23 @@ export class AgentsView {
             paragraph.textContent = value;
             details.append(paragraph);
         }
+        const profile = this.capabilities?.connections.find(connection => connection.harnessId === id);
+        if (profile) {
+            const declaration = document.createElement('dl');
+            declaration.className = 'facts';
+            appendConnectionFacts(declaration, profile);
+            addFact(declaration, 'Observed installed version', 'Unknown. Installation metadata does not verify the native protocol.');
+            details.append(declaration);
+        }
         card.append(header, status, nextAction, facts, limitation, details);
+        if (profile && (id === 'codex' || id === 'claude-code')) {
+            const choose = document.createElement('button');
+            choose.type = 'button';
+            choose.className = 'secondary';
+            choose.textContent = 'Use ' + name + ' for next task';
+            choose.addEventListener('click', () => this.chooseTarget(id));
+            card.append(choose);
+        }
         return card;
     }
 }

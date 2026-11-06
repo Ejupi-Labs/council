@@ -21,9 +21,9 @@ function isAbsolute(path: string): boolean {
 
 class Workspace {
   private readonly projects = new Map<string, Project>();
-  private readonly agents = new AgentsView();
   private readonly drafts = new DraftsView();
   private readonly tasks = new TasksView(this.drafts);
+  private readonly agents = new AgentsView(id => this.tasks.selectHarness(id), capabilities => this.tasks.setCapabilities(capabilities));
   private readonly path = element<HTMLInputElement>('project-path');
   private readonly projectSelect = element<HTMLSelectElement>('project-select');
   private readonly openButton = element<HTMLButtonElement>('open-project');
@@ -92,7 +92,7 @@ class Workspace {
       this.ready = true;
       this.updateControls();
       this.tasks.setOwner(meta);
-      feedback('app-status', meta.executionContract === '002-v1' ? 'Connected to the local workspace. Explicit starts share one managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
+      feedback('app-status', meta.executionContract === '003-v1' ? 'Connected to the local workspace. Codex and Claude share one managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
       // Recovery never replays a cached mutation automatically; each retry remains explicit.
       await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh()]);
     } catch (error) {
