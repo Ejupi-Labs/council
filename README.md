@@ -12,10 +12,11 @@ Preview **2.0.0-dev.5** adds verified task workflows to economical routing acros
 and Claude Code in isolated managed workspaces. Auto connects authoring, proportionate checks,
 necessary independent review, bounded correction and the captured delivery scope. The Ejupi Labs
 UI and CLI retain original instructions, literal pins, stage lineage, exact output, history,
-Stop and recovery incidents. **Feature 005 implementation is under qualification; it is not yet
-accepted or qualified on all native targets.** Features 001–004 remain accepted. Feature 004
-passed all six native platform jobs and Linux race checks at `3f4a18e` in
-[run 42172669381](https://github.com/Ejupi-Labs/council/actions/runs/42172669381).
+Stop and recovery incidents. **Features001–005 are accepted.** Verified-delivery source
+`794f080` passes all six native platform jobs and Linux AMD64 race checks in
+[run42224386878](https://github.com/Ejupi-Labs/council/actions/runs/42224386878).
+Its [acceptance record](specs/005-verified-delivery/acceptance.md) retains the first hosted
+failures, corrected-source evidence, independent review and separately unperformed live-provider scope.
 Features 006–012 remain planned.
 
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
@@ -169,7 +170,7 @@ Platform runtime evidence and cross-compilation evidence are reported separately
 - [Claude interoperability specification](specs/003-claude-interoperability/spec.md)
 - [Economical routing specification](specs/004-economical-routing/spec.md)
 - [Economical routing quickstart](specs/004-economical-routing/quickstart.md)
-- [Verified delivery specification — implementation under qualification](specs/005-verified-delivery/spec.md)
+- [Verified delivery specification — accepted native/offline scope](specs/005-verified-delivery/spec.md)
 - [Verified delivery quickstart and qualification procedure](specs/005-verified-delivery/quickstart.md)
 
 Each feature follows Specify specification → design → tasks → implementation → independent review

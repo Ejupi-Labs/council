@@ -1,6 +1,9 @@
 # Verified delivery qualification
 
-Status: hosted failures corrected and independently reviewed; corrected-source local release gate passed. New hosted qualification remains required. Feature 005 is **not accepted**.
+Status: **ACCEPTED** at checked source `794f08032b96434d1217f8bb3797c6803263f39c`.
+All six native jobs and Linux AMD64 race pass in run42224386878. All recorded blocking
+findings have independent closure; all25 VFD and ten SC rows are qualified. Final independent
+record review is closed; this acceptance commit completes the slice. The parent rebuild remains active.
 The immutable design gate is `24b0cf1`. The physical development branch remains `refactor`;
 `main` remains `27822baa3aee663366a870bde7fb1190649d3418`.
 
@@ -8,7 +11,10 @@ All execution below uses fixed local agents, checks and publishers. No live prov
 credential, vendor settings or paid API execution is qualified. Logs under `.council/refactor/`
 are ignored local work, not packaged product evidence. A focused pass is not the release gate.
 
-## Focused observed results
+## Historical focused observed results
+
+These entries retain their original checkpoint and local/platform limits. Later complete local
+and exact-source hosted results below supersede pending gates; earlier failures are not erased.
 
 | Area | Actual local result | Evidence and limits |
 | --- | --- | --- |
@@ -30,13 +36,13 @@ are ignored local work, not packaged product evidence. A focused pass is not the
 | External acknowledgement faults | PASS | Actual explicit fixed publisher marker survives output-metadata failure before/after Save; uncertain attributed result stays visible, replay and new owner do not repeat execution. `005-external-ack-fault.log`, 5.072s. |
 | Explicit native blocked-slot retry | PASS | Domain0.070s/store0.515s plus actual engine1.606s: new immutable execution, same role/cycle/input, finite manual debit/common window, old blocked terminal unchanged; launched/Stopped/uncertain/stale controls denied. `005-native-manual-retry-green.log`, `005-engine-manual-retry-green.log`. |
 | Incident linkage | PASS | Known unknown-effects settlement retains the exact newly recorded operation incident; conflicting replacement is refused. `005-operation-incident-green.log`, 0.132s. |
-| Minimal browser Start | Focused PASS | Omitted workflow starts Auto; one author/builtin/review-only path, default remains minimal. `005-browser-direct-green.log`, one case, 3.627s. Ten of eleven new cases passed in42.309s; the remaining schema4 test setup assertion was corrected to preserve historical1 + explicit additional2 = granted3/remaining2 while saved policy default remains2, then both history cases passed in9.191s. The two late-response UI races subsequently closed locally in IR005-12/13 and the pre-hosted full release run passed; the new post-hosted suite remains separately pending below. |
+| Minimal browser Start | Focused PASS | Omitted workflow starts Auto; one author/builtin/review-only path, default remains minimal. `005-browser-direct-green.log`, one case, 3.627s. Ten of eleven new cases passed in42.309s; the remaining schema4 test setup assertion was corrected to preserve historical1 + explicit additional2 = granted3/remaining2 while saved policy default remains2, then both history cases passed in9.191s. The two late-response UI races subsequently closed locally in IR005-12/13 and the pre-hosted full release run passed; the corrected-source full-suite terminal result is recorded separately below. |
 
 Some earlier failures were test setup/compiler failures, not behavioral RED: incorrect JSON case
 tags, reserved declaration keys, unavailable APIs and reading a destination while the application
 still held exclusive Windows handles. They are not counted as proof of a product defect.
 
-## Current full-run and supplementary evidence
+## Pre-hosted full-run and supplementary evidence
 
 The first broad Go run caught stale legacy fixtures plus a required internal empty-array shape;
 original policy/target/replay assertions were retained and strengthened. Focused legacy CLI/engine
@@ -45,7 +51,8 @@ unchanged canonical wire/SQL receipt bytes. A subsequent full npm test failed on
 Git startup on this Windows host; Engine191.009s, Store23.286s and Workspace37.755s passed.
 The unchanged concurrent case then exposed actual process exit0xc0000142, not an established
 timeout. After the independently reviewed Windows headless Git correction, three runs pass22.083s.
-Temporary diagnostic capture is removed. A new full required suite is still in progress.
+Temporary diagnostic capture was removed. At that checkpoint the next full suite was still in
+progress; its later terminal results and the corrected hosted gate are recorded below.
 
 Supplementary actual owner tests close the matrix's two identified coverage gaps: owned checks
 that mutate source or staging produce a new complete subject and invalidate stale evidence
@@ -65,9 +72,8 @@ which now accurately show no task index delta. All35 keyboard and ten approved a
 no console/network/overflow error is recorded. T052 is closed locally; final release/native gates
 remain separate.
 
-Completed task checkboxes denote implemented/authored items and their focused evidence. The
-story-recording, final regression, visual, packaging, independent review, build/test/check,
-source push, seven hosted jobs and complete acceptance tasks remain open as marked.
+Completed task checkboxes accompany actual evidence, rather than substituting for it. The
+final corrected-source local, native, package and independent-review gates are recorded below.
 
 ## Implementation clarifications
 
@@ -85,9 +91,10 @@ source push, seven hosted jobs and complete acceptance tasks remain open as mark
 - All retained application handles close before final settlement and claim release. A destination
   read before Close is not a valid Windows assertion of the eventual publicly readable result.
 - Public macOS FD metadata is the supported boundary; malformed hidden filesystem records that
-  the kernel does not return are not forensic evidence. Actual macOS runtime checks remain required.
+  the kernel does not return are not forensic evidence. Both actual macOS runtime jobs pass in
+  the corrected-source hosted table below; compile-only results were not credited as runtime.
 
-## Final source qualification progress
+## Pre-hosted source qualification progress
 
 The full pre-group-guard Windows ARM64 run completed successfully: all Go packages (CLI56.809s,
 Engine194.786s), all53 browser cases in195.449s and the extracted archive case in23.441s, with
@@ -150,7 +157,7 @@ descriptors; protected behavior is unchanged and exact final metadata equality r
 Actual production application/helper cases pass Workspace26.690s and the deadline/settlement
 case passes Engine15.938s. A final post-edit production current/legacy plus future-parent
 inheritance case passes0.101s. The foreign platform reviewer closed the exact final source/test
-scope; corrected hosted Windows confirmation is still required. No exact original hosted
+scope; successful corrected hosted Windows confirmation is recorded below. No exact original hosted
 descriptor bytes were available, so the controlled reproduction is not claimed to be that
 runner's inspected descriptor.
 Known failures will not be hidden with skips,
@@ -169,17 +176,107 @@ cancellation-aware fixture observation, and exact Windows descriptor-model resto
 | `npm run check` | PASS3.153s; source formatting, Go vet and authored TypeScript. `005-hosted-corrections-check.log`. |
 | `npm test` | PASS all Go packages, including CLI58.190s, Engine195.143s, Process13.800s, Store12.265s and Workspace42.935s. All53 browser cases pass195.317s; the extracted archive case passes22.103s. Browser/archive failures, skips and cancellations are all zero. `005-hosted-corrections-npm-test.log`. |
 
-The UI source/assets did not change in these corrections; the recorded 44-image visual review
-remains scoped evidence. Generated release output still requires the current build and integrity
-check. Actual corrected Unix and Windows runtimes require the complete new hosted revision.
+Corrected source `794f08032b96434d1217f8bb3797c6803263f39c` was committed and pushed to
+`origin/refactor`. The working tree was clean, embedded output matched and both local/remote
+tracking refs named that exact commit; `main` retained its reference pin. Its
+[seven-job run 42224386878](https://github.com/Ejupi-Labs/council/actions/runs/42224386878)
+completed successfully on its first attempt at13:32:37UTC on6 November2026. Root confirmed all
+seven terminal job results; the independent reviewer fetched every native/race log and verified
+the exact head revision. Every native job includes build, full Go/browser/extracted checks,
+source check, committed embedded-output verification and local allowlisted release generation.
 
-## Remaining gates
+| Corrected-source hosted job | Actual terminal result |
+| --- | --- |
+| Linux AMD64 race, job127914080509 | **PASS**; full native race package suite, including Engine280.055s, Process86.304s and Workspace2.938s. No race/failure/timeout report. |
+| Windows AMD64 native, job127914080557 | **PASS**; Engine222.623s, Process13.611s, Workspace57.369s;53/53 browser168.200s and1/1 archive18.418s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
+| Windows ARM64 native, job127914080622 | **PASS**; Engine292.346s, Process15.251s, Workspace81.276s;53/53 browser245.527s and1/1 archive26.334s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
+| Darwin AMD64 native, job127914080455 | **PASS**; Engine262.314s, Process63.005s, Workspace27.665s;53/53 browser357.971s and1/1 archive40.764s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
+| Darwin ARM64 native, job127914080485 | **PASS**; Engine198.063s, Process61.864s, Workspace7.304s;53/53 browser204.199s and1/1 archive32.602s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
+| Linux AMD64 native, job127914080470 | **PASS**; Engine177.560s, Process61.576s, Workspace1.717s;53/53 browser187.582s and1/1 archive30.290s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
+| Linux ARM64 native, job127914079986 | **PASS**; Engine178.211s, Process61.537s, Workspace1.420s;53/53 browser187.187s and1/1 archive29.405s, zero fail/skip/cancel. Build/check/embedded-output/local-release steps all succeed. |
 
-The previously recorded visual/keyboard/brand evidence remains scoped to its source/captures.
-All three hosted-failure corrections have foreign source review and affected actual local
-evidence; the complete corrected-source build/test/check/archive gate now passes. The corrected
-implementation must be committed and pushed to `refactor`, then
-pass all six actual native jobs and the supported Linux AMD64 race job at the exact revision.
-The evidence matrix must close all 25 VFD and ten SC mappings before acceptance is committed.
-Feature 006 implementation remains closed until those gates pass. Completion of 005 does not
-complete the parent twelve-feature goal.
+The UI source/assets did not change in these corrections; the recorded44-image visual review
+remains scoped evidence. Corrected-source generated output and actual Windows/Unix runtimes
+now pass the complete matching local and hosted gates. These are fixed offline workers and
+actual native boundaries, not live provider/model/account/billing qualification.
+
+## Parent acceptance scenarios
+
+The following scenarios have observed corrected-source local and hosted results in the
+[35-row evidence matrix](evidence-matrix.md). Every required release/native/review gate is closed;
+these headings make parent FR links directly inspectable.
+
+### Proportionate workflow
+
+FR-012: actual direct-author engine/browser and extracted journeys complete a literal document
+change with one native author and observed builtin verification, without a planner or reviewer.
+Required checks and review cannot disappear behind that optimization. Saved two-unit authority
+remains two; only fresh 005 state defaults to four. See matrix E02–E05, SC-001/002/009.
+
+### Workflow next action
+
+FR-021 and the FR-029 extension: UI/CLI read the same current workflow, immutable stages,
+selected subject and owner/action. Adoption creates a new version without work or budget refill;
+Run starts its first author. Actual history, explicit finite resume and both held-response races
+pass; paged full records preserve exact identities. See E03, E10 and E15–E18.
+
+### Independent review evidence
+
+FR-022: native role preparation supplies the actual closed candidate/response, exact selected
+basis, constraints and bounded accessible raw evidence. Strict review binding rejects foreign
+subjects and preserves gaps; supplied access and reported inspection remain separate facts.
+Actual correction preparation/raw-check context and response-producer cases pass. See E06–E08.
+
+### Correction lineage and recheck
+
+FR-023: the actual blocking-review/failed-command journey admits one linked correction and fresh
+applicable check/review within four native units; prior failures and findings remain immutable.
+The preserved two-unit case blocks before correction. Historical unrelated-subject resolution
+cannot qualify a current subject. See E07–E10 and SC-002/003/005.
+
+### Verifier receipts and staleness
+
+FR-024: owned command receipts retain actual exit, streams, terminal root and cleanup with the
+exact input binding, applicability and resulting state. Passing source/index-mutating checks
+produce a new complete candidate and block stale acceptance; they do not rewrite their inputs.
+Inherited versus explicit-empty environments are tested through a real owned child. See E08/E09
+and IR005-22; actual corrected Linux/macOS suites and the Linux race job now pass as well.
+
+### Authorized local integration
+
+FR-039: actual engine/browser/extracted journeys apply only a verified supported text delta to
+the prospective captured local scope while preserving unrelated staged/working edits. Full
+access alone does not grant delivery; review-only retains a precise complete candidate. No
+automatic commit, merge, push or deployment occurs. See E11–E13, E16/E20 and SC-001/004.
+
+### Integration conflicts and freshness
+
+FR-040: actual affected-edit, recreated-path, branch-change, physical repository/nested-project
+replacement and metadata cases refuse unsafe application while retaining both sides and the
+user index. Durable per-action permits distinguish known partial effects from uncertain ones;
+Stop/deadline/persistence faults cannot become acceptance. See E11–E13, SC-004/006, IR005-20.
+
+### External delivery scope
+
+FR-041: undeclared suggestions grant no publisher authority. An explicitly captured fixed
+publisher executes once through the real owned lifecycle; exact replay and output-acknowledgement
+fault cases retain the result without rerunning it. An observed command completion does not
+attest remote publication. See E14/E18/E20 and SC-007.
+
+## Acceptance closure and limits
+
+The visual/keyboard/brand evidence remains scoped to its recorded source/captures. All three
+hosted-failure corrections have foreign source review, affected actual local evidence and a
+complete corrected-source build/test/check/archive pass. Published `794f080` now passes all six
+actual native jobs and Linux AMD64 race. All25 VFD and ten SC texts were independently mapped
+to actual named cases; a read-only consistency check confirms each appears exactly once with
+verbatim specification text. All eight parent scenario links resolve to these headings.
+
+Core independently closed the final record audit: seven source/job results,35 verbatim rows,
+22 finding closures, eight parent links, bounded parent status and documentation-only changes
+all agree. This acceptance commit closes T059. Feature006 may now enter its
+Specify specification/design/task phase. No006 implementation is included here. The branch stays
+`refactor`; `main` remains the reference pin. Native archives are qualified local artifacts,
+not an external product release. Live provider compatibility, actual quota/cost/savings and
+remote publisher attestation remain explicitly unperformed. Completion of005 does not complete
+the parent twelve-feature goal.

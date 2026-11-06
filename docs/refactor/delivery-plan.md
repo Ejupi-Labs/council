@@ -1,16 +1,15 @@
 # Council rebuild delivery plan
 
-Status: features001–004 are implemented, independently reviewed and accepted. Feature 001 has
+Status: features001–005 are implemented, independently reviewed and accepted. Feature 001 has
 six-platform native qualification; features 002–003 also have Linux race qualification.
 Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
 Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172669381.
-Its 38-row evidence matrix and independent review are closed. Feature 005 design was committed
-at `24b0cf1`; dev.5/005-v1 implementation is under qualification. Initial source `f512368`
-failed its seven-job hosted run; bounded Windows metadata, Unix environment and canonical-path
-corrections are independently reviewed and pass the fresh complete local gate; a new exact-source
-seven-job hosted run remains required. Its earlier local
-visual evidence remains scoped to its recorded source/captures. Features 006–012 remain planned.
+Its38-row evidence matrix and independent review are closed. Feature005 design was committed
+at `24b0cf1`; accepted dev.5/005-v1 source `794f08032b96434d1217f8bb3797c6803263f39c`
+passes all seven jobs in run42224386878. Its35-row matrix,22 independent corrections and local
+visual review are closed; the first failed hosted run remains documented. Features006–012 remain
+planned. The parent rebuild is incomplete.
 Date: 6 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
@@ -80,7 +79,7 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Features 001–004 are accepted; 005 implementation is under qualification; 006–012 are planned
+Features001–005 are accepted;006–012 are planned
 and not implemented. The exit descriptions define each slice's acceptance boundary and are not
 pass claims. The order is sequential; later slices build on accepted earlier ones and must
 preserve their working journeys.
@@ -173,9 +172,9 @@ and budget; no percentage savings claim is inferred from fake calls or call coun
 
 ### 005 — Review, correction, verifiers and authorized local integration
 
-Active context: `specs/005-verified-delivery/`. Design commit `24b0cf1`; implementation under
-qualification, not accepted. Current source identifies dev.5 with execution/workflow contracts
-`005-v1`. Earlier six-target/race passes do not qualify this change.
+Accepted context: `specs/005-verified-delivery/`. Design commit `24b0cf1` preceded implementation.
+Checked dev.5/execution/workflow `005-v1` source794f080 passes all six native targets plus Linux
+race in run42224386878; its acceptance/review ledgers and35-row evidence matrix close this scope.
 
 Connect the task outcome to a proportionate executable workflow: implementation, independent
 review when needed, correction, observed deterministic checks and delivery. Review receives the
@@ -195,7 +194,7 @@ integration. Another fixture retains a review-only candidate. Stale checks, inac
 evidence and changed destinations prevent false acceptance or overwrite. Failed attempts remain
 visible in the corrected task's lineage.
 
-The implemented path under qualification keeps ordinary project/task Start as Auto. A recognized
+The accepted path keeps ordinary project/task Start as Auto. A recognized
 literal document replacement can use one author and an observed builtin proof; required review
 uses a fresh role context, immutable findings and at most one captured correction cycle followed
 by affected checks/review. Local checks and no-process application are separate history entries,
