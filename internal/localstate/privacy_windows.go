@@ -39,6 +39,20 @@ func ProtectPrivateFile(f *os.File, dir bool) error {
 }
 
 func openSecurityFile(path string, dir bool) (*os.File, error) {
+	access := uint32(windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER | windows.FILE_READ_ATTRIBUTES)
+	if dir {
+		// SetSecurityInfo deliberately suppresses propagation to existing children
+		// for MAXIMUM_ALLOWED handles. Their identities/link counts are not yet
+		// checked; updating inherited ACEs could mutate an outside hard-link target.
+		// New children still inherit this directory's restricted OICI entries.
+		access = windows.MAXIMUM_ALLOWED
+	}
+	return openPrivateHandle(path, dir, access)
+}
+
+// openPrivateHandle checks the object behind the retained, non-inheritable
+// handle. Both readers and normalizers share all access; desired rights differ.
+func openPrivateHandle(path string, dir bool, access uint32) (*os.File, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -49,14 +63,6 @@ func openSecurityFile(path string, dir bool) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
-	}
-	access := uint32(windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER | windows.FILE_READ_ATTRIBUTES)
-	if dir {
-		// SetSecurityInfo deliberately suppresses propagation to existing children
-		// for MAXIMUM_ALLOWED handles. Their identities/link counts are not yet
-		// checked; updating inherited ACEs could mutate an outside hard-link target.
-		// New children still inherit this directory's restricted OICI entries.
-		access = windows.MAXIMUM_ALLOWED
 	}
 	h, err := windows.CreateFile(name, access,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,

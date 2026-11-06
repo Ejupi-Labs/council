@@ -134,6 +134,21 @@ func TestConcurrentBootstrapConvergesAndObserverLossDoesNotStopOwner(t *testing.
 	var wg sync.WaitGroup
 	var results [2]localstate.Descriptor
 	var errs [2]error
+	// Register authenticated fixture shutdown before any assertion can fail.
+	// One client can observe a bootstrap error while the other starts the owner.
+	t.Cleanup(func() {
+		for _, descriptor := range results {
+			if descriptor.OwnerInstanceID != "" {
+				stopFixture(t, descriptor, root)
+				return
+			}
+		}
+		// Both observers can lose their acknowledgement after actual publication.
+		// Read only this test's private descriptor and authenticate the fixture.
+		if descriptor, err := localstate.ReadDescriptor(root); err == nil && verifyFixture(context.Background(), descriptor) {
+			stopFixture(t, descriptor, root)
+		}
+	})
 	for n := range 2 {
 		wg.Add(1)
 		go func() {
@@ -149,7 +164,6 @@ func TestConcurrentBootstrapConvergesAndObserverLossDoesNotStopOwner(t *testing.
 			t.Fatal(err)
 		}
 	}
-	defer stopFixture(t, results[0], root)
 	if results[0].OwnerInstanceID != results[1].OwnerInstanceID {
 		t.Fatal("clients observed different competing owners")
 	}

@@ -1,7 +1,9 @@
 # Acceptance evidence: Claude Code interoperability
 
-**Status**: Implementation, independent review and final local developer gates passed. Hosted
-native/race qualification remains pending. This feature is not accepted.
+**Status**: Initial local developer gates passed. Hosted Windows ARM64 exposed a concurrent
+privacy-verification defect, reproduced and corrected locally. Independent correction review is
+closed and the corrected source passed complete developer gates. A new hosted native/race run
+remains pending. This feature is not accepted.
 
 Feature context is `003-claude-interoperability` on the physical `refactor` branch. The reviewed
 specification, plan, research, data model, native contract and 32 tasks were committed before
@@ -79,6 +81,36 @@ Detailed logs are retained privately as `.council/refactor/003-build.log`, `003-
 `003-check.log`, with corresponding exit-0 files. The initial corrected failure remains in
 `003-test-initial.log` rather than being reported as a pass.
 
-All six actual native platform jobs plus Linux AMD64 race checks against the implementation
-commit, followed by final acceptance reconciliation, remain required. No claim of subscription
-savings, actual model calls or live Codex/Claude compatibility is made by this record.
+## Hosted finding and correction gate
+
+Initial implementation `20685065371cacea965d2dc41488e809f32332f7` was pushed and qualified in
+[run 42151238672](https://github.com/Ejupi-Labs/council/actions/runs/42151238672). Windows ARM64
+failed the existing `TestConcurrentBootstrapConvergesAndObserverLossDoesNotStopOwner`: a transient
+ordinary Go directory verification handle conflicted with the MAXIMUM_ALLOWED security open used
+to normalize first-owner privacy. The resulting sharing error prevented one observer from
+converging. The test also registered shutdown too late to clean up a successfully started fixture
+after that assertion. The initial run is not a passing feature qualification.
+
+Native Windows ARM64 reproduced the old concurrent test failure 3 times in 30 iterations. A new
+deterministic retained-verification-handle case failed with the same sharing error before correction.
+Read-only verification now uses checked metadata-only rights with full sharing; normalization keeps
+its existing rights and no-child-propagation constraints. A stale normalization sharing failure
+requires a fresh complete private-root proof before proceeding. Identity, reparse, hard-link,
+owner, DACL and effective OICI inheritance checks remain enforced. Test fixture shutdown is now
+registered before concurrent assertions. See [review.md](review.md), IR-003-06 and primary sources.
+
+Focused corrected-source native proof passed: all localstate tests in 2.361s; the original owner
+concurrency test repeated 100 times in 6.652s; all owner tests in 0.389s. Independent source review
+closed the correction without a production blocker. The first hosted run completed with five
+native targets plus race passing and Windows ARM64 failing; it is retained as correction history.
+
+The corrected source then passed `npm run build`, `npm test` and `npm run check`, all exit 0.
+Fresh Go results include CLI 109.196s, engine 97.386s, localstate 3.104s, owner 0.471s, store 3.832s,
+evidence 1.086s and workspace 18.807s; unchanged packages reused valid cached results. All 23
+actual browser cases passed in 78.2652789s and the extracted package passed 1/1 in 9.7570666s.
+Logs are `.council/refactor/003-correction-{build,test,check}.log` with exit-0 files. Embedded UI
+output was regenerated and remains unchanged; this correction adds no product setting or vendor call.
+
+All six actual native platform jobs plus Linux AMD64 race checks against the corrected
+implementation commit, then final acceptance reconciliation, remain required. No claim of
+subscription savings, actual model calls or live Codex/Claude compatibility is made by this record.

@@ -28,29 +28,37 @@ func securePrivate(path string, dir bool) error {
 	}
 	f, err := openSecurityFile(path, dir)
 	if err != nil {
+		// A competing initializer can establish privacy and retain its root
+		// after our initial read. Sharing failure is not privacy proof: only a
+		// fresh complete read-only verification can make mutation unnecessary.
+		if dir && errors.Is(err, windows.ERROR_SHARING_VIOLATION) && verifyPrivate(path, true) == nil {
+			return nil
+		}
 		return err
 	}
 	defer f.Close()
-	return protectSecurityHandle(f, dir)
+	if err := protectSecurityHandle(f, dir); err != nil {
+		return err
+	}
+	return checkPrivatePath(f, dir)
 }
 func verifyPrivate(path string, dir bool) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() != dir || (!dir && !info.Mode().IsRegular()) {
-		return errors.New("Private state must be an ordinary owned file or directory.")
-	}
-	f, err := os.Open(path)
+	f, err := openVerificationFile(path, dir)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return errors.New("Private state changed before verification.")
+	if err := VerifyPrivateFile(f, dir); err != nil {
+		return err
 	}
-	return VerifyPrivateFile(f, dir)
+	return checkPrivatePath(f, dir)
+}
+
+func openVerificationFile(path string, dir bool) (*os.File, error) {
+	// Verification requests no mutation/DELETE rights and shares all access.
+	// Otherwise an overlapping ordinary Go read handle would deny the DELETE
+	// access in a first initializer's MAXIMUM_ALLOWED no-propagation handle.
+	return openPrivateHandle(path, dir, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES)
 }
 func lockNative(f *os.File) error {
 	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &windows.Overlapped{})
