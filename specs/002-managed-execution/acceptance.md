@@ -4,9 +4,9 @@ Date: 2026-11-06. Branch: refactor. Application 2.0.0-dev.2 / API 1 / execution 
 schema 2. Go 1.27.3, embedded SQLite 3.54.1, Node 24.18.1 development tooling and Chromium
 151.0.7922.34 through Playwright 1.62.0.
 
-Status: implemented and independently reviewed, with complete local regression acceptance on
-Windows ARM64. Six-platform native CI remains the final pending gate. Visual inspection and its
-active-row correction recheck have passed.
+Status: implemented, independently reviewed and accepted on all six native platforms plus Linux
+AMD64 race checks at implementation f5edd96cbe32a1cb78d01d9b1107205c5abd8a00. Complete local
+regression, visual inspection and the active-row correction recheck also passed.
 This record does not qualify an installed Codex binary or a provider account. All execution tests
 use explicitly selected local fakes and owned native process fixtures, with zero live model calls.
 
@@ -23,7 +23,7 @@ use explicitly selected local fakes and owned native process fixtures, with zero
 | npm run check against final source | Passed: go vet, strict authored TypeScript and non-mutating Go format validation |
 | Actual execution desktop and 360px renders | Passed; eighteen inspected captures, six transition renders rechecked after correction |
 | actionlint .github/workflows/verify.yml | Passed |
-| Six native platform jobs and Linux AMD64 race checks | Pending implementation commit and hosted run |
+| [Hosted run 42140818152](https://github.com/Ejupi-Labs/council/actions/runs/42140818152) | Passed all six native Windows/macOS/Linux AMD64/ARM64 jobs and Linux AMD64 race checks at f5edd96 |
 
 An intermediate full run exposed foundation CLI acquisition returning a non-busy error before
 forwarding to a healthy owner. The Windows retained-root/MAXIMUM_ALLOWED conflict is corrected
@@ -50,8 +50,10 @@ absence independently of signal-delivery status, and explicitly enable long path
 isolated Git fixture. Independent source review found no remaining blocking issue. Evidence and
 process test binaries compile for all four Unix targets; this is compile-only. The Windows Git
 fixture passed with a deliberately longer temporary root (0.667s). The corrected complete Windows
-ARM64 regression passed, including all fourteen browser cases and extraction. A new hosted run
-against the corrected commit remains required; the failed run does not qualify it.
+ARM64 regression passed, including all fourteen browser cases and extraction. The corrected-head
+[run 42140818152](https://github.com/Ejupi-Labs/council/actions/runs/42140818152) then passed every
+native and race job at f5edd96, directly qualifying these runtime paths. The earlier failed run is
+retained as correction history, not acceptance evidence.
 
 ## Task admission defaults
 
@@ -159,7 +161,7 @@ introduced. This bounded acceptance is not a comprehensive assistive-technology 
 
 ## Requirement evidence
 
-The following are implemented test locations, subject to the final gates above. File consolidation
+The following implemented test locations map to the passed final checks above. File consolidation
 from the planned task filenames is recorded in review.md; no missing planned filename is treated
 as evidence by itself.
 

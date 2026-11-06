@@ -79,12 +79,12 @@ the same facts and original evidence, with zero automatic replay and explicit un
 ## Phase 7 — Review and qualification
 
 - [x] T042 Verify schema1 data/receipt upgrade, existing foundation commands/browser journeys, strict authority/JSON/large counters and private-file rules in internal/store/execution_schema_test.go, internal/httpapi/execution_test.go and existing foundation tests.
-- [ ] T043 Verify actual native Windows AMD64/ARM64 job creation/handle/descendant/crash and Linux/macOS guardian/PGID/no-post-reap-signal cases through .github/workflows/verify.yml; distinguish runtime from compile evidence and declare process scope limits.
+- [x] T043 Verify actual native Windows AMD64/ARM64 job creation/handle/descendant/crash and Linux/macOS guardian/PGID/no-post-reap-signal cases through .github/workflows/verify.yml; distinguish runtime from compile evidence and declare process scope limits.
 - [x] T044 Extend extracted native package/empty-development-PATH checks with explicit fake execution and retained evidence in scripts/package.test.mjs, update scripts/packagearchive/README.md/version expectations, and confirm no state/workspaces/credentials enter archives.
 - [x] T045 Inspect actual desktop/360px execution/Stop/result/error renders, keyboard/focus/reduced motion and approved asset hashes; record screenshots/findings in specs/002-managed-execution/acceptance.md.
 - [x] T046 Run npm run build, npm test and npm run check; exercise quickstart.md and record exact native/SQLite/browser versions, zero-live-call scope and actual commands/results in specs/002-managed-execution/acceptance.md.
 - [x] T047 Obtain independent source/contract/failure-path review in specs/002-managed-execution/review.md, correct blocking findings and recheck the affected evidence before acceptance.
-- [ ] T048 Complete EXE-001–029 and SC-001–009 evidence mapping in specs/002-managed-execution/acceptance.md; update docs/refactor/traceability.md and README.md honestly, mark tasks from observed evidence and commit source/embedded assets before003.
+- [x] T048 Complete EXE-001–029 and SC-001–009 evidence mapping in specs/002-managed-execution/acceptance.md; update docs/refactor/traceability.md and README.md honestly, mark tasks from observed evidence and commit source/embedded assets before003.
 
 ## Dependencies and parallel ownership
 
@@ -119,7 +119,8 @@ must pass before declaring any workflow complete, regardless of parallel task su
 
 The first runnable increment is one fake/native-contract authoring attempt with honest evidence,
 not a completed production task. Finish all four stories and correction/qualification gates before
-003. Checkboxes record observed evidence; T043 and T048 remain open until native CI qualification
-and its final evidence reconciliation. Use Specify analyze read-only
+003. All 48 tasks have observed evidence, including all seven native/race jobs at f5edd96 in
+run 42140818152; acceptance.md records exact scope and unperformed live qualification.
+Use Specify analyze read-only
 for the artifact gate, then separately apply authorized corrections and commit design before code.
 No before/after Specify extension hooks are configured. No live provider call is authorized.

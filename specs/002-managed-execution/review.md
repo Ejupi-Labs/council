@@ -1,7 +1,8 @@
 # Managed execution review and corrections
 
 Date: 2026-11-06. Branch: refactor. Complete local build/test/check and visual acceptance passed.
-Actual hosted native/race qualification remains pending as recorded in acceptance.md.
+Hosted run 42140818152 passed all six native platforms and Linux AMD64 race checks at
+f5edd96cbe32a1cb78d01d9b1107205c5abd8a00, as recorded in acceptance.md.
 
 Independent agents reviewed execution, process ownership, workspace/evidence, UI, HTTP/CLI,
 private state and durable storage. Package authors are not credited as independent reviewers of
@@ -28,8 +29,8 @@ this document preserves the actionable findings and corrections for a fresh chec
 | Private file/ACL normalization could affect aliased outside data | Reject multi-link ordinary files before mutation; operate on retained checked handles and avoid recursive Windows DACL propagation into unchecked children. Check exact SQLite companions without truncation/removal. Independent privacy source review and native Windows regressions closed PRIVACY-001. |
 | Windows active-owner acquisition requested conflicting directory rights | A retained os.OpenRoot handle conflicts with unnecessary MAXIMUM_ALLOWED/DELETE access. Reuse an already-private directory after strict read-only verification, including effective OICI inheritance; otherwise normalize through checked handles or fail closed. Independent source review closed the inheritance follow-up (PRIVACY-002). The native live-WAL/root/owned-child and inheritance suite passed in 2.449s. |
 | Service-stop receipt replay could strand the current owner or stop another | Replay before owner rejection; signal only the exact current owner's successful receipt. Current-owner persistence uncertainty still initiates authorized orderly stop without claiming receipt success. Old-owner replay remains observational. Focused engine/CLI tests cover these distinctions. |
-| Linux could recycle a closed mutable target's inode into a replacement | Retain the original physical response handle until import or explicit release. Recheck held/path/open identity, consume reservations atomically, close all success/error/shutdown paths and preserve real Close faults. Wrong-attempt calls cannot consume another reservation. Independent source review and native Windows resource/replacement tests passed; actual Unix runtime remains the new hosted gate. |
-| macOS cleanup stopped at a signal-delivery error before proving group absence | Keep the final signal attempt before reap and require actual guardian reap plus a post-reap ESRCH probe. Retain bounded delivery errors separately; retry transient post-reap permission observations within the original deadline and leave persistent inaccessible/live/reused groups unresolved. Independent source/hook-order review closed the correction; four Unix test binaries compile, with native runtime pending. |
+| Linux could recycle a closed mutable target's inode into a replacement | Retain the original physical response handle until import or explicit release. Recheck held/path/open identity, consume reservations atomically, close all success/error/shutdown paths and preserve real Close faults. Wrong-attempt calls cannot consume another reservation. Independent source review and native Windows resource/replacement tests passed; corrected-head Linux/macOS runtime and Linux race jobs then passed in run42140818152. |
+| macOS cleanup stopped at a signal-delivery error before proving group absence | Keep the final signal attempt before reap and require actual guardian reap plus a post-reap ESRCH probe. Retain bounded delivery errors separately; retry transient post-reap permission observations within the original deadline and leave persistent inaccessible/live/reused groups unresolved. Independent source/hook-order review closed the correction; all four Unix native targets and Linux race checks passed in run42140818152. |
 | Windows Git-v4 fixture depended on developer-global long-path configuration | Configure core.longpaths only in the disposable repository and isolate global/system Git configuration. Keep the 150-character multi-byte prefix test. The fixture passed on native Windows ARM64 under an intentionally longer temporary root. |
 
 ## Additional integration corrections
@@ -66,11 +67,11 @@ the bounded local diagnostic described in implementation-decisions.md. Timings a
 speedup claim. Existing unsupported database files are validated before WAL activation. The
 abrupt-exit proof tests process-crash recovery, not hardware power-loss behavior.
 
-## Remaining gate
+## Final disposition
 
 Complete local build/test/check, all fourteen browser cases, extracted native packaging and the
 inspected execution renders have passed after the active-owner acquisition correction. No blocking
-source finding remains. Close the actual hosted native/race jobs against the implementation commit
-before accepting this feature or implementing feature 003.
+source finding remains. All seven hosted jobs passed against the corrected implementation commit
+f5edd96 in run 42140818152. The feature gate is closed; feature 003 may now follow Specify.
 Cross-compilation and source inspection cannot replace native runtime evidence. No installed
 Codex binary/provider, external account capacity or production live task has been qualified.
