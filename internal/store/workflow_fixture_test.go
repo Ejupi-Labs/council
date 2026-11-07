@@ -94,9 +94,7 @@ func TestWorkflowSchema4SeedChild(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lock.Close() })
 	db, ids := workflowSchema4Database(t, databasePath, selected, false)
-	if e = db.Close(); e != nil {
-		t.Fatal(e)
-	}
+	cleanSyntheticBrowserEpoch(t, databasePath, db, ids, 4)
 	b, e := json.Marshal(ids)
 	if e != nil {
 		t.Fatal(e)

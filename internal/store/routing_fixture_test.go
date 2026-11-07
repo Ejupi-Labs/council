@@ -7,6 +7,7 @@ import (
 	json "encoding/json/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -157,6 +158,142 @@ func mustFixtureCount(t *testing.T, s string) int64 {
 // Test-only actual-schema seed for a disposable browser/CLI project. It never
 // opens user state and refuses an existing nonempty database. The caller supplies
 // an isolated root/project/output path; stdout remains ordinary go-test output.
+//
+// cleanSyntheticBrowserEpoch is limited to the two full=false browser seeds
+// created in this test package. The seed process itself constructed the entire
+// database under its still-held native lock and never launched an owner or child.
+// It runs the actual old-schema migration, proves that migration retained the
+// untracked epoch and all original rows, then supplies a synthetic clean marker
+// solely for browser journeys that need admission. This is fixture provenance,
+// never a production migration or inference from old on-disk state.
+func cleanSyntheticBrowserEpoch(t *testing.T, path string, old *sql.DB, ids routingSchema3IDs, expectedVersion int) {
+	t.Helper()
+	var version int
+	if err := old.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != expectedVersion {
+		t.Fatal("the disposable browser fixture did not start from its exact old schema", version, err)
+	}
+	before := unaffectedRows(t, old)
+	var oldRoutingPolicy string
+	if expectedVersion == 4 {
+		if err := old.QueryRow("SELECT data FROM routing_policy WHERE singleton=1").Scan(&oldRoutingPolicy); err != nil {
+			t.Fatal("the accepted schema4 policy is unavailable", err)
+		}
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal("actual legacy migration failed", err)
+	}
+	defer s.Close()
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+		t.Fatal("the real legacy migration did not reach schema7", version, err)
+	}
+	if after := unaffectedRows(t, s.db); !reflect.DeepEqual(before, after) {
+		t.Fatal("the real migration changed historical fixture records")
+	}
+	if expectedVersion == 4 {
+		var currentPolicy string
+		if err = s.db.QueryRow("SELECT data FROM routing_policy WHERE singleton=1").Scan(&currentPolicy); err != nil || currentPolicy != oldRoutingPolicy {
+			t.Fatal("the accepted schema4 routing policy changed", err)
+		}
+	}
+	ctx := context.Background()
+	epoch, err := readRecoveryOwnerEpoch(ctx, s.db)
+	if err != nil || epoch.State != "untracked" || epoch.OwnerID != "" || epoch.Generation != 0 {
+		t.Fatal("migration must not infer a clean prior owner", epoch, err)
+	}
+	gate, err := s.Gate(ctx)
+	if err != nil || gate.State != "open" || gate.OwnerInstanceID != "" || gate.IncidentID != nil || len(gate.ActiveClaims) != 0 {
+		t.Fatal("the constructed fixture unexpectedly contains an owner, incident or claim", gate, err)
+	}
+	var attempts, unsettled, incidents, claims, operations int
+	for _, check := range []struct {
+		query string
+		out   *int
+	}{
+		{"SELECT count(*) FROM attempts", &attempts},
+		{"SELECT count(*) FROM attempts WHERE phase!='settled'", &unsettled},
+		{"SELECT count(*) FROM execution_incidents", &incidents},
+		{"SELECT count(*) FROM capacity_claims", &claims},
+		{"SELECT count(*) FROM delivery_operations", &operations},
+	} {
+		if err = s.db.QueryRow(check.query).Scan(check.out); err != nil {
+			t.Fatal("cannot verify the constructed fixture", err)
+		}
+	}
+	if attempts != 1 || unsettled != 0 || incidents != 0 || claims != 0 || operations != 0 {
+		t.Fatal("the synthetic fixture is not the known never-running case", attempts, unsettled, incidents, claims, operations)
+	}
+	attempt, err := s.attempt(ctx, s.db, ids.AttemptID)
+	if err != nil || attempt.Phase != "settled" || attempt.LaunchIntent || attempt.Cleanup.State != "verified" || attempt.Cleanup.Scope != "not_launched" {
+		t.Fatal("the exact fixture attempt is not verified never-launched", attempt.ID, err)
+	}
+	result, err := s.db.Exec("UPDATE recovery_owner_epoch SET state='clean' WHERE singleton=1 AND state='untracked' AND owner_instance_id='' AND generation=0")
+	if err != nil {
+		t.Fatal("cannot set test-only synthetic provenance", err)
+	}
+	if n, e := result.RowsAffected(); e != nil || n != 1 {
+		t.Fatal("the synthetic marker changed an unexpected number of rows", n, e)
+	}
+	if after := unaffectedRows(t, s.db); !reflect.DeepEqual(before, after) {
+		t.Fatal("the test-only marker changed retained historical records")
+	}
+}
+
+// This separate actual legacy migration deliberately has no synthetic clean
+// marker. It proves the normal production behavior remains fail-closed.
+func TestRecoveryBrowserOldSchemaWithoutSyntheticProvenanceFences(t *testing.T) {
+	for _, schema := range []int{3, 4} {
+		t.Run(domain.Decimal(int64(schema)), func(t *testing.T) {
+			lock, err := localstate.Acquire(filepath.Join(t.TempDir(), "private"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			var old *sql.DB
+			if schema == 3 {
+				old, _ = routingSchema3Database(t, lock.DatabasePath(), "", false)
+			} else {
+				old, _ = workflowSchema4Database(t, lock.DatabasePath(), "", false)
+			}
+			before := unaffectedRows(t, old)
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(lock.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if after := unaffectedRows(t, s.db); !reflect.DeepEqual(before, after) {
+				t.Fatal("migration changed historical browser fixture rows")
+			}
+			ctx := context.Background()
+			epoch, err := readRecoveryOwnerEpoch(ctx, s.db)
+			if err != nil || epoch.State != "untracked" {
+				t.Fatal("old state must remain untracked", epoch, err)
+			}
+			owner := domain.NewID()
+			if err = s.BeginOwnerEpoch(ctx, owner); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.RecoverOwner(ctx, owner); err != nil {
+				t.Fatal(err)
+			}
+			gate, err := s.Gate(ctx)
+			if err != nil || gate.State != "fenced" || gate.IncidentID == nil {
+				t.Fatal("untracked legacy owner was not fenced", gate, err)
+			}
+			incident, err := s.Incident(ctx, *gate.IncidentID)
+			if err != nil || incident.Code != "owner_epoch_uncertain" {
+				t.Fatal("the untracked-owner incident is not observable", incident, err)
+			}
+		})
+	}
+}
+
 func TestRoutingSchema3SeedChild(t *testing.T) {
 	path := os.Getenv("COUNCIL_ROUTING_SCHEMA3_SEED_PATH")
 	if path == "" {
@@ -176,9 +313,7 @@ func TestRoutingSchema3SeedChild(t *testing.T) {
 	}
 	defer lock.Close()
 	db, ids := routingSchema3Database(t, path, selected, false)
-	if e = db.Close(); e != nil {
-		t.Fatal(e)
-	}
+	cleanSyntheticBrowserEpoch(t, path, db, ids, 3)
 	raw, e := json.Marshal(ids)
 	if e != nil {
 		t.Fatal(e)

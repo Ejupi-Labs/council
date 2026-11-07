@@ -283,3 +283,72 @@ test('a paused member resumes while an unpaused sibling continues without replay
   assert.equal(dispatches.status, 200);
   assert.equal(dispatches.envelope.data.items.filter(item => item.dispatch.nodeId === sibling.id && item.dispatch.role === 'author').length, 1, 'resuming a different member must not replay the sibling author');
 });
+
+test('UI member pause continues through the actual CLI and is observed in the UI without a duplicate admission', { timeout: 120000 }, async t => {
+  const f = await fixture(); t.after(() => f.close());
+  const owner = await f.start();
+  const opened = await ownerAPI(owner, '/projects/open', 'POST', { requestId: fixtureRequestId(), selectedPath: f.project, basePath: f.project });
+  assert.equal(opened.status, 201);
+  let codexBusy;
+  for (const context of ['codex-native', 'claude-native']) {
+    const report = await reportFixture(owner, context, 'occupancy', 'busy');
+    assert.equal(report.status, 201);
+    if (context === 'codex-native') codexBusy = report.envelope.data.report.id;
+  }
+  const created = await ownerAPI(owner, '/graphs', 'POST', { requestId: fixtureRequestId(), projectId: opened.envelope.data.project.id, executionMode: 'fake',
+    nodes: [{ key: 'handoff', originalText: 'Return the controlled response.', fakeScenario: 'graph-response', acceptance: { deliverable: 'response_only' } }] });
+  assert.equal(created.status, 201, JSON.stringify(created.envelope.error));
+  const graphId = created.envelope.data.graph.id;
+  await pollOwner(owner, '/graphs/' + graphId + '/inputs', data => data.items.length === 2 && data.items.every(item => item.state === 'ready'));
+  const initial = (await ownerAPI(owner, '/graphs/' + graphId)).envelope.data;
+  const member = initial.nodes[0];
+  assert.equal(initial.budget.budget.consumedAdmissions, '0');
+  const page = await openWorkspace(f, owner, { fake: false, workflow: 'auto' });
+  await page.locator('#open-graph-list').click();
+  await page.locator('#graph-list button').filter({ hasText: graphId }).click();
+  await page.waitForFunction(id => document.getElementById('graph-facts')?.textContent.includes(id), graphId);
+  const clicked = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tasks/' + member.taskId + '/pause');
+  await page.getByRole('button', { name: 'Pause member handoff', exact: true }).click();
+  const pause = await clicked, pauseBody = await pause.json();
+  assert.equal(pause.status(), 202, JSON.stringify(pauseBody.error));
+  assert.equal(pauseBody.data.checkpoint.scope.nodeId, member.id);
+  const checkpoint = await pollOwner(owner, '/checkpoints/' + pauseBody.data.checkpoint.id, data => data.state === 'paused');
+  assert.equal((await reportFixture(owner, 'codex-native', 'occupancy', 'available', { correctionOf: codexBusy, correctionAction: 'recover' })).status, 201);
+  const capacity = await ownerAPI(owner, '/routing/capacity?contextId=codex-native');
+  assert.equal(capacity.envelope.data.reportEligibility.permitted, true);
+  const current = (await ownerAPI(owner, '/graphs/' + graphId)).envelope.data;
+  const node = current.nodes.find(item => item.id === member.id);
+  const scope = { kind: 'member', taskId: node.taskId, taskVersion: node.taskVersion, expectedTaskRevision: node.taskRevision,
+    graphId, graphVersion: current.graph.graphVersion, expectedGraphControlRevision: current.graph.controlRevision,
+    nodeId: node.id, expectedNodeControlRevision: node.controlRevision, expectedBudgetAuthorityEpoch: current.graph.budgetAuthorityEpoch,
+    expectedWindowNumber: current.budget.budget.currentWindow.number };
+  const scopeFile = path.join(f.home, 'controlled-recovery-cli-scope.json');
+  await writeFile(scopeFile, JSON.stringify(scope));
+  const resumeId = fixtureRequestId();
+  const args = ['checkpoints', 'resume', checkpoint.id, '--checkpoint-revision', checkpoint.revision, '--scope-file', scopeFile, '--request-id', resumeId];
+  const resumed = f.cli(args);
+  assert.equal(resumed.status, 0, JSON.stringify(resumed.envelope.error));
+  assert.equal(resumed.envelope.receipt.requestId, resumeId);
+  assert.equal(resumed.envelope.receipt.operation, 'checkpoints.resume');
+  assert.equal(resumed.envelope.data.checkpoint.id, checkpoint.id);
+  assert.equal(resumed.envelope.data.checkpoint.state, 'resumed');
+  assert.equal(resumed.envelope.data.admittedAttemptIds.length, 1);
+  const attemptId = resumed.envelope.data.admittedAttemptIds[0];
+  const replay = f.cli(args);
+  assert.equal(replay.status, 0, JSON.stringify(replay.envelope.error));
+  assert.deepEqual(replay.envelope, resumed.envelope, 'the exact CLI retry returns the same checkpoint receipt');
+  const finished = await pollOwner(owner, '/attempts/' + attemptId, data => data.phase === 'settled');
+  assert.equal(finished.executionMode, 'fake');
+  assert.equal(finished.outcome, 'succeeded');
+  const after = await pollOwner(owner, '/graphs/' + graphId, data => data.nodes[0].latestAttemptId === attemptId);
+  assert.equal(after.budget.budget.consumedAdmissions, '1', 'resume admits exactly one fake native stage');
+  const dispatches = await ownerAPI(owner, '/graphs/' + graphId + '/dispatches');
+  assert.equal(dispatches.status, 200);
+  assert.equal(dispatches.envelope.data.items.filter(item => item.dispatch.nodeId === member.id && item.dispatch.role === 'author').length, 1);
+  await page.locator('#graph-refresh').click();
+  await page.getByRole('button', { name: 'Open task handoff', exact: true }).click();
+  await page.locator('#attempt-facts').filter({ hasText: attemptId }).waitFor({ state: 'attached' });
+  assert.match(await page.locator('#attempt-status').textContent(), /LOCAL FAKE.*succeeded/i, 'the UI observes the actual CLI-started fake outcome');
+  const finalGraph = (await ownerAPI(owner, '/graphs/' + graphId)).envelope.data;
+  assert.equal(finalGraph.budget.budget.consumedAdmissions, '1', 'observation and receipt replay do not add a model admission');
+});
