@@ -48,10 +48,10 @@
 
 ## Phase 5: Acceptance
 
-- [ ] T022 Obtain an independent review of source, contracts, credential boundaries and crash/race handling; correct all blocking findings in the affected files.
-- [ ] T023 Run required offline `npm run build`, `npm test` and `npm run check`, plus focused recovery and actual UI acceptance; commit generated `internal/webui/dist/` with authored UI changes.
-- [ ] T024 Record requirements-to-evidence traceability, exact test results, independent review and remaining limitations in `specs/007-recovery-and-retention/acceptance.md`.
-- [ ] T025 Commit and push the reviewed implementation on `refactor`, qualify supported native platforms and the race job with exact-source CI, then record actual outcomes in `specs/007-recovery-and-retention/acceptance.md` and commit and push that documentation-only acceptance before activating the mandatory retention follow-up.
+- [X] T022 Obtain an independent review of source, contracts, credential boundaries and crash/race handling; correct all blocking findings in the affected files.
+- [X] T023 Run required offline `npm run build`, `npm test` and `npm run check`, plus focused recovery and actual UI acceptance; commit generated `internal/webui/dist/` with authored UI changes.
+- [X] T024 Record requirements-to-evidence traceability, exact test results, independent review and remaining limitations in `specs/007-recovery-and-retention/acceptance.md`.
+- [X] T025 Commit and push the reviewed implementation on `refactor`, qualify supported native platforms and the race job with exact-source CI, then record actual outcomes in `specs/007-recovery-and-retention/acceptance.md` and commit and push that documentation-only acceptance before activating the mandatory retention follow-up.
 
 ## Dependencies and parallel ownership
 

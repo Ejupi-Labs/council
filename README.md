@@ -15,11 +15,12 @@ scope; feature 006's exact-source native and race qualification is recorded in i
 checks, necessary independent review, bounded correction and captured delivery. The Ejupi Labs UI
 and CLI retain original instructions, literal pins, stage lineage, exact output and history.
 
-Feature 007, durable pause and safe recovery, is in development. Its
-[recovery guide](docs/refactor/recovery-guide.md) describes the current implementation and its
-limits; the feature is not yet accepted. Scoped retention and the remaining host, harness and
-release work follow in the [delivery plan](docs/refactor/delivery-plan.md). Native provider
-qualification requires a separate explicitly requested live task and remains unperformed.
+Feature 007, durable pause and safe recovery, is accepted for its documented offline scope at
+product revision `0a963e8`. Its [acceptance record](specs/007-recovery-and-retention/acceptance.md) and
+[recovery guide](docs/refactor/recovery-guide.md) describe the evidence and limits. Scoped retention
+and the remaining host, harness and release work follow in the
+[delivery plan](docs/refactor/delivery-plan.md). Native provider qualification requires a separate
+explicitly requested live task and remains unperformed.
 
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly
