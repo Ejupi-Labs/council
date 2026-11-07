@@ -257,24 +257,32 @@ qualification/application and response-only/publication boundaries. Complete act
 independent review/corrections, final build/test/check and all seven exact-source native/race jobs
 closed for the accepted offline scope; the documentation-only acceptance commit is required before 007. Live provider qualification remains unperformed.
 
-### 007 — Recovery, checkpoints, backup and reviewed cleanup
+### 007 — Recovery, checkpoints and reconciliation
 
-Planned context: `specs/007-recovery-and-retention/`.
-
-Extend the fail-closed foundation with supported durable pause/checkpoint/resume, explicit owner
-reconciliation and recovery without replay. Preserve completed identities, terminal failures,
-accepted cancellation, original edits and retained changes. A replacement attempt is deliberate
-and links to its predecessor. Uncertain process cleanup and persistence incidents remain actionable
-until reconciled; they never authorize rerunning an agent to reconstruct evidence.
-
-Provide documented scoped evidence export, project-state backup/restore and artifact cleanup.
-Restoring a verified backup must not silently resume writes. Reviewed cleanup checks ownership and
-subsequent edits, preserves unaccepted work and cannot remove another task's files.
+Active context: `specs/007-recovery-and-retention/`. The directory retains its original name;
+the original feature has been split into consecutive slices to make recovery controls deliverable
+without treating fixture-only backup as a practical product capability. This slice extends the
+fail-closed foundation with durable pause/checkpoint/resume and explicit owner reconciliation
+without replay. Preserve completed identities, terminal failures, accepted cancellation, original
+edits and retained changes. A replacement attempt is deliberate and links to its predecessor.
+Uncertain process cleanup and persistence incidents remain actionable until reconciled; they never
+authorize rerunning an agent to reconstruct evidence.
 
 Exit evidence: crash/restart, lost acknowledgements, shutdown during partial output and durable
-pause/resume retain accepted records without replaying completed work. Backup/export declare their
-contents and limits; restore is verified before dispatch; cleanup fixtures preserve unrelated and
-subsequently modified artifacts. Unknown cleanup stays visible and blocks conflicting work.
+pause/resume retain accepted records without replaying completed work. Reconciliation includes
+both established safe cleanup and unknown cleanup which remains visible and fenced. UI and CLI
+provide matching controls and evidence, with independent review and offline acceptance.
+
+### 007 follow-up — Scoped retention, backup and reviewed cleanup
+
+After 007 is accepted and before feature 008 begins, specify and implement scoped evidence export,
+project-state backup/restore and artifact cleanup. This follow-up is required, not deferred from
+the release. Its design must provide an actually useful production recovery path while honoring the
+credential exclusion, not claim that fixture-only provenance solves real backup. Restoring a
+verified backup must not silently resume writes. Reviewed cleanup checks ownership and subsequent
+edits, preserves unaccepted work and cannot remove another task's files. Backup/export must declare
+contents and limits; restore must be verified before effects; cleanup fixtures must preserve
+unrelated and subsequently modified artifacts.
 
 ### 008 — MCP and host integration with interface parity
 
