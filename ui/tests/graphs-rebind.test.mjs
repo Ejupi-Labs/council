@@ -166,8 +166,21 @@ test('explicit selected dependency rebind derives one version and retries its im
   assert.equal(advances.length, 3);
   assert.equal(first.raw, advances[2].raw, 'the malformed-ack retry must preserve the captured rebind intent');
   assert.equal(await page.locator('#graph-control-status').textContent(), newerStatus);
-  await retry.click({ timeout: 5000 });
-  await page.waitForFunction(() => !document.getElementById('graph-control-pending')?.textContent.includes('Retry exact Rebind and Advance'), undefined, { timeout: 10000 });
+  // The busy label changes before the replay reply arrives. Join the exact
+  // acknowledged request and its reconciliation within one original deadline.
+  const replayDeadline = Date.now() + 10000;
+  const [acknowledged] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/v1/graphs/' + graphId + '/advance'
+      && response.request().postDataJSON().requestId === captured.requestId, { timeout: 10000 }),
+    retry.click({ timeout: 5000 }),
+  ]);
+  assert.equal(acknowledged.status(), 200);
+  assert.deepEqual(await acknowledged.json(), first.envelope);
+  const remaining = replayDeadline - Date.now();
+  assert.ok(remaining > 0, 'the exact rebind replay exceeded its original ten-second bound');
+  await page.waitForFunction(requestId => ![...document.querySelectorAll('#graph-control-pending > li')]
+    .some(row => row.dataset.graphControlRequestId === requestId), captured.requestId, { timeout: remaining });
   assert.equal(advances.length, 4);
   assert.equal(first.raw, advances[3].raw, 'lost-reply retry cannot recapture node IDs, versions, input, epoch or the newer empty selection');
   assert.deepEqual(first.envelope.data, advances[2].envelope.data);
