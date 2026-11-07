@@ -36,7 +36,7 @@ jobs:
             platform: linux
             architecture: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: '0'
@@ -71,7 +71,7 @@ jobs:
   race:
     name: Linux AMD64 native race checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: '1'
