@@ -1,18 +1,9 @@
 # Council rebuild delivery plan
 
-Status: features001–006 are implemented, independently reviewed and accepted. Feature 001 has
-six-platform native qualification; features 002–003 also have Linux race qualification.
-Feature 003 qualified at `ce8aaa7` in
-[run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
-Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172669381.
-Its38-row evidence matrix and independent review are closed. Feature005 design was committed
-at `24b0cf1`; accepted dev.5/005-v1 source `794f08032b96434d1217f8bb3797c6803263f39c`
-passes all seven jobs in run42224386878. Its35-row matrix,22 independent corrections and local
-visual review are closed; the first failed hosted run remains documented. Feature006 dev.6/006-v1
-is accepted for its specified offline scope at `48484fe82e3e62df906bcb999693e4e1f0e94e2c`; all
-seven native/race jobs passed in run42402811511 and final local build/test/check passed.
-The documentation-only acceptance commit remains required before 007. Features007–012 remain
-planned. The parent rebuild is incomplete. Date: 7 November 2026.
+Status: features 001–007 are implemented, independently reviewed and accepted for their
+documented offline scopes. Feature 007 qualified at `0a963e819ac684d03f5970e118f696eb39d0f497`
+in seven native and race jobs in run 42422741975. The required scoped-retention follow-up
+is active before feature 008; features 008–012 remain planned. The rebuild is incomplete.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -30,8 +21,7 @@ The source of product scope is [the vision](vision.md), [functional requirements
 storage migration target or checklist of legacy features to reproduce.
 
 All work stays on the branch named exactly `refactor`. Spec Kit feature activation must select a
-numbered feature context without creating or checking out a feature branch. Main remains the
-reference implementation until the user requests integration. No application runtime, provider
+numbered feature context without creating or checking out a feature branch. Main remains unchanged until the rebuild is complete and verified; the user has authorized replacing it with the finished refactor. No application runtime, provider
 call or rebuilt capability is established by these planning documents.
 
 Feature001 selected Go1.27.3 with an embedded authored TypeScript UI, after comparing suitable
@@ -259,7 +249,7 @@ closed for the accepted offline scope; the documentation-only acceptance commit 
 
 ### 007 — Recovery, checkpoints and reconciliation
 
-Active context: `specs/007-recovery-and-retention/`. The directory retains its original name;
+Accepted context: `specs/007-recovery-and-retention/`. The directory retains its original name;
 the original feature has been split into consecutive slices to make recovery controls deliverable
 without treating fixture-only backup as a practical product capability. This slice extends the
 fail-closed foundation with durable pause/checkpoint/resume and explicit owner reconciliation
@@ -275,7 +265,7 @@ provide matching controls and evidence, with independent review and offline acce
 
 ### 007 follow-up — Scoped retention, backup and reviewed cleanup
 
-After 007 is accepted and before feature 008 begins, specify and implement scoped evidence export,
+Active context: `specs/007-scoped-retention/`. Before feature 008, specify and implement scoped evidence export,
 project-state backup/restore and artifact cleanup. This follow-up is required, not deferred from
 the release. Its design must provide an actually useful production recovery path while honoring the
 credential exclusion, not claim that fixture-only provenance solves real backup. Restoring a
