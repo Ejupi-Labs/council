@@ -36,7 +36,7 @@ func New(db *store.Store, lock *localstate.Lock, config Config) (*Engine, error)
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{db: db, lock: lock, config: config, evidence: artifacts, workspace: workspaces, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), shutdown: make(chan struct{}), watchEnd: make(chan struct{})}
+	e := &Engine{db: db, lock: lock, config: config, evidence: artifacts, workspace: workspaces, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), shutdown: make(chan struct{}), watchEnd: make(chan struct{}), activeWorkers: make(map[string]context.CancelFunc)}
 	if err = db.RecoverOwner(ctx, config.OwnerInstanceID); err != nil {
 		cancel()
 		artifacts.Close()
@@ -102,6 +102,9 @@ func (e *Engine) Guidance(ctx context.Context, id string, in domain.GuidanceInpu
 	} else if replayed != nil {
 		return *replayed
 	}
+	if err := e.db.CheckStandaloneAuthority(ctx, id, false); err != nil {
+		return e.failure(in.RequestID, err)
+	}
 	view, err := e.db.TaskRouting(ctx, id)
 	if err != nil {
 		return e.failure(in.RequestID, err)
@@ -141,6 +144,9 @@ func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAtt
 		return e.failure(in.RequestID, err)
 	} else if prior != nil {
 		return *prior
+	}
+	if err := e.db.CheckStandaloneAuthority(ctx, id, false, in.TaskVersion); err != nil {
+		return e.failure(in.RequestID, err)
 	}
 	view, err := e.db.TaskRouting(ctx, id)
 	if err != nil {
@@ -183,8 +189,8 @@ func (e *Engine) Stop(ctx context.Context, id, requestID string) domain.Result {
 	e.control.Lock()
 	result := e.db.StopAttempt(ctx, id, requestID)
 	e.guardMutationLocked(result)
-	if result.Envelope.Error == nil && e.activeID == id && e.activeCancel != nil {
-		e.activeCancel()
+	if result.Envelope.Error == nil {
+		e.cancelWorkerLocked(id)
 	}
 	e.control.Unlock()
 	if result.Envelope.Error == nil {
@@ -256,8 +262,26 @@ func (e *Engine) fenceLocked(id, code, message string) {
 		attempt = &id
 	}
 	_ = e.db.Fence(context.Background(), domain.ExecutionIncident{ID: domain.NewID(), AttemptID: attempt, Code: code, Message: message, CreatedAt: domain.Now()})
-	if e.activeCancel != nil {
-		e.activeCancel()
+	e.cancelWorkersLocked()
+}
+
+// cancelWorkerLocked requests termination without claiming cleanup or releasing
+// another worker's ownership. The caller holds control.
+func (e *Engine) cancelWorkerLocked(attemptID string) bool {
+	cancel, owned := e.activeWorkers[attemptID]
+	if owned && cancel != nil {
+		cancel()
+	}
+	return owned
+}
+
+// cancelWorkersLocked reaches every actual owned worker during a shared fence.
+// Handles remain registered until their own goroutines finish real settlement.
+func (e *Engine) cancelWorkersLocked() {
+	for _, cancel := range e.activeWorkers {
+		if cancel != nil {
+			cancel()
+		}
 	}
 }
 
@@ -290,7 +314,8 @@ func (e *Engine) schedule() {
 		}
 		for _, a := range pending {
 			e.control.Lock()
-			if a.Phase == "cancelling" && a.ID != e.activeID {
+			_, active := e.activeWorkers[a.ID]
+			if a.Phase == "cancelling" && !active {
 				_, err = e.db.SettleAttempt(e.ctx, a.ID, domain.Settlement{Outcome: "cancelled", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: "incomplete"})
 				e.control.Unlock()
 				if err != nil {
@@ -312,8 +337,7 @@ func (e *Engine) schedule() {
 				continue
 			}
 			workerCtx, cancel := context.WithCancel(e.ctx)
-			e.activeID = a.ID
-			e.activeCancel = cancel
+			e.activeWorkers[a.ID] = cancel
 			e.workers.Add(1)
 			e.control.Unlock()
 			go func(a domain.Attempt) {
@@ -321,13 +345,12 @@ func (e *Engine) schedule() {
 				defer cancel()
 				e.run(workerCtx, a)
 				e.control.Lock()
-				if e.activeID == a.ID {
-					e.activeID = ""
-					e.activeCancel = nil
-				}
+				delete(e.activeWorkers, a.ID)
 				e.control.Unlock()
 				e.continueRouting(a.ID)
 				e.continueWorkflow(a.ID)
+				e.continueGraphInputs(a.ID)
+				e.continueGraphAdmissions(a.ID)
 				e.signal()
 			}(claimed)
 		}
@@ -345,10 +368,8 @@ func (e *Engine) stopPending() {
 		for _, a := range pending {
 			e.control.Lock()
 			result := e.db.StopAttempt(ctx, a.ID, domain.NewID())
-			if e.activeID == a.ID {
-				if e.activeCancel != nil {
-					e.activeCancel()
-				}
+			if _, active := e.activeWorkers[a.ID]; active {
+				e.cancelWorkerLocked(a.ID)
 			} else if result.Envelope.Error == nil {
 				cleanup := domain.Cleanup{State: "verified", Scope: "not_launched"}
 				if a.LaunchIntent {

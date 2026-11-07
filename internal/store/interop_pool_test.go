@@ -2,12 +2,13 @@ package store
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 )
 
-func TestMixedHarnessesShareOneClaimAndCaptureActualConnection(t *testing.T) {
+func TestMixedHarnessesShareTwoContextClaimsAndCaptureActualConnection(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	project := openFixture(t, s, "mixed")
@@ -16,7 +17,7 @@ func TestMixedHarnessesShareOneClaimAndCaptureActualConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	starts := []domain.Admission{}
-	for _, harness := range []string{"codex", "claude-code"} {
+	for _, harness := range []string{"codex", "claude-code", "codex", "claude-code"} {
 		in := taskInput(project.ID)
 		in.Pins = &domain.ExecutionPins{HarnessID: harness, Model: "native-alias"}
 		r := s.CreateTask(ctx, owner, in)
@@ -25,23 +26,53 @@ func TestMixedHarnessesShareOneClaimAndCaptureActualConnection(t *testing.T) {
 		}
 		starts = append(starts, r.Envelope.Data.(domain.Admission))
 	}
-	if starts[0].Attempt.ConnectionID != "codex-native" || starts[1].Attempt.ConnectionID != "claude-native" {
-		t.Fatal(starts)
+	for i, connection := range []string{"codex-native", "claude-native", "codex-native", "claude-native"} {
+		a := starts[i].Attempt
+		if a.ConnectionID != connection || a.ResolvedTarget == nil || a.ResolvedTarget.ConnectionID != connection ||
+			a.ResolvedTarget.ContextID != connection || a.ResolvedTarget.ModelSelector != "native-alias" {
+			t.Fatal("An admission lost its exact harness/context/model capture", i, a)
+		}
 	}
-	if _, err := s.ClaimAttempt(ctx, starts[0].Attempt.ID, owner); err != nil {
-		t.Fatal(err)
+	for _, admitted := range starts[:2] {
+		if a, err := s.ClaimAttempt(ctx, admitted.Attempt.ID, owner); err != nil || a.Phase != "preparing" ||
+			!reflect.DeepEqual(a.ResolvedTarget, admitted.Attempt.ResolvedTarget) || a.ConnectionID != admitted.Attempt.ConnectionID {
+			t.Fatal("Two distinct supported contexts did not obtain their actual slots", a, err)
+		}
 	}
-	if _, err := s.ClaimAttempt(ctx, starts[1].Attempt.ID, owner); err == nil || domain.SafeError(err).Code != "attempt_active" {
-		t.Fatal("second harness bypassed pool", err)
+	claims, err := s.GraphClaims(ctx)
+	if err != nil || len(claims) != 2 || claims[0].Slot != "1" || claims[1].Slot != "2" ||
+		claims[0].AttemptID != starts[0].Attempt.ID || claims[1].AttemptID != starts[1].Attempt.ID ||
+		claims[0].ContextID == nil || claims[1].ContextID == nil || *claims[0].ContextID != "codex-native" || *claims[1].ContextID != "claude-native" ||
+		claims[0].ExecutorKind != "native" || claims[1].ExecutorKind != "native" || claims[0].LegacyBarrier || claims[1].LegacyBarrier {
+		t.Fatal("The shared pool did not retain exactly two independently captured native contexts", claims, err)
 	}
-	if a, err := s.Attempt(ctx, starts[1].Attempt.ID); err != nil || a.Phase != "queued" || a.SourceSnapshotID != nil || a.LaunchIntent {
-		t.Fatal(a, err)
+	for _, waiting := range starts[2:] {
+		if _, err := s.ClaimAttempt(ctx, waiting.Attempt.ID, owner); err == nil || domain.SafeError(err).Code != "attempt_active" {
+			t.Fatal("A further mixed-harness claim bypassed the bounded pool", waiting.Attempt.ID, err)
+		}
+		if a, err := s.Attempt(ctx, waiting.Attempt.ID); err != nil || a.Phase != "queued" || a.SourceSnapshotID != nil || a.LaunchIntent ||
+			!reflect.DeepEqual(a.ResolvedTarget, waiting.Attempt.ResolvedTarget) || a.ConnectionID != waiting.Attempt.ConnectionID {
+			t.Fatal("A refused claim changed its captured target or created launch/source effects", a, err)
+		}
 	}
 	if _, err := s.SettleAttempt(ctx, starts[0].Attempt.ID, domain.Settlement{Outcome: "blocked", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: "incomplete"}); err != nil {
 		t.Fatal(err)
 	}
-	if a, err := s.ClaimAttempt(ctx, starts[1].Attempt.ID, owner); err != nil || a.Phase != "preparing" || a.ConnectionID != "claude-native" {
-		t.Fatal(a, err)
+	if err := s.CheckAttemptClaim(ctx, owner, starts[1].Attempt.ID); err != nil {
+		t.Fatal("Releasing Codex discarded the independently held Claude claim", err)
+	}
+	// One global slot is now free, but Claude's exact context is still occupied.
+	if _, err := s.ClaimAttempt(ctx, starts[3].Attempt.ID, owner); err == nil || domain.SafeError(err).Code != "attempt_active" {
+		t.Fatal("A free slot incorrectly bypassed the occupied native context", err)
+	}
+	if a, err := s.ClaimAttempt(ctx, starts[2].Attempt.ID, owner); err != nil || a.Phase != "preparing" || a.ConnectionID != "codex-native" ||
+		!reflect.DeepEqual(a.ResolvedTarget, starts[2].Attempt.ResolvedTarget) {
+		t.Fatal("The exact released context/slot did not admit its queued captured target", a, err)
+	}
+	claims, err = s.GraphClaims(ctx)
+	if err != nil || len(claims) != 2 || claims[0].Slot != "1" || claims[0].AttemptID != starts[2].Attempt.ID ||
+		claims[1].Slot != "2" || claims[1].AttemptID != starts[1].Attempt.ID {
+		t.Fatal("A specific release replaced or multiplied another owner's claim", claims, err)
 	}
 	// Changed intent under the original ID conflicts even though the target exists.
 	conflict := taskInput(project.ID)

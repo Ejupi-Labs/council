@@ -108,6 +108,10 @@ func Select(input domain.RoutingSelectionInput) (domain.RoutingSelectionResult, 
 	if _, err := time.Parse(time.RFC3339Nano, input.Now); err != nil || len(input.Snapshot.Contexts) != 2 || len(input.Snapshot.Profiles) != 6 || len(input.Facts) > 2 {
 		return result, domain.Fail("routing_unavailable", "Bounded native routing evidence is unavailable.")
 	}
+	if input.RequireManagedReservation && (input.Snapshot.ManagedOccupancy.Limit != domain.MaxManagedSlots || input.Snapshot.ManagedOccupancy.ActiveClaims == nil || domain.ValidateGraphClaims(input.Snapshot.ManagedOccupancy.ActiveClaims) != nil) {
+		return result, domain.Fail("routing_unavailable", "Complete managed ownership observations are required before graph admission.")
+	}
+	capacityWaiting := false
 	if err := domain.ValidatePins(&input.Pins); err != nil {
 		return result, err
 	}
@@ -300,6 +304,11 @@ func Select(input domain.RoutingSelectionInput) (domain.RoutingSelectionResult, 
 		} else if capacity.ReportEligibility.PositiveCoverage.Occupancy || capacity.ReportEligibility.PositiveCoverage.Allowance {
 			availability = 1
 		}
+		if candidate.Eligible && input.RequireManagedReservation && managedReservationOccupied(input.Snapshot, profile.ContextID) {
+			candidate.Eligible = false
+			candidate.ReasonCodes = append(candidate.ReasonCodes, "managed_capacity_occupied")
+			capacityWaiting = true
+		}
 		if candidate.Eligible {
 			candidate.ReasonCodes = append(candidate.ReasonCodes, "captured_policy_eligible")
 		}
@@ -323,6 +332,9 @@ func Select(input domain.RoutingSelectionInput) (domain.RoutingSelectionResult, 
 		}
 	}
 	if len(indices) == 0 {
+		if capacityWaiting {
+			return result, domain.Fail("capacity_wait", "Wait for an available managed slot, native context or declared account reservation.")
+		}
 		code := "routing_unavailable"
 		if input.Pins.HarnessID != "" || input.Pins.Model != "" || input.Options.TargetProfileID != "" {
 			code = "pin_unavailable"

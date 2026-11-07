@@ -96,6 +96,18 @@ func Capacity(snapshot domain.RoutingSnapshot, subject domain.CapacitySubject, s
 		ReportEligibility: domain.ReportEligibility{Policy: snapshot.Policy.UnknownAvailability, Permitted: true, ReasonCodes: []string{}}, ManagedOccupancy: snapshot.ManagedOccupancy}
 	view.ManagedOccupancy.ActiveAttemptID, view.ManagedOccupancy.ActiveContextID = copyString(snapshot.ManagedOccupancy.ActiveAttemptID), copyString(snapshot.ManagedOccupancy.ActiveContextID)
 	view.ManagedOccupancy.ClaimsSubject = false
+	if snapshot.ManagedOccupancy.ActiveClaims != nil {
+		if domain.ValidateGraphClaims(snapshot.ManagedOccupancy.ActiveClaims) != nil {
+			return domain.CapacityView{}, domain.Fail("routing_unavailable", "Managed ownership observations are inconsistent.")
+		}
+		view.ManagedOccupancy.ActiveClaims = make([]domain.GraphClaimView, 0, len(snapshot.ManagedOccupancy.ActiveClaims))
+		for _, claim := range snapshot.ManagedOccupancy.ActiveClaims {
+			claim.ContextID, claim.CapturedDeclaredAccountID = copyString(claim.ContextID), copyString(claim.CapturedDeclaredAccountID)
+			claim.CapturedLinkRevision = copyString(claim.CapturedLinkRevision)
+			claim.GraphID, claim.NodeID = copyString(claim.GraphID), copyString(claim.NodeID)
+			view.ManagedOccupancy.ActiveClaims = append(view.ManagedOccupancy.ActiveClaims, claim)
+		}
+	}
 	var accountState *domain.CapacityState
 	if subject.Kind == "context" {
 		for _, link := range snapshot.Links {
@@ -126,6 +138,25 @@ func Capacity(snapshot domain.RoutingSnapshot, subject domain.CapacitySubject, s
 		}
 	} else {
 		return domain.CapacityView{}, domain.Invalid("capacity subject")
+	}
+	if snapshot.ManagedOccupancy.ActiveClaims != nil {
+		view.ManagedOccupancy.ClaimsSubject = false
+		for _, claim := range snapshot.ManagedOccupancy.ActiveClaims {
+			if subject.Kind == "context" {
+				if claim.ContextID != nil && *claim.ContextID == subject.ID {
+					view.ManagedOccupancy.ClaimsSubject = true
+				}
+				continue
+			}
+			if claim.CapturedDeclaredAccountID != nil && *claim.CapturedDeclaredAccountID == subject.ID {
+				view.ManagedOccupancy.ClaimsSubject = true
+			}
+			for _, link := range snapshot.Links {
+				if claim.ContextID != nil && link.ContextID == *claim.ContextID && link.DeclaredAccountID != nil && *link.DeclaredAccountID == subject.ID {
+					view.ManagedOccupancy.ClaimsSubject = true
+				}
+			}
+		}
 	}
 	dimensions := map[string]*domain.CapacityDimension{"occupancy": &view.Dimensions.Occupancy, "allowance": &view.Dimensions.Allowance, "service": &view.Dimensions.Service}
 	latestSequence := map[string]int64{}

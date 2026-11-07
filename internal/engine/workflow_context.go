@@ -14,7 +14,7 @@ import (
 // an assertion that an old check is applicable to the current selected subject.
 func (e *Engine) workflowLinkedContext(ctx context.Context, stage *workflowNativeContext, findings []domain.WorkflowFinding, provided []adapters.SuppliedEvidence) ([]adapters.SuppliedEvidence, []domain.CheckReceipt, error) {
 	subject := stage.subject
-	_, _, current, _, err := e.currentWorkflowEvidence(ctx, subject)
+	_, _, current, _, err := e.currentWorkflowEvidence(ctx, subject, stage.final)
 	if err != nil {
 		return nil, nil, err
 	}

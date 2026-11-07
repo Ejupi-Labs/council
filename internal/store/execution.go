@@ -255,12 +255,12 @@ func (s *Store) gate(ctx context.Context, q queryer) (domain.ExecutionGate, erro
 	if incident.Valid {
 		g.IncidentID = &incident.String
 	}
-	var active string
-	e = q.QueryRowContext(ctx, "SELECT attempt_id FROM capacity_claims WHERE resource_id='managed-native'").Scan(&active)
-	if e == nil {
-		g.ActiveAttemptID = &active
-	} else if !errors.Is(e, sql.ErrNoRows) {
-		return g, storageError()
+	g.ActiveClaims, e = s.graphClaims(ctx, q)
+	if e != nil {
+		return g, e
+	}
+	if len(g.ActiveClaims) == 1 {
+		g.ActiveAttemptID = ptr(g.ActiveClaims[0].AttemptID)
 	}
 	return g, nil
 }
@@ -318,7 +318,7 @@ func (s *Store) insertAttempt(ctx context.Context, tx *sql.Tx, a domain.Attempt)
 	return e
 }
 func taskSummary(t domain.Task, v domain.TaskVersion, a *domain.Attempt, accepted bool) domain.TaskSummary {
-	out := domain.TaskSummary{ID: t.ID, ProjectID: t.ProjectID, CurrentVersion: t.CurrentVersion, Revision: t.Revision, StateRevision: t.StateRevision, LatestAttemptID: t.LatestAttemptID, RequestedMode: v.RequestedPolicy.Mode, PolicySource: v.RequestedPolicy.SelectionSource, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, Status: "awaiting_execution", Stage: "awaiting_execution", NextAction: "Start an explicit execution against the current task version."}
+	out := domain.TaskSummary{GraphRef: t.GraphRef, ID: t.ID, ProjectID: t.ProjectID, CurrentVersion: t.CurrentVersion, Revision: t.Revision, StateRevision: t.StateRevision, LatestAttemptID: t.LatestAttemptID, RequestedMode: v.RequestedPolicy.Mode, PolicySource: v.RequestedPolicy.SelectionSource, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, Status: "awaiting_execution", Stage: "awaiting_execution", NextAction: "Start an explicit execution against the current task version."}
 	if v.TaskPolicyOverride != nil {
 		out.RequestedMode = *v.TaskPolicyOverride
 	}

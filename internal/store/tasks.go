@@ -135,6 +135,9 @@ func (s *Store) updateGuidance(ctx context.Context, taskID string, in domain.Gui
 	}
 	fp := GuidanceFingerprint(taskID, in)
 	return s.mutate(ctx, in.RequestID, "tasks.guidance", fp, func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false); e != nil {
+			return 0, nil, e
+		}
 		t, e := s.task(ctx, tx, taskID)
 		if e != nil {
 			return 0, nil, e
@@ -247,6 +250,9 @@ func (s *Store) StartAttemptWithRouting(ctx context.Context, ownerID, taskID str
 	}
 	fp := AttemptStartFingerprint(taskID, in)
 	return s.mutate(ctx, in.RequestID, "tasks.attempts.start", fp, func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false, in.TaskVersion); e != nil {
+			return 0, nil, e
+		}
 		g, e := s.gate(ctx, tx)
 		if e != nil {
 			return 0, nil, e

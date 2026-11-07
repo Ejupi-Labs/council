@@ -72,6 +72,9 @@ func (s *Store) projectWorkflowAdmissionBlock(ctx context.Context, ownerID, pred
 			return e
 		}
 		t.UpdatedAt = w.UpdatedAt
-		return saveTask(ctx, tx, t)
+		if e = saveTask(ctx, tx, t); e != nil {
+			return e
+		}
+		return s.projectGraphWorkflow(ctx, tx, t, &w, nil)
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	json "encoding/json/v2"
+	"errors"
 	"path/filepath"
 
 	"github.com/Ejupi-Labs/council/v2/internal/adapters"
@@ -15,18 +16,21 @@ import (
 )
 
 type workflowNativeContext struct {
-	subject     workflowSubject
-	step        domain.WorkflowStep
-	snapshot    *workspace.Snapshot
-	supplied    []domain.ReviewInspection
-	prior       []string
-	paths       []string
-	artifactIDs []string
+	subject          workflowSubject
+	final            *graphFinalVerification
+	step             domain.WorkflowStep
+	snapshot         *workspace.Snapshot
+	supplied         []domain.ReviewInspection
+	prior            []string
+	paths            []string
+	artifactIDs      []string
+	handoffAttempted bool
+	effectsKnown     bool
 }
 
 func workflowHash(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
 
-func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, detail domain.TaskVersionDetail, outputPath string, resolve adapters.Resolver) (adapters.Launch, *workflowNativeContext, error) {
+func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, detail domain.TaskVersionDetail, outputPath string, resolve adapters.Resolver, graph ...bool) (adapters.Launch, *workflowNativeContext, error) {
 	var zero adapters.Launch
 	selected, err := e.db.Workflow(ctx, a.TaskID, domain.WorkflowSelector{WorkflowID: a.WorkflowID})
 	if err != nil {
@@ -58,11 +62,23 @@ func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, de
 	if subject.Binding != nil {
 		manifestID = subject.Binding.ManifestArtifactID
 	}
-	snapshot, err := e.workspace.Handoff(ctx, workspace.HandoffRequest{AttemptID: a.ID, Source: subject.snapshot(w.Authority.Delivery), CandidateManifestArtifactID: manifestID, IndexArtifactID: indexID})
-	if err != nil {
-		return zero, nil, err
+	stage := &workflowNativeContext{subject: subject, step: step, supplied: []domain.ReviewInspection{}, prior: []string{}, paths: []string{}}
+	if len(graph) == 1 && graph[0] {
+		if guardErr := e.guardGraphNativePreparation(ctx, a); guardErr != nil {
+			return zero, stage, guardErr
+		}
+		stage.final, err = e.graphFinalContextForDispatch(ctx, a, subject)
+		if err != nil {
+			return zero, stage, err
+		}
 	}
-	stage := &workflowNativeContext{subject: subject, step: step, snapshot: snapshot, supplied: []domain.ReviewInspection{}, prior: []string{}, paths: []string{}}
+	stage.handoffAttempted = true
+	snapshot, err := e.workspace.Handoff(ctx, workspace.HandoffRequest{AttemptID: a.ID, Source: subject.snapshot(w.Authority.Delivery), CandidateManifestArtifactID: manifestID, IndexArtifactID: indexID})
+	stage.snapshot = snapshot
+	if err != nil {
+		return zero, stage, err
+	}
+	stage.effectsKnown = true
 	for _, entry := range snapshot.Manifest.Entries {
 		stage.paths = append(stage.paths, entry.Path)
 	}
@@ -72,7 +88,7 @@ func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, de
 	}
 	meta, err := e.evidence.VerifyClosed(ctx, evidenceID)
 	if err != nil {
-		return zero, nil, err
+		return zero, stage, err
 	}
 	provided := []adapters.SuppliedEvidence{{Ref: ref, Path: filepath.Join(e.lock.Root(), filepath.FromSlash(meta.RelativePath)), Scope: scope, Paths: []string{}}}
 	stage.supplied = append(stage.supplied, domain.ReviewInspection{Ref: ref, Scope: scope, Paths: []string{}})
@@ -83,7 +99,7 @@ func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, de
 	for {
 		page, listErr := e.db.WorkflowFindings(ctx, a.TaskID, domain.WorkflowSelector{WorkflowID: w.ID}, 100, cursor)
 		if listErr != nil {
-			return zero, nil, listErr
+			return zero, stage, listErr
 		}
 		for _, finding := range page.Items {
 			if finding.Finding.Severity != "blocking" {
@@ -100,7 +116,7 @@ func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, de
 				continue
 			}
 			if len(findings) >= domain.MaxReviewFindings {
-				return zero, nil, domain.Fail("input_too_large", "All unresolved findings exceed the bounded native context; none were truncated.")
+				return zero, stage, domain.Fail("input_too_large", "All unresolved findings exceed the bounded native context; none were truncated.")
 			}
 			findings = append(findings, finding.Finding)
 			origins = append(origins, finding)
@@ -113,13 +129,13 @@ func (e *Engine) prepareWorkflowNative(ctx context.Context, a domain.Attempt, de
 	}
 	provided, checks, err := e.workflowLinkedContext(ctx, stage, origins, provided)
 	if err != nil {
-		return zero, nil, err
+		return zero, stage, err
 	}
 	schemaPath := ""
 	if a.Role == "review" && a.ConnectionID == "codex-native" {
 		schema, putErr := e.evidence.Put(ctx, a.ID, "review_schema", adapters.ReviewSchema())
 		if putErr != nil {
-			return zero, nil, putErr
+			return zero, stage, putErr
 		}
 		schemaPath = filepath.Join(e.lock.Root(), filepath.FromSlash(schema.RelativePath))
 	}
@@ -134,7 +150,20 @@ func (s workflowSubject) ResponseIndexID() string {
 	return s.Response.IndexArtifactID
 }
 
-func (e *Engine) workflowApplicability(ctx context.Context, subject workflowSubject, scope domain.CheckScope, keys []string, definition string) (domain.Applicability, error) {
+func (e *Engine) workflowApplicability(ctx context.Context, subject workflowSubject, scope domain.CheckScope, keys []string, definition string, final ...*graphFinalVerification) (domain.Applicability, error) {
+	if len(final) > 1 {
+		return domain.Applicability{}, domain.Invalid("one exact cumulative final context")
+	}
+	if len(final) == 1 && final[0] != nil {
+		if err := ctx.Err(); err != nil {
+			return domain.Applicability{}, err
+		}
+		verified := final[0]
+		if subject.Binding == nil || subject.Response != nil || subject.Workflow.ID != verified.Binding.FinalWorkflowID || *subject.Binding != verified.Binding.FinalCandidateBinding || subject.Workflow.Authority.ConditionsSHA256 != verified.subject.Workflow.Authority.ConditionsSHA256 {
+			return domain.Applicability{}, evidence.ErrCorrupt
+		}
+		return verified.applicability(scope, keys, definition)
+	}
 	index, err := e.evidence.VerifyClosed(ctx, subject.RootSource.IndexArtifactID)
 	if err != nil || index.SHA256 == nil {
 		return domain.Applicability{}, evidence.ErrCorrupt
@@ -155,11 +184,31 @@ func (e *Engine) workflowApplicability(ctx context.Context, subject workflowSubj
 	return applicability, nil
 }
 
-func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stage *workflowNativeContext, settlement domain.Settlement) (domain.WorkflowStepFacts, error) {
-	facts := domain.WorkflowStepFacts{StepID: a.StepID, OwnerInstanceID: e.config.OwnerInstanceID, Settlement: settlement}
+func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stage *workflowNativeContext, settlement domain.Settlement, receiving ...*workspace.Snapshot) (facts domain.WorkflowStepFacts, factsErr error) {
+	facts = domain.WorkflowStepFacts{StepID: a.StepID, OwnerInstanceID: e.config.OwnerInstanceID, Settlement: settlement}
+	var producerCandidate *domain.CandidateBinding
 	detail, err := e.db.Task(ctx, a.TaskID)
 	if err != nil {
 		return facts, err
+	}
+	if detail.Task.GraphRef != nil && len(receiving) == 1 && receiving[0] != nil {
+		defer func() {
+			request := graphStepOutputRequest{Attempt: a, Snapshot: receiving[0]}
+			if a.Role == "author" || a.Role == "correction" {
+				request.CandidateBinding, request.EligibleResponseBinding = producerCandidate, facts.ResponseBinding
+			}
+			output, err := e.captureGraphStepOutput(ctx, request)
+			facts.GraphOutput = output
+			factsErr = errors.Join(factsErr, err)
+			if a.Role == "author" || a.Role == "correction" {
+				if output != nil && output.FinalVerification != nil {
+					facts.ReuseEvidenceUses = nil
+				}
+				proven, directErr := e.graphCapturedFinalDirectProof(ctx, a, output)
+				facts.CumulativeDirectProven = proven
+				factsErr = errors.Join(factsErr, directErr)
+			}
+		}()
 	}
 	view, err := e.db.Workflow(ctx, a.TaskID, domain.WorkflowSelector{WorkflowID: a.WorkflowID})
 	if err != nil || view.Workflow == nil {
@@ -173,6 +222,9 @@ func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stag
 	}
 	if current.PrimaryFailure != nil || current.Stop != nil || settlement.Outcome != "succeeded" || settlement.EvidenceStatus != "complete" || settlement.Cleanup.State != "verified" {
 		return facts, nil
+	}
+	if err = e.recheckWorkflowFinalContext(ctx, a, stage); err != nil {
+		return facts, err
 	}
 	if current.CandidateID == nil {
 		return facts, domain.Fail("evidence_unavailable", "The native result has no complete current source/index capture.")
@@ -205,13 +257,16 @@ func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stag
 		for _, condition := range w.Authority.Conditions {
 			keys = append(keys, condition.Key)
 		}
-		applicability, err := e.workflowApplicability(ctx, stage.subject, domain.CheckScope{Kind: scope, Paths: []string{}}, keys, workflowHash(adapters.ReviewSchema()))
+		applicability, err := e.workflowApplicability(ctx, stage.subject, domain.CheckScope{Kind: scope, Paths: []string{}}, keys, workflowHash(adapters.ReviewSchema()), stage.final)
 		if err != nil {
 			return facts, err
 		}
 		facts.CandidateBinding, facts.ResponseBinding, facts.Applicability = stage.subject.Binding, stage.subject.Response, &applicability
 		facts.HasTaskDelta, facts.HasTaskIndexDelta = workflowChangeFlags(workspace.CompareManifests(stage.subject.RootManifest, stage.subject.Manifest))
 		facts.DirectProven = e.workflowDirectProof(ctx, stage.subject, detail.Task.OriginalText, detail.Version) == nil
+		if stage.final != nil {
+			facts.CumulativeDirectProven = e.graphFinalDirectProof(ctx, stage.final, detail.Task.OriginalText, detail.Version) == nil
+		}
 		record := domain.ReviewRecord{ID: domain.NewID(), WorkflowID: w.ID, StepID: a.StepID, AttemptID: a.ID, CandidateBinding: facts.CandidateBinding, ResponseBinding: facts.ResponseBinding, ReviewContract: domain.ReviewContract, ResultArtifactID: meta.ID, ResultSHA256: *meta.SHA256, Applicability: applicability, Report: report, SuppliedEvidence: stage.supplied, Findings: []domain.WorkflowFinding{}, Outcome: report.Outcome, CreatedAt: domain.Now()}
 		for _, finding := range report.Findings {
 			record.Findings = append(record.Findings, domain.WorkflowFinding{ID: domain.NewID(), ModelKey: finding.Key, ReviewID: record.ID, Finding: finding})
@@ -227,7 +282,7 @@ func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stag
 			}
 		}
 		var reuseIDs []string
-		facts.ReuseEvidenceUses, _, _, reuseIDs, err = e.currentWorkflowEvidence(ctx, stage.subject)
+		facts.ReuseEvidenceUses, _, _, reuseIDs, err = e.currentWorkflowEvidence(ctx, stage.subject, stage.final)
 		if err != nil {
 			return facts, err
 		}
@@ -235,12 +290,18 @@ func (e *Engine) workflowNativeFacts(ctx context.Context, a domain.Attempt, stag
 		ids = append(ids, reuseIDs...)
 		ids = append(ids, stage.artifactIDs...)
 		facts.VerifiedArtifacts, err = e.verifyWorkflowArtifacts(ctx, ids...)
+		if err == nil && stage.final != nil {
+			facts.VerifiedArtifacts, err = mergeGraphAcceptanceProofs(facts.VerifiedArtifacts, stage.final.VerifiedArtifacts)
+		}
 		return facts, err
 	}
 	subject, err := e.candidateWorkflowSubject(ctx, w, candidate.ID)
 	if err != nil {
 		return facts, err
 	}
+	// Physical producer history is distinct from deliverable selection. A valid
+	// response-only result still retains its actual own zero-delta candidate.
+	producerCandidate = subject.Binding
 	facts.CandidateBinding = subject.Binding
 	facts.HasTaskDelta, facts.HasTaskIndexDelta = workflowChangeFlags(workspace.CompareManifests(subject.RootManifest, subject.Manifest))
 	facts.DirectProven = e.workflowDirectProof(ctx, subject, detail.Task.OriginalText, detail.Version) == nil

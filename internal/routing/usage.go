@@ -61,7 +61,7 @@ func Usage(taskID string, items []domain.UsageItem, references []domain.UsageRef
 		}
 		seen[item.AttemptID] = true
 		switch item.ExecutorKind {
-		case "local_check", "local_application", "local_external":
+		case "local_check", "local_application", "local_external", "local_graph":
 			item.SelectedUsageScope = "local_not_applicable"
 			page.Coverage.ExcludedLocalAttemptIDs = append(page.Coverage.ExcludedLocalAttemptIDs, item.AttemptID)
 			continue

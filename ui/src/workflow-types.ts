@@ -1,4 +1,5 @@
 // Exact public JSON mirror of internal/domain/workflow.go. Counters and hashes stay strings.
+import type { GraphBudgetRef } from './graph-types.js';
 import type { Attempt } from './execution-types.js';
 import type { RoutingDecision, TaskBudget } from './routing-types.js';
 
@@ -50,7 +51,7 @@ export interface DestinationEvidence { projectIdentity: string; repositoryIdenti
 export interface DeliveryOperation { id: string; workflowId: string; stepId: string; attemptId: string; requestId: string; candidateBinding: CandidateBinding; evidenceUses: EvidenceUse[]; scope: DeliveryScope; authoritySha256: string; status: string; beforeDestination: DestinationEvidence | null; afterDestination: DestinationEvidence | null; createdAt: string; finishedAt: string | null; lastEffectSequence: string; conflicts: { relativePath: string; code: string; evidenceArtifactId: string | null }[]; conflictCount: string; incidentId: string | null; nextAction: string }
 export interface ExternalDeliveryRecord { workflowId: string; stepId: string; attemptId: string; action: ExternalActionInput; command: CommandDefinition; outcome: string; stdoutArtifactId: string | null; stderrArtifactId: string | null; createdAt: string }
 export interface WorkflowAcceptance { id: string; workflowId: string; taskId: string; taskVersion: string; candidateBinding: CandidateBinding; authoritySha256: string; reviewUses: EvidenceUse[]; checkUses: EvidenceUse[]; findingResolutionIds: string[]; deliveryOperationId: string | null; externalResultRefs: string[]; deliveryResult: string; acceptedAt: string; acceptedByRequestId: string }
-export interface WorkflowStepAdmission { workflow: Workflow; step: WorkflowStep; attempt: Attempt; budget: TaskBudget; routingDecision?: RoutingDecision }
+export interface WorkflowStepAdmission { workflow: Workflow; step: WorkflowStep; attempt: Attempt; budget: TaskBudget | null; graphBudgetRef?: GraphBudgetRef; routingDecision?: RoutingDecision }
 
 export interface WorkflowDeliveryView { id: string; kind: 'local_application' | 'external_command' | 'review_only'; stepId: string | null; attemptId: string | null; operation?: DeliveryOperation; external?: ExternalDeliveryRecord; acceptance?: WorkflowAcceptance }
 export interface WorkflowAdvanceProof { predecessorStepId: string; ownerInstanceId: string; taskRevision: string; taskVersion: string; workflowRevision: string; budgetRevision: string; windowNumber: string; candidateId: string | null; responseBinding?: ResponseBinding; nextLogicalKey: string; trigger: string }

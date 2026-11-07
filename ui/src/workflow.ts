@@ -219,6 +219,10 @@ export class WorkflowView {
   private render(): void {
     if (!this.selected) return; element('workflow-panel').hidden = false;
     const workflow = this.selected.workflow; const historical = this.isHistorical(); const facts = element('workflow-facts'); facts.replaceChildren();
+    const graphMember = this.task?.task.graphRef;
+    element('workflow-scope-help').textContent = graphMember
+      ? 'Task-group members use the current group for source preparation, dependencies, shared allowance and admission. Inspect the group and its retained evidence for the current next action.'
+      : 'Adoption creates a new captured version and starts no work. Use Run task for its first author. A budget grant starts no stage; advance an existing workflow explicitly under current authority. Reviewable, applied and external-command results remain separate.';
     const qualification = element('workflow-acceptance-record'); qualification.replaceChildren();
     const retainedAcceptance = this.selected.acceptance ?? workflow?.completion ?? (workflow ? { workflowId: workflow.id, evidenceUses: workflow.evidenceUses } : undefined);
     if (retainedAcceptance) {
@@ -228,7 +232,11 @@ export class WorkflowView {
     }
     addFact(facts, 'Selected task version', this.selected.taskVersion + (historical ? ' · Historical; read only' : ' · Current'));
     if (!workflow) {
-      feedback('workflow-status', (historical ? 'Historical standalone task. ' : 'Standalone task. ') + 'No verified workflow authority was created for this version. Explicit adoption creates a new version and starts no work.');
+      feedback('workflow-status', graphMember
+        ? (historical ? 'Historical task-group member. ' : 'Task-group member. ')
+          + (graphMember.kind === 'root' ? 'Source preparation uses local operations. ' : 'No native workflow has been admitted for this selected version. ')
+          + 'Inspect the current task group for its dependencies, retained results and admission controls.'
+        : (historical ? 'Historical standalone task. ' : 'Standalone task. ') + 'No verified workflow authority was created for this version. Explicit adoption creates a new version and starts no work.');
       this.controls(); return;
     }
     const authority = workflow.authority;
@@ -269,7 +277,7 @@ export class WorkflowView {
     for (const action of ['adopt', 'advance', 'check']) {
       const key = action + ':' + task?.id; const id = action === 'adopt' ? 'adopt-task-workflow' : action === 'advance' ? 'advance-task-workflow' : 'recheck-task-workflow';
       const button = element<HTMLButtonElement>(id);
-      button.disabled = !this.ready || !task || !current || this.busy.has(key) || !this.pending[key] && (active || (action === 'adopt' ? !!workflow : !workflow || !workflow.currentStepId || workflow.state === 'completed' || action === 'check' && !value('workflow-check-definition')));
+      button.disabled = !!task?.graphRef || !this.ready || !task || !current || this.busy.has(key) || !this.pending[key] && (active || (action === 'adopt' ? !!workflow : !workflow || !workflow.currentStepId || workflow.state === 'completed' || action === 'check' && !value('workflow-check-definition')));
       button.textContent = this.pending[key] ? 'Retry pending ' + action : action === 'adopt' ? 'Adopt verified workflow' : action === 'advance' ? 'Advance current next step' : 'Recheck captured definition';
       button.hidden = action === 'adopt' ? !!workflow : !workflow;
     }
@@ -286,7 +294,7 @@ export class WorkflowView {
   }
 
   private async mutateTask(action: 'adopt' | 'advance' | 'check'): Promise<void> {
-    const task = this.task?.task; const workflow = this.selected?.workflow; if (!task || this.isHistorical()) return;
+    const task = this.task?.task; const workflow = this.selected?.workflow; if (!task || task.graphRef || this.isHistorical()) return;
     const generation = this.generation; const selector = this.selector; const selectedVersion = this.selected?.taskVersion;
     const key = action + ':' + task.id;
     if (!this.pending[key]) {

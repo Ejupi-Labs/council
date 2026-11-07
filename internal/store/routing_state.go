@@ -89,7 +89,7 @@ func (s *Store) routingSnapshot(ctx context.Context, q schemaQueryer) (domain.Ro
 	if err != nil {
 		return out, err
 	}
-	out.ManagedOccupancy = domain.ManagedOccupancy{ResourceID: "managed-native", Limit: 1, ActiveAttemptID: g.ActiveAttemptID}
+	out.ManagedOccupancy = domain.ManagedOccupancy{ResourceID: "managed-native", Limit: 2, ActiveAttemptID: g.ActiveAttemptID, ActiveClaims: g.ActiveClaims, OccupiedSlots: domain.Decimal(int64(len(g.ActiveClaims)))}
 	if g.ActiveAttemptID != nil {
 		a, err := s.attempt(ctx, q, *g.ActiveAttemptID)
 		if err != nil {
@@ -179,7 +179,7 @@ func (s *Store) routingAuthority(ctx context.Context, q queryer, taskID, version
 	}
 	return &a, nil
 }
-func (s *Store) taskBudget(ctx context.Context, q queryer, taskID string) (*domain.TaskBudget, error) {
+func (s *Store) rawTaskBudget(ctx context.Context, q queryer, taskID string) (*domain.TaskBudget, error) {
 	var raw string
 	var revision, granted, consumed, automatic, historical, window int64
 	var first, deadline sql.NullString
@@ -201,6 +201,13 @@ func (s *Store) taskBudget(ctx context.Context, q queryer, taskID string) (*doma
 	return &b, nil
 }
 func saveBudget(ctx context.Context, tx *sql.Tx, b domain.TaskBudget) error {
+	ref, e := graphTaskMembership(ctx, tx, b.TaskID)
+	if e != nil {
+		return e
+	}
+	if ref != nil && ref.Kind == "node" {
+		return graphBudgetError(ref)
+	}
 	_, err := tx.ExecContext(ctx, "INSERT INTO task_budgets VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision,granted=excluded.granted,consumed=excluded.consumed,automatic=excluded.automatic,historical=excluded.historical,window_number=excluded.window_number,first_admitted_at=excluded.first_admitted_at,deadline_at=excluded.deadline_at,data=excluded.data", b.TaskID, intRevision(b.Revision), countInt(b.GrantedAdmissions), countInt(b.ConsumedAdmissions), countInt(b.AutomaticAdmissions), countInt(b.HistoricalAdmissions), intRevision(b.CurrentWindow.Number), b.CurrentWindow.FirstAdmissionAt, b.CurrentWindow.DeadlineAt, encode(b))
 	if err != nil {
 		return storageError()
@@ -214,7 +221,14 @@ func (s *Store) TaskBudget(ctx context.Context, taskID string) (domain.TaskBudge
 	if _, err := s.task(ctx, s.db, taskID); err != nil {
 		return domain.TaskBudgetView{}, err
 	}
-	b, err := s.taskBudget(ctx, s.db, taskID)
+	ref, err := s.graphMembership(ctx, s.db, taskID)
+	if err != nil {
+		return domain.TaskBudgetView{}, err
+	}
+	if ref != nil {
+		return domain.TaskBudgetView{Budget: nil, AdoptionRequired: false, GraphBudgetRef: &domain.GraphBudgetRef{GraphID: ref.GraphID, BudgetOwnerTaskID: ref.RootTaskID}}, nil
+	}
+	b, err := s.rawTaskBudget(ctx, s.db, taskID)
 	return domain.TaskBudgetView{Budget: b, AdoptionRequired: b == nil}, err
 }
 func (s *Store) TaskRouting(ctx context.Context, taskID string) (domain.TaskRoutingView, error) {

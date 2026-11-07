@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,12 +25,48 @@ func waitInteropRunning(t *testing.T, e *Engine, id string) {
 func TestInteropMixedCapacityStopAndEarlierFailureAuthority(t *testing.T) {
 	e, project, _ := testEngine(t)
 	ctx := context.Background()
+	// Independent harnesses can use both managed slots. Declare one shared
+	// account explicitly so this fixture exercises the narrower account limit.
+	body, err := json.Marshal(domain.AccountCreateInput{RequestID: domain.NewID(), Label: "Controlled shared account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := e.MutateRouting(ctx, "routing.accounts.create", "", body)
+	if created.Status != 201 || created.Envelope.Error != nil {
+		t.Fatal("shared account setup failed", created)
+	}
+	account := created.Envelope.Data.(domain.DeclaredAccount)
+	contexts, err := e.db.RoutingContexts(ctx)
+	if err != nil || len(contexts.Items) != 2 {
+		t.Fatal("expected both native contexts", contexts, err)
+	}
+	for _, native := range contexts.Items {
+		body, err = json.Marshal(domain.AccountLinkInput{RequestID: domain.NewID(), ExpectedRevision: native.AccountLink.Revision, DeclaredAccountID: account.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		linked := e.MutateRouting(ctx, "routing.links.update", native.ID, body)
+		if linked.Envelope.Error != nil {
+			t.Fatal("shared account link failed", native.ID, linked)
+		}
+	}
 	first := admitClaude(t, e, project, "slow")
 	waitInteropRunning(t, e, first.Attempt.ID)
-	second := admit(t, e, project, "response")
+	gate, err := e.db.Gate(ctx)
+	if err != nil || gate.State != "open" || len(gate.ActiveClaims) != 1 || gate.ActiveClaims[0].AttemptID != first.Attempt.ID || gate.ActiveClaims[0].ContextID == nil || *gate.ActiveClaims[0].ContextID != "claude-native" || gate.ActiveClaims[0].CapturedDeclaredAccountID == nil || *gate.ActiveClaims[0].CapturedDeclaredAccountID != account.ID {
+		t.Fatal("Claude did not hold the exact shared account claim", gate, err)
+	}
+	second := decodeAdmission(t, e.StartTask(ctx, domain.StartTaskInput{RequestID: domain.NewID(), ProjectID: project, OriginalText: "Perform the explicit local fixture task.", Pins: &domain.ExecutionPins{HarnessID: "codex"}, ExecutionMode: "fake", FakeScenario: "response", Workflow: &domain.WorkflowInput{Mode: "author_only"}, Acceptance: &domain.AcceptanceInput{Deliverable: "response_only"}}))
+	if second.Attempt.ConnectionID != "codex-native" || second.Attempt.ResolvedTarget == nil || second.Attempt.ResolvedTarget.DeclaredAccountAssociation == nil || second.Attempt.ResolvedTarget.DeclaredAccountAssociation.AccountID != account.ID {
+		t.Fatal("Codex did not capture the same declared account", second)
+	}
 	queued, err := e.db.Attempt(ctx, second.Attempt.ID)
 	if err != nil || queued.Phase != "queued" || queued.LaunchIntent || queued.SourceSnapshotID != nil {
-		t.Fatal("other harness bypassed shared slot", queued, err)
+		t.Fatal("other harness bypassed shared account reservation", queued, err)
+	}
+	gate, err = e.db.Gate(ctx)
+	if err != nil || len(gate.ActiveClaims) != 1 || gate.ActiveClaims[0].AttemptID != first.Attempt.ID {
+		t.Fatal("queued work changed the original claim", gate, err)
 	}
 	// This is an injected controller failure, not an instruction from native prose.
 	e.recordFailure(first.Attempt.ID, primary("fixture_primary_failure", "A controlled earlier failure must win over later Stop."))

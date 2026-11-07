@@ -63,7 +63,14 @@ func (s *Store) AcceptWorkflow(ctx context.Context, taskID string, f domain.Work
 			if e != nil {
 				return 0, nil, e
 			}
-			if p == nil || w.CurrentStepID == nil || *w.CurrentStepID != step.ID || step.AttemptID == nil || *step.AttemptID != a.ID || p.OwnerInstanceID != f.OwnerInstanceID || p.TaskRevision != t.Revision || p.TaskVersion != t.CurrentVersion || p.WorkflowRevision != w.Revision || p.NextLogicalKey != key || b == nil || p.BudgetRevision != b.Revision || p.WindowNumber != b.CurrentWindow.Number || p.CandidateID == nil || *p.CandidateID != *w.SelectedCandidateID {
+			budgetCurrent := false
+			if p != nil {
+				budgetCurrent, e = s.graphBudgetProofCurrent(ctx, tx, t.ID, p.BudgetRevision, p.GraphBudgetAuthorityEpoch, p.WindowNumber)
+				if e != nil {
+					return 0, nil, e
+				}
+			}
+			if p == nil || !budgetCurrent || w.CurrentStepID == nil || *w.CurrentStepID != step.ID || step.AttemptID == nil || *step.AttemptID != a.ID || p.OwnerInstanceID != f.OwnerInstanceID || p.TaskRevision != t.Revision || p.TaskVersion != t.CurrentVersion || p.WorkflowRevision != w.Revision || p.NextLogicalKey != key || b == nil || p.CandidateID == nil || *p.CandidateID != *w.SelectedCandidateID {
 				return 0, nil, domain.Fail("workflow_revision_conflict", "The fresh automatic acceptance proof was suppressed, consumed or superseded.")
 			}
 		}
@@ -106,7 +113,11 @@ func (s *Store) AcceptWorkflow(ctx context.Context, taskID string, f domain.Work
 				direct = true
 			}
 		}
-		input := workflowpolicy.PlanInput{Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: true, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
+		graphFinal, e := s.graphAcceptanceFinal(ctx, tx, w, *a, f)
+		if e != nil {
+			return 0, nil, e
+		}
+		input := workflowpolicy.PlanInput{GraphFinal: graphFinal, Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: true, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
 		if in.DeliveryOperationID != nil {
 			op, e := storedWorkflowRecord[domain.DeliveryOperation](ctx, tx, "delivery_operations", *in.DeliveryOperationID)
 			if e != nil {
@@ -209,6 +220,9 @@ func (s *Store) AcceptWorkflow(ctx context.Context, taskID string, f domain.Work
 		}
 		t.UpdatedAt = in.AcceptedAt
 		if e = saveTask(ctx, tx, t); e != nil {
+			return 0, nil, e
+		}
+		if e = s.projectGraphWorkflow(ctx, tx, t, &w, f.VerifiedArtifacts); e != nil {
 			return 0, nil, e
 		}
 		return 200, domain.WorkflowDetail{TaskID: t.ID, TaskVersion: w.TaskVersion, Workflow: &w, Acceptance: &in}, nil

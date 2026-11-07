@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
@@ -120,9 +121,30 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			}
 			db.SetMaxOpenConns(1)
 			t.Cleanup(func() { _ = db.Close(); _ = lock.Close() })
-			var currentSchema int
-			if err = db.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 5 {
-				t.Fatal("prior-schema fixture must start from its own known schema5 state", currentSchema, err)
+			// This is an owned synthetic downgrade from current APIs, not a frozen
+			// schema5 fixture. Never discard graph authority or a held claim.
+			graphTables := []string{"graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"}
+			assertEmptyCurrentGraphState := func(current *sql.DB) {
+				t.Helper()
+				var currentSchema int
+				if err := current.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 6 {
+					t.Fatal("controlled current fixture must have schema6", currentSchema, err)
+				}
+				for _, table := range append(append([]string{}, graphTables...), "capacity_claims") {
+					var count int
+					if err := current.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+						t.Fatal("controlled downgrade/upgrade must not discard or invent graph authority or claims", table, count, err)
+					}
+				}
+			}
+			assertEmptyCurrentGraphState(db)
+			wantAttempts := 0
+			if version == 2 {
+				wantAttempts = 1
+			}
+			var priorAttempts int
+			if err = db.QueryRow("SELECT count(*) FROM attempts").Scan(&priorAttempts); err != nil || priorAttempts != wantAttempts {
+				t.Fatal("controlled historical setup has unexpected attempts", priorAttempts, wantAttempts, err)
 			}
 			if _, err = db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 				t.Fatal(err)
@@ -132,11 +154,16 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 				t.Fatal(err)
 			}
 			defer tx.Rollback()
-			// This disposable fixture starts with current shared APIs. Remove every
-			// known005 and004 child table before restoring its frozen historical DDL; a
-			// schema2/version marker beside routing tables is rightly refused by the
-			// production migrator. Keep retained history/receipt bytes unchanged.
-			statements := []string{
+			// Remove the known empty006 children first, then005/004 children,
+			// before restoring frozen accepted002 claim DDL or foundation1.
+			// Foreign keys remain ON. Retained history/receipt bytes are untouched;
+			// real frozen schema5 migration is independently covered by Store tests.
+			// Its graph/account/context foreign keys must not outlive those parents.
+			statements := []string{"DROP TABLE capacity_claims"}
+			for _, table := range graphTables {
+				statements = append(statements, "DROP TABLE "+table)
+			}
+			statements = append(statements,
 				"DROP TABLE delivery_effects", "DROP TABLE delivery_operations",
 				"DROP TABLE workflow_acceptances", "DROP TABLE workflow_resolutions",
 				"DROP TABLE workflow_checks", "DROP TABLE workflow_reviews",
@@ -148,11 +175,11 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 				"DROP TABLE routing_capacity_state", "DROP TABLE routing_account_links",
 				"DROP TABLE routing_accounts", "DROP TABLE routing_profiles",
 				"DROP TABLE routing_contexts", "DROP TABLE routing_policy",
-			}
+			)
 			if version == 2 {
-				statements = append(statements, "DROP TABLE capacity_claims", "CREATE TABLE capacity_claims(connection_id TEXT PRIMARY KEY CHECK(connection_id='codex-native'),attempt_id TEXT UNIQUE NOT NULL REFERENCES attempts(id))", "PRAGMA user_version=2")
+				statements = append(statements, "CREATE TABLE capacity_claims(connection_id TEXT PRIMARY KEY CHECK(connection_id='codex-native'),attempt_id TEXT UNIQUE NOT NULL REFERENCES attempts(id))", "PRAGMA user_version=2")
 			} else {
-				statements = append(statements, "DROP TABLE response_acceptances", "DROP TABLE candidates", "DROP TABLE source_snapshots", "DROP TABLE artifacts", "DROP TABLE attempt_events", "DROP TABLE attempt_terminals", "DROP TABLE capacity_claims", "DROP TABLE execution_control", "DROP TABLE execution_incidents", "DROP TABLE attempts", "DROP TABLE task_versions", "DROP TABLE tasks", "PRAGMA user_version=1")
+				statements = append(statements, "DROP TABLE response_acceptances", "DROP TABLE candidates", "DROP TABLE source_snapshots", "DROP TABLE artifacts", "DROP TABLE attempt_events", "DROP TABLE attempt_terminals", "DROP TABLE execution_control", "DROP TABLE execution_incidents", "DROP TABLE attempts", "DROP TABLE task_versions", "DROP TABLE tasks", "PRAGMA user_version=1")
 			}
 			for _, statement := range statements {
 				if _, err = tx.Exec(statement); err != nil {
@@ -163,6 +190,24 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 				err = tx.Commit()
 			} else {
 				_ = tx.Rollback()
+			}
+			if err == nil {
+				var historicalVersion int
+				if err = db.QueryRow("PRAGMA user_version").Scan(&historicalVersion); err != nil || historicalVersion != version {
+					t.Fatal("controlled downgrade did not install the actual historical marker", historicalVersion, version, err)
+				}
+				wantTables := []string{"policy", "projects", "drafts", "draft_versions", "receipts"}
+				if version == 2 {
+					wantTables = append(wantTables, "tasks", "task_versions", "attempts", "attempt_terminals", "attempt_events", "artifacts", "source_snapshots", "candidates", "response_acceptances", "execution_incidents", "execution_control", "capacity_claims")
+					var claimDDL string
+					if err = db.QueryRow("SELECT sql FROM sqlite_schema WHERE type='table' AND name='capacity_claims'").Scan(&claimDDL); err != nil || claimDDL != "CREATE TABLE capacity_claims(connection_id TEXT PRIMARY KEY CHECK(connection_id='codex-native'),attempt_id TEXT UNIQUE NOT NULL REFERENCES attempts(id))" {
+						t.Fatal("schema2 claim DDL must remain the frozen accepted shape", claimDDL, err)
+					}
+				}
+				sort.Strings(wantTables)
+				if actual := priorCLITableInventory(t, db); !reflect.DeepEqual(actual, wantTables) {
+					t.Fatal("controlled historical fixture retained foreign/current tables", actual, wantTables)
+				}
 			}
 			closeErr := db.Close()
 			lockErr := lock.Close()
@@ -192,6 +237,21 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 					t.Fatal("upgraded old evidence changed", err)
 				}
 			}
+			// The CLI has now reopened and migrated the owned historical state.
+			// Before any explicit new work, no graph authority/claim/attempt appeared.
+			upgraded, err := sql.Open("sqlite", lock.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = upgraded.Close() })
+			assertEmptyCurrentGraphState(upgraded)
+			var upgradedAttempts int
+			if err = upgraded.QueryRow("SELECT count(*) FROM attempts").Scan(&upgradedAttempts); err != nil || upgradedAttempts != priorAttempts {
+				t.Fatal("CLI upgrade/replay created historical work", upgradedAttempts, priorAttempts, err)
+			}
+			if err = upgraded.Close(); err != nil {
+				t.Fatal(err)
+			}
 			var claude domain.Admission
 			decodeCLIData(t, f.run("tasks", "start", "--project", opened.Project.ID, "--task", "Explicit new Claude task after upgrade", "--harness", "claude-code", "--fake"), &claude)
 			if done := f.settled(claude.Attempt.ID); done.Outcome == nil || *done.Outcome != "succeeded" || done.ConnectionID != "claude-native" {
@@ -199,4 +259,25 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			}
 		})
 	}
+}
+
+func priorCLITableInventory(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	tables := []string{}
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return tables
 }

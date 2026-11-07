@@ -21,6 +21,9 @@ func TestMain(m *testing.M) {
 	if handled, code := process.HandleInternal(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if handled, code := handleGraphFinalContextCheck(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	if handled, code := handleWorkflowMutatingCheck(os.Args[1:]); handled {
 		os.Exit(code)
 	}

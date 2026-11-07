@@ -12,7 +12,7 @@ func TestUsageLocalExecutorsDoNotBecomeModelCoverageCountersOrPrices(t *testing.
 	author.ExecutorKind, author.Role = "native", "author"
 	items := []domain.UsageItem{author}
 	references := []domain.UsageReferencePrice{}
-	for i, kind := range []string{"local_check", "local_application", "local_external"} {
+	for i, kind := range []string{"local_check", "local_application", "local_external", "local_graph"} {
 		id := strings.Repeat(string(rune('2'+i)), 32)
 		local := usageItem(id, "top_level", stringPointer("999"), stringPointer("999"), stringPointer("999"), stringPointer("999"))
 		local.ExecutorKind, local.Role = kind, "check"
@@ -25,7 +25,7 @@ func TestUsageLocalExecutorsDoNotBecomeModelCoverageCountersOrPrices(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Coverage.Status != "complete" || len(page.Coverage.IncludedAttemptIDs) != 1 || page.Coverage.IncludedAttemptIDs[0] != author.AttemptID || len(page.Coverage.UnknownAttemptIDs) != 0 || len(page.Coverage.ExcludedFakeAttemptIDs) != 0 || len(page.Coverage.ExcludedLocalAttemptIDs) != 3 {
+	if page.Coverage.Status != "complete" || len(page.Coverage.IncludedAttemptIDs) != 1 || page.Coverage.IncludedAttemptIDs[0] != author.AttemptID || len(page.Coverage.UnknownAttemptIDs) != 0 || len(page.Coverage.ExcludedFakeAttemptIDs) != 0 || len(page.Coverage.ExcludedLocalAttemptIDs) != 4 {
 		t.Fatal("Local executors distorted measured native model coverage", page.Coverage)
 	}
 	if got := page.KnownSubtotal.ByUsageScope.TopLevel.InputTokens.KnownValue; got == nil || *got != "7" {

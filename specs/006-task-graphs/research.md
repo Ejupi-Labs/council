@@ -208,3 +208,46 @@ every later stage/effect, and changed guidance/input remains relevant.
 **Rationale**: Public projections must not create a child allowance or conceal pending membership.
 A completed ancestor's Stop can prohibit future descendants without rewriting an already-started
 descendant or borrowing a started marker for another version.
+
+## R13 — Supply native context without changing candidate state
+
+**Decision**: Prepare selected closed originals/evidence in a private per-attempt directory beside
+the worktrees; supply complete inline text or exact file references through a separate graph
+prompt field. Preserve original task JSON bytes and reuse identical receiver fields already
+present there. Root controls all process preparation and records private copy identities; the
+workspace helper performs complete copy/closure rechecks outside SQL. Copies cannot become an
+authored file delta. A missing required access plan blocks packet publication and preparation.
+
+The actual combined prompt is bounded to256KiB and all supplied references together to64.
+Context-file copying is bounded to64MiB/file and512MiB aggregate as local I/O scope. These bounds
+do not imply a known model context window or token count. Oversize originals blocked by the base
+native builder remain an explicit pre-Prepare limitation; no authoritative bytes are truncated.
+
+**Primary sources, read2026-11-06**: Context7 was queried first for the official Codex source and
+Claude documentation, followed by the actual current primary pages. The
+[OpenAI CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) describes
+`--add-dir` as additional write access; it is not used for read-only review context. Claude's
+[working-directory rules](https://code.claude.com/docs/en/permissions#working-directories) and
+[CLI reference](https://code.claude.com/docs/en/cli-reference#cli-flags) document additional-directory
+file access. Add only the prepared copy directory, retaining the existing read-only tool profile.
+
+**Limits and alternatives**: A whole-artifact-directory grant exposes unrelated histories; placing
+copies inside a worktree changes its inventory/exclusions; hardlinks violate retained artifact
+single-link rules. None is used. Managed policy, configured readable roots or native sandbox
+identity may still prevent reads. Council does not weaken private ACLs or inspect credentials/
+vendor settings to force access. These unversioned web pages were read on the stated date; they
+are not an observed installed version, account capability or live model inspection. Actual fixed
+native workers must open/read supplied files; live vendor qualification still needs an explicit
+user-requested task.
+
+## R14: Observe case behavior where the assembly will actually exist
+
+Decision: use adaptive explicit-policy composition plus a bounded acknowledged probe in the exact
+new private assembly directory when composition depends on case. Avoid OS-name inference and a
+blanket portable-only policy that would reject supported case-dependent trees. This is a T029
+implementation clarification within the existing filesystem/context requirements, not a new user
+setting. Probe scope is ASCII case in one exact directory; actual full materialization remains
+the authority for Unicode/native-name compatibility. Intent, owned-file cleanup, terminal effects
+and unknown acknowledgement follow existing local graph operation rules. The private API/design
+was proposed by Native and reviewed by Root before implementation. Runtime/platform qualification
+remains pending; do not claim probe availability merely from this decision.

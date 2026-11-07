@@ -25,6 +25,12 @@ func (s *Store) AmendBudgetWithRouting(ctx context.Context, taskID string, in do
 		return domain.Failure(in.RequestID, e)
 	}
 	return s.mutate(ctx, in.RequestID, "tasks.budget.amend", BudgetAmendmentFingerprint(taskID, in), func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, true); e != nil {
+			return 0, nil, e
+		}
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, true); e != nil {
+			return 0, nil, e
+		}
 		g, err := s.gate(ctx, tx)
 		if err != nil {
 			return 0, nil, err
@@ -32,16 +38,18 @@ func (s *Store) AmendBudgetWithRouting(ctx context.Context, taskID string, in do
 		if err = checkGate(g); err != nil {
 			return 0, nil, err
 		}
-		if (in.Action == "adopt" || in.NewWindowSeconds != nil) && g.ActiveAttemptID != nil {
-			active, e := s.attempt(ctx, tx, *g.ActiveAttemptID)
-			if e != nil {
-				return 0, nil, e
-			}
-			if active.TaskID == taskID {
-				return 0, nil, domain.Fail("attempt_active", "The task still owns the managed claim. Verify cleanup before opening another budget window.")
-			}
-			if g.OwnerInstanceID != "" && active.OwnerInstanceID != g.OwnerInstanceID {
-				return 0, nil, domain.Fail("dispatch_fenced", "The managed claim belongs to an uncertain owner epoch. Inspect retained ownership before adding a window.")
+		if in.Action == "adopt" || in.NewWindowSeconds != nil {
+			for _, claim := range g.ActiveClaims {
+				active, e := s.attempt(ctx, tx, claim.AttemptID)
+				if e != nil {
+					return 0, nil, e
+				}
+				if active.TaskID == taskID {
+					return 0, nil, domain.Fail("attempt_active", "The task still owns the managed claim. Verify cleanup before opening another budget window.")
+				}
+				if g.OwnerInstanceID != "" && active.OwnerInstanceID != g.OwnerInstanceID {
+					return 0, nil, domain.Fail("dispatch_fenced", "The managed claim belongs to an uncertain owner epoch. Inspect retained ownership before adding a window.")
+				}
 			}
 		}
 		t, err := s.task(ctx, tx, taskID)

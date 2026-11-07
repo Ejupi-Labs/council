@@ -9,14 +9,16 @@ import (
 )
 
 const APIVersion = 1
-const AppVersion = "2.0.0-dev.5"
+const AppVersion = "2.0.0-dev.6"
 const MaxTextBytes = 4 * 1024 * 1024
 const MaxBodyBytes = 32 * 1024 * 1024
 
 type Error struct {
-	Code            string `json:"code"`
-	Message         string `json:"message"`
-	CurrentRevision string `json:"currentRevision,omitempty"`
+	GraphRef        *GraphRef       `json:"graphRef,omitzero"`
+	GraphBudgetRef  *GraphBudgetRef `json:"graphBudgetRef,omitzero"`
+	Code            string          `json:"code"`
+	Message         string          `json:"message"`
+	CurrentRevision string          `json:"currentRevision,omitempty"`
 }
 
 func (e *Error) Error() string         { return e.Message }
@@ -65,7 +67,7 @@ func Status(code string) int {
 		return 404
 	case "method_not_allowed":
 		return 405
-	case "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict", "workflow_revision_conflict", "candidate_stale", "integration_conflict":
+	case "graph_budget_required", "graph_scope_required", "graph_input_stale", "graph_control_conflict", "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict", "workflow_revision_conflict", "candidate_stale", "integration_conflict":
 		return 409
 	case "input_too_large":
 		return 413

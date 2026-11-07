@@ -62,11 +62,10 @@ func (e *Engine) guardLocalStage(ctx context.Context, a domain.Attempt) error {
 	if err != nil {
 		return err
 	}
-	gate, err := e.db.Gate(ctx)
-	if err != nil {
+	if err := e.db.CheckAttemptClaim(ctx, e.config.OwnerInstanceID, a.ID); err != nil {
 		return err
 	}
-	if current.Phase != "preparing" || current.Stop != nil || current.OwnerInstanceID != e.config.OwnerInstanceID || task.Task.CurrentVersion != a.TaskVersion || gate.State != "open" || gate.ActiveAttemptID == nil || *gate.ActiveAttemptID != a.ID {
+	if current.Phase != "preparing" || current.Stop != nil || current.OwnerInstanceID != e.config.OwnerInstanceID || task.Task.CurrentVersion != a.TaskVersion {
 		return domain.Fail("attempt_active", "The local stage lost its current version, owner, clock or execution claim.")
 	}
 	now := domain.Now()
@@ -86,20 +85,67 @@ func (e *Engine) runWorkflowCheck(ctx context.Context, a domain.Attempt, step do
 		e.settleUnlaunched(a, primary("check_unavailable", "The local stage has no matching captured check definition."))
 		return
 	}
-	applicability, err := e.workflowApplicability(ctx, subject, definition.Scope, definition.CoveredConditionKeys, definition.DefinitionSHA256)
+	member, err := e.graphCheckContextMembership(ctx, a)
 	if err != nil {
-		e.settleUnlaunched(a, primary("evidence_unavailable", "The actual check subject basis cannot be verified."), err)
+		e.settleUnlaunched(a, primary("graph_input_stale", "The exact local check membership cannot be verified."), err)
+		return
+	}
+	var graphContext *graphCheckCommandContext
+	if member != nil {
+		final, err := e.graphFinalContextForDispatch(ctx, a, subject)
+		if err != nil {
+			e.settleUnlaunched(a, primary("graph_input_stale", "The local check has no exact current cumulative basis."), err)
+			return
+		}
+		graphContext = &graphCheckCommandContext{Final: final, EffectsKnown: true}
+	}
+	settlePreparation := func(failure *domain.PrimaryFailure, causes ...error) {
+		if graphContext == nil {
+			e.settleUnlaunched(a, failure, causes...)
+			return
+		}
+		if closeErr := graphContext.close(); closeErr != nil {
+			causes = append(causes, closeErr)
+		}
+		for _, cause := range causes {
+			if uncertainEvidence(cause) && (graphContext.Snapshot != nil || graphContext.Context != nil || !graphContext.EffectsKnown) {
+				graphContext.EffectsKnown = false
+			}
+		}
+		e.settleUnlaunchedEffects(a, failure, graphContext.EffectsKnown, graphContext.effectRefs(), true, causes...)
+	}
+	defer func() {
+		if closeErr := graphContext.close(); closeErr != nil {
+			e.fence(a.ID, "graph_context_close_uncertain", "The local graph context handle could not close cleanly; retain its exact ownership.")
+		}
+	}()
+	var final *graphFinalVerification
+	if graphContext != nil {
+		final = graphContext.Final
+	}
+	applicability, err := e.workflowApplicability(ctx, subject, definition.Scope, definition.CoveredConditionKeys, definition.DefinitionSHA256, final)
+	if err != nil {
+		settlePreparation(primary("evidence_unavailable", "The actual check subject basis cannot be verified."), err)
 		return
 	}
 	started := domain.Now()
 	receipt := domain.CheckReceipt{ID: domain.NewID(), WorkflowID: a.WorkflowID, StepID: a.StepID, AttemptID: a.ID, DefinitionID: definition.ID, DefinitionSHA256: definition.DefinitionSHA256, InputCandidateBinding: subject.Binding, InputResponseBinding: subject.Response, Applicability: applicability, StartedAt: &started, CreatedAt: started, Outcome: "unavailable", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}}
-	settlement := domain.Settlement{Outcome: "failed", NoProcessCreated: true, Cleanup: receipt.Cleanup, EvidenceStatus: "complete"}
+	settlement := domain.Settlement{Outcome: "failed", NoProcessCreated: true, Cleanup: receipt.Cleanup, EvidenceStatus: "complete", EffectsKnown: graphContext != nil}
 	if definition.Kind == "builtin" && definition.BuiltinID == "literal_document_replace/1" {
+		if graphContext != nil {
+			if err = e.guardGraphCheckPreparation(ctx, a); err != nil {
+				settlePreparation(primary("launch_blocked", "The local proof lost its exact graph authority."), err)
+				return
+			}
+		}
 		if err = e.guardLocalStage(ctx, a); err != nil {
-			e.settleUnlaunched(a, primary("launch_blocked", "The local proof lost its current execution authority."), err)
+			settlePreparation(primary("launch_blocked", "The local proof lost its current execution authority."), err)
 			return
 		}
 		proofErr := e.workflowDirectProof(ctx, subject, detail.OriginalText, detail.Version)
+		if final != nil {
+			proofErr = e.graphFinalDirectProof(ctx, final, detail.OriginalText, detail.Version)
+		}
 		if proofErr == nil {
 			receipt.BuiltinCompleted, receipt.Outcome = true, "passed"
 			settlement.BuiltinCompleted, settlement.UsableOutput, settlement.Outcome = true, true, "succeeded"
@@ -107,23 +153,53 @@ func (e *Engine) runWorkflowCheck(ctx context.Context, a domain.Attempt, step do
 			settlement.Failure = primary("check_unavailable", "The previously admitted exact document proof could not be reproduced from current retained evidence.")
 		}
 	} else if definition.Kind == "command" && definition.Command != nil {
-		snapshot, captureErr := e.handoffWorkflowSubject(ctx, a, subject)
+		var snapshot *workspace.Snapshot
+		var captureErr error
+		if graphContext == nil {
+			snapshot, captureErr = e.handoffWorkflowSubject(ctx, a, subject)
+		} else {
+			captureErr = e.prepareGraphCheckHandoff(ctx, a, subject, graphContext)
+			snapshot = graphContext.Snapshot
+			if captureErr == nil && (snapshot == nil || !graphContext.EffectsKnown) {
+				captureErr = domain.Fail("graph_materialization_unavailable", "The local graph check has no complete acknowledged receiving source.")
+			}
+		}
 		if captureErr != nil {
-			e.settleUnlaunched(a, primary("source_capture_blocked", "The actual check subject could not be materialized."), captureErr)
+			settlePreparation(primary("source_capture_blocked", "The actual check subject could not be materialized."), captureErr)
 			return
+		}
+		if graphContext != nil && final != nil {
+			if err = e.guardGraphCheckPreparation(ctx, a); err != nil {
+				settlePreparation(primary("launch_blocked", "Graph authority changed before local context copying."), err)
+				return
+			}
+			graphContext.Context, err = e.prepareGraphCheckContext(ctx, a, final)
+			if graphContext.Context != nil {
+				graphContext.EffectsKnown = graphContext.EffectsKnown && graphContext.Context.EffectsKnown && graphContext.Context.EvidenceStatus != "uncertain" && !uncertainEvidence(err)
+			}
+			if err != nil || graphContext.Context == nil {
+				settlePreparation(primary("graph_context_unavailable", "The complete final local-check context could not be prepared."), err)
+				return
+			}
 		}
 		if markerErr := e.verifyWorkflowMarkers(ctx, a, snapshot); markerErr != nil {
-			e.settleUnlaunched(a, primary("candidate_stale", "A retained check convention marker changed."), markerErr)
+			settlePreparation(primary("candidate_stale", "A retained check convention marker changed."), markerErr)
 			return
 		}
-		observed, commandErr := e.executeWorkflowCommand(ctx, a, snapshot, *definition.Command)
+		observed, commandErr := e.executeWorkflowCommand(ctx, a, snapshot, *definition.Command, graphContext)
+		if graphContext != nil && uncertainEvidence(commandErr) {
+			graphContext.EffectsKnown = false
+		}
 		if !observed.Started && observed.Settlement.Cleanup.State == "" {
-			e.settleUnlaunched(a, primary("launch_failed", "The captured local check could not be prepared."), commandErr)
+			settlePreparation(primary("launch_failed", "The captured local check could not be prepared."), commandErr)
 			return
 		}
 		settlement = observed.Settlement
 		receipt.ObservedExecutable = definition.Command
 		receipt.StartedAt, receipt.FinishedAt = &observed.StartedAt, &observed.FinishedAt
+		if graphContext != nil && !observed.Started {
+			receipt.StartedAt = nil
+		}
 		receipt.RootTerminal, receipt.InputComplete, receipt.OutputComplete, receipt.ExitCode, receipt.Cleanup = settlement.RootTerminal, settlement.InputComplete, observed.OutputComplete, settlement.ExitCode, settlement.Cleanup
 		if domain.ValidID(observed.Stdout.ID) {
 			receipt.StdoutArtifactID = &observed.Stdout.ID
@@ -150,8 +226,28 @@ func (e *Engine) runWorkflowCheck(ctx context.Context, a domain.Attempt, step do
 			receipt.SourceChanged, receipt.ResultingCandidateID = true, &candidate.ID
 		}
 	} else {
-		e.settleUnlaunched(a, primary("check_unavailable", "The captured check executor is unsupported."))
+		settlePreparation(primary("check_unavailable", "The captured check executor is unsupported."))
 		return
+	}
+	if graphContext != nil {
+		settlement.EffectsKnown = graphContext.EffectsKnown
+		if graphContext.Context != nil {
+			verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			_, contextErr := e.workspace.RecheckGraphContext(verifyCtx, graphContext.Context.Prepared)
+			cancel()
+			if contextErr != nil {
+				graphContext.EffectsKnown, settlement.EffectsKnown = false, false
+			}
+		}
+		if closeErr := graphContext.close(); closeErr != nil {
+			settlement.EffectsKnown = false
+		}
+		if !settlement.EffectsKnown {
+			receipt.Outcome, receipt.BuiltinCompleted = "unavailable", false
+			settlement.EvidenceStatus, settlement.Outcome = "uncertain", "blocked"
+			settlement.Failure = primary("graph_context_evidence_uncertain", "The local check's exact receiving or context effects remain unresolved.")
+			e.fence(a.ID, "graph_context_evidence_uncertain", "Preserve the local graph check claim independently of verified process cleanup.")
+		}
 	}
 	finished := domain.Now()
 	if receipt.FinishedAt == nil {
@@ -159,7 +255,10 @@ func (e *Engine) runWorkflowCheck(ctx context.Context, a domain.Attempt, step do
 	}
 	facts := domain.WorkflowStepFacts{StepID: step.ID, OwnerInstanceID: e.config.OwnerInstanceID, CandidateBinding: subject.Binding, ResponseBinding: subject.Response, Applicability: &applicability, Check: &receipt, Settlement: settlement}
 	facts.DirectProven = e.workflowDirectProof(ctx, subject, detail.OriginalText, detail.Version) == nil
-	e.finishWorkflowLocal(a, subject, facts)
+	if final != nil {
+		facts.CumulativeDirectProven = e.graphFinalDirectProof(ctx, final, detail.OriginalText, detail.Version) == nil
+	}
+	e.finishWorkflowLocal(a, subject, facts, graphContext)
 }
 
 func (e *Engine) retainLocalCandidate(ctx context.Context, a domain.Attempt, snapshot *workspace.Snapshot) (domain.Candidate, error) {
@@ -189,7 +288,25 @@ func (e *Engine) retainLocalCandidate(ctx context.Context, a domain.Attempt, sna
 	return saved, errors.Join(captureErr, readErr)
 }
 
-func (e *Engine) finishWorkflowLocal(a domain.Attempt, subject workflowSubject, facts domain.WorkflowStepFacts) {
+func (e *Engine) finishWorkflowLocal(a domain.Attempt, subject workflowSubject, facts domain.WorkflowStepFacts, graph ...*graphCheckCommandContext) {
+	if len(graph) > 1 {
+		e.fence(a.ID, "evidence_uncertain", "A local settlement received ambiguous graph context ownership.")
+		return
+	}
+	var graphContext *graphCheckCommandContext
+	if len(graph) == 1 {
+		graphContext = graph[0]
+	}
+	e.finishWorkflowLocalContext(a, subject, facts, graphContext, nil)
+}
+
+// Final delivery carries cumulative provenance without inventing a check
+// receiving workspace, materialization receipt or context-copy holder.
+func (e *Engine) finishWorkflowLocalFinal(a domain.Attempt, subject workflowSubject, facts domain.WorkflowStepFacts, final *graphFinalVerification) {
+	e.finishWorkflowLocalContext(a, subject, facts, nil, final)
+}
+
+func (e *Engine) finishWorkflowLocalContext(a domain.Attempt, subject workflowSubject, facts domain.WorkflowStepFacts, graphContext *graphCheckCommandContext, capturedFinal *graphFinalVerification) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	current, err := e.db.Attempt(ctx, a.ID)
@@ -208,14 +325,77 @@ func (e *Engine) finishWorkflowLocal(a domain.Attempt, subject workflowSubject, 
 		verifiedSubject = changed
 	}
 	facts.HasTaskDelta, facts.HasTaskIndexDelta = workflowChangeFlags(workspace.CompareManifests(verifiedSubject.RootManifest, verifiedSubject.Manifest))
-	var reuseIDs []string
-	facts.ReuseEvidenceUses, _, _, reuseIDs, err = e.currentWorkflowEvidence(ctx, verifiedSubject)
-	if err != nil {
-		e.fence(a.ID, "evidence_uncertain", "Current local evidence applicability cannot be verified.")
-		return
+	if graphContext != nil && graphContext.Final != nil {
+		capturedFinal = graphContext.Final
 	}
+	var final *graphFinalVerification
+	var graphErr, finalScopeErr error
+	if capturedFinal != nil && facts.ResultCandidateBinding == nil {
+		final, finalScopeErr = e.graphFinalContextForDispatch(ctx, a, subject)
+		if finalScopeErr == nil && (final == nil || final.BindingRef != capturedFinal.BindingRef || final.Binding.BindingSHA256 != capturedFinal.Binding.BindingSHA256) {
+			finalScopeErr = domain.Fail("graph_input_stale", "The local stage's cumulative final basis changed before settlement.")
+		}
+		if finalScopeErr == nil {
+			plan, planErr := e.graphFinalPlanFacts(ctx, final, final.version.OriginalText, final.version.Version)
+			if planErr != nil {
+				finalScopeErr = planErr
+			} else if plan == nil {
+				finalScopeErr = domain.Fail("evidence_unavailable", "The exact cumulative final proof could not be reconstructed.")
+			} else {
+				facts.CumulativeDirectProven = plan.CumulativeDirectProven
+			}
+		}
+		if finalScopeErr != nil {
+			final = nil
+			facts.CumulativeDirectProven = false
+			facts.ReuseEvidenceUses = nil
+			facts.Settlement.Outcome, facts.Settlement.EvidenceStatus = "blocked", "incomplete"
+			failure := domain.SafeError(finalScopeErr)
+			facts.Settlement.Failure = primary(failure.Code, failure.Message)
+			if facts.Check != nil {
+				facts.Check.Outcome, facts.Check.BuiltinCompleted = "unavailable", false
+			}
+			if uncertainEvidence(finalScopeErr) {
+				graphErr = finalScopeErr
+			}
+		}
+	}
+	if facts.ResultCandidateBinding != nil {
+		// A changed check result receives its own new capture below. Its input
+		// final is provenance and cannot supply direct proof for the new output.
+		facts.CumulativeDirectProven = false
+	}
+	var reuseIDs []string
+	if finalScopeErr == nil {
+		facts.ReuseEvidenceUses, _, _, reuseIDs, err = e.currentWorkflowEvidence(ctx, verifiedSubject, final)
+		if err != nil {
+			e.fence(a.ID, "evidence_uncertain", "Current local evidence applicability cannot be verified.")
+			return
+		}
+	}
+	if graphContext != nil && graphContext.Snapshot != nil {
+		output, outputErr := e.captureGraphStepOutput(ctx, graphStepOutputRequest{Attempt: a, Snapshot: graphContext.Snapshot, CandidateBinding: facts.ResultCandidateBinding})
+		facts.GraphOutput = output
+		graphErr = errors.Join(graphErr, outputErr)
+		if output != nil && output.FinalVerification != nil {
+			// Before terminal association there is no selected new-final context.
+			facts.ReuseEvidenceUses = nil
+			proven, directErr := e.graphCapturedFinalDirectProof(ctx, a, output)
+			facts.CumulativeDirectProven = proven
+			graphErr = errors.Join(graphErr, directErr)
+		}
+	}
+	suppliedProofs, suppliedProofErr := mergeGraphAcceptanceProofs(nil, facts.VerifiedArtifacts)
 	ids := append(subject.artifactIDs(), verifiedSubject.artifactIDs()...)
 	ids = append(ids, reuseIDs...)
+	for _, proof := range suppliedProofs {
+		ids = append(ids, proof.ArtifactID)
+	}
+	if graphContext != nil {
+		for _, ref := range graphContext.effectRefs() {
+			ids = append(ids, ref.ArtifactID)
+		}
+	}
 	if facts.Operation != nil {
 		for _, destination := range []*domain.DestinationEvidence{facts.Operation.BeforeDestination, facts.Operation.AfterDestination} {
 			if destination != nil {
@@ -268,8 +448,13 @@ func (e *Engine) finishWorkflowLocal(a domain.Attempt, subject workflowSubject, 
 		nonqualifying := facts.External.Outcome != "command_succeeded" && facts.External.Outcome != "command_failed"
 		streamErr = errors.Join(streamErr, appendStream(facts.External.StdoutArtifactID, nonqualifying), appendStream(facts.External.StderrArtifactID, nonqualifying))
 	}
-	facts.VerifiedArtifacts, err = e.verifyWorkflowArtifacts(ctx, ids...)
-	err = errors.Join(err, streamErr)
+	freshProofs, verifyErr := e.verifyWorkflowArtifacts(ctx, ids...)
+	combinedProofs := append(append([]domain.VerifiedResponse{}, freshProofs...), suppliedProofs...)
+	facts.VerifiedArtifacts, err = mergeGraphAcceptanceProofs(nil, combinedProofs)
+	if err == nil && final != nil {
+		facts.VerifiedArtifacts, err = mergeGraphAcceptanceProofs(facts.VerifiedArtifacts, final.VerifiedArtifacts)
+	}
+	err = errors.Join(err, verifyErr, suppliedProofErr, streamErr, graphErr)
 	if err != nil {
 		facts.Settlement.EvidenceStatus = "uncertain"
 		facts.Settlement.Failure = primary("evidence_corrupt", "Fresh local settlement evidence could not be verified.")

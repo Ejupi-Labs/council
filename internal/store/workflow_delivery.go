@@ -39,7 +39,7 @@ func (s *Store) deliveryControls(ctx context.Context, tx *sql.Tx, ownerID string
 	if e != nil {
 		return w, step, a, e
 	}
-	if ownerID != a.OwnerInstanceID || g.OwnerInstanceID != "" && g.OwnerInstanceID != ownerID || g.ActiveAttemptID == nil || *g.ActiveAttemptID != a.ID || a.WorkflowID != w.ID || a.StepID != step.ID || a.ExecutorKind != "local_application" || a.Stop != nil || a.PrimaryFailure != nil || a.Phase == "settled" || t.CurrentVersion != w.TaskVersion || w.SelectedCandidateID == nil || *w.SelectedCandidateID != op.CandidateBinding.CandidateID || w.Authority.Delivery.LocalMode != "apply_verified_local" || !reflect.DeepEqual(op.Scope, w.Authority.Delivery) {
+	if ownerID != a.OwnerInstanceID || g.OwnerInstanceID != "" && g.OwnerInstanceID != ownerID || !claimedAttempt(g.ActiveClaims, a.ID) || a.WorkflowID != w.ID || a.StepID != step.ID || a.ExecutorKind != "local_application" || a.Stop != nil || a.PrimaryFailure != nil || a.Phase == "settled" || t.CurrentVersion != w.TaskVersion || w.SelectedCandidateID == nil || *w.SelectedCandidateID != op.CandidateBinding.CandidateID || w.Authority.Delivery.LocalMode != "apply_verified_local" || !reflect.DeepEqual(op.Scope, w.Authority.Delivery) {
 		return w, step, a, domain.Fail("workflow_revision_conflict", "Current ownership, destination scope and controls do not permit this effect.")
 	}
 	if e = s.workflowAttemptControls(ctx, tx, a); e != nil {
@@ -54,7 +54,11 @@ func (s *Store) deliveryControls(ctx context.Context, tx *sql.Tx, ownerID string
 	}
 	return w, step, a, nil
 }
-func (s *Store) BeginDelivery(ctx context.Context, ownerID string, in domain.DeliveryOperation) error {
+func (s *Store) BeginDelivery(ctx context.Context, ownerID string, in domain.DeliveryOperation, graph ...*domain.GraphDeliveryFacts) error {
+	facts, err := graphDeliveryArgument(graph)
+	if err != nil {
+		return err
+	}
 	return s.executionWrite(ctx, func(tx *sql.Tx) error {
 		if !domain.ValidID(in.ID) || in.Status != "preparing" && in.Status != "ready" || in.LastEffectSequence != "0" || len(in.Conflicts) != 0 || in.ConflictCount != "0" || in.AfterDestination != nil {
 			return domain.Invalid("new bounded local delivery operation")
@@ -78,19 +82,26 @@ func (s *Store) BeginDelivery(ctx context.Context, ownerID string, in domain.Del
 		if _, e = tx.ExecContext(ctx, "INSERT INTO delivery_operations VALUES(?,?,?,?,?,?,1,?,NULL,NULL,?)", seq, in.ID, in.WorkflowID, in.StepID, in.AttemptID, in.CandidateBinding.CandidateID, in.Status, encode(in)); e != nil {
 			return storageError()
 		}
-		return nil
+		return s.graphDeliveryBegin(ctx, tx, ownerID, in, facts)
 	})
 }
-func (s *Store) ReadyDelivery(ctx context.Context, ownerID string, in domain.DeliveryOperation) error {
+func (s *Store) ReadyDelivery(ctx context.Context, ownerID string, in domain.DeliveryOperation, graph ...*domain.GraphDeliveryFacts) error {
+	facts, err := graphDeliveryArgument(graph)
+	if err != nil {
+		return err
+	}
 	return s.executionWrite(ctx, func(tx *sql.Tx) error {
 		old, err := storedWorkflowRecord[domain.DeliveryOperation](ctx, tx, "delivery_operations", in.ID)
 		if err != nil {
 			return err
 		}
-		if old.Status != "preparing" || old.PlanArtifactID != "" || old.LastEffectSequence != "0" || in.Status != "ready" || !domain.ValidID(in.PlanArtifactID) || in.BeforeDestination == nil || in.AfterDestination != nil || in.LastEffectSequence != "0" || in.WorkflowID != old.WorkflowID || in.StepID != old.StepID || in.AttemptID != old.AttemptID || in.RequestID != old.RequestID || in.CandidateBinding != old.CandidateBinding || in.AuthoritySHA256 != old.AuthoritySHA256 || !reflect.DeepEqual(in.Scope, old.Scope) || !reflect.DeepEqual(in.EvidenceUses, old.EvidenceUses) {
+		if old.Status != "preparing" || old.PlanArtifactID != "" || old.LastEffectSequence != "0" || in.Status != "ready" || !domain.ValidID(in.PlanArtifactID) || in.BeforeDestination == nil || in.AfterDestination != nil || in.LastEffectSequence != "0" || in.WorkflowID != old.WorkflowID || in.StepID != old.StepID || in.AttemptID != old.AttemptID || in.RequestID != old.RequestID || in.CandidateBinding != old.CandidateBinding || !reflect.DeepEqual(in.GraphDeliveryRef, old.GraphDeliveryRef) || in.AuthoritySHA256 != old.AuthoritySHA256 || !reflect.DeepEqual(in.Scope, old.Scope) || !reflect.DeepEqual(in.EvidenceUses, old.EvidenceUses) {
 			return domain.Fail("effect_uncertain", "The operation cannot replace or repeat its immutable private preparation.")
 		}
 		if _, _, _, err = s.deliveryControls(ctx, tx, ownerID, old); err != nil {
+			return err
+		}
+		if err = s.graphDeliveryContinue(ctx, tx, ownerID, in, facts); err != nil {
 			return err
 		}
 		for _, ref := range []struct{ id, kind string }{{in.PlanArtifactID, "delivery_plan"}, {in.BeforeDestination.ManifestArtifactID, "destination_manifest"}} {
@@ -121,6 +132,9 @@ func (s *Store) PermitDeliveryEffect(ctx context.Context, f domain.DeliveryPermi
 		}
 		w, _, _, e := s.deliveryControls(ctx, tx, f.OwnerInstanceID, op)
 		if e != nil {
+			return e
+		}
+		if e = s.graphDeliveryContinue(ctx, tx, f.OwnerInstanceID, op, f.Graph); e != nil {
 			return e
 		}
 		t, e := s.task(ctx, tx, w.TaskID)
@@ -238,8 +252,18 @@ func (s *Store) finishDelivery(ctx context.Context, tx *sql.Tx, w domain.Workflo
 		incidentID := *old.IncidentID
 		in.IncidentID = &incidentID
 	}
-	if old.PlanArtifactID != in.PlanArtifactID || old.WorkflowID != w.ID || old.StepID != step.ID || old.AttemptID != a.ID || old.CandidateBinding != in.CandidateBinding || old.AuthoritySHA256 != in.AuthoritySHA256 || !reflect.DeepEqual(old.Scope, in.Scope) || !reflect.DeepEqual(old.EvidenceUses, in.EvidenceUses) {
+	if old.PlanArtifactID != in.PlanArtifactID || old.WorkflowID != w.ID || old.StepID != step.ID || old.AttemptID != a.ID || old.CandidateBinding != in.CandidateBinding || !reflect.DeepEqual(old.GraphDeliveryRef, in.GraphDeliveryRef) || old.AuthoritySHA256 != in.AuthoritySHA256 || !reflect.DeepEqual(old.Scope, in.Scope) || !reflect.DeepEqual(old.EvidenceUses, in.EvidenceUses) {
 		return evidenceUnavailable()
+	}
+	member, e := s.graphMembership(ctx, tx, w.TaskID)
+	if e != nil {
+		return e
+	}
+	if member != nil && old.GraphDeliveryRef == nil {
+		return evidenceUnavailable()
+	}
+	if _, e = s.loadGraphDelivery(ctx, tx, old); e != nil {
+		return e
 	}
 	var active sql.NullString
 	if e = tx.QueryRowContext(ctx, "SELECT active_effect_id FROM delivery_operations WHERE id=?", in.ID).Scan(&active); e != nil {

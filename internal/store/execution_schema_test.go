@@ -43,9 +43,10 @@ func TestExecutionMigrationRetainsFoundationReceipt(t *testing.T) {
 		t.Fatal("foundation receipt bytes changed", e)
 	}
 	var version int
-	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 5 {
+	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 6 {
 		t.Fatal(version, e)
 	}
+	assertNoMigratedGraphAuthority(t, s)
 	r, e := s.Replay(context.Background(), id, "policy.set", "original-input")
 	if e != nil || r == nil || r.Envelope.Data.(map[string]any)["revision"] != "9007199254740993" {
 		t.Fatal(r, e)

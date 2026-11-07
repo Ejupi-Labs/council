@@ -158,6 +158,43 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: .85rem; }
 
 .workflow-panel { margin-block: 20px; border-block: 1px solid var(--line); padding-block: 16px; min-width: 0; }
 .workflow-panel h4 { margin-top: 0; }
+.graph-entry { margin-block: 16px; }
+.graphs-panel { margin-block: 24px; min-width: 0; scroll-margin-top: 24px; }
+.graphs-panel .heading-between { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.graphs-panel h3 { margin-block: 24px 16px; }
+.graphs-panel h4 { margin-block: 0 12px; }
+.graphs-panel h5 { font-size: .85rem; }
+.graphs-panel label { display: block; margin-block: 16px 8px; }
+.graphs-panel select, .graphs-panel input, .graphs-panel textarea { width: 100%; min-width: 0; max-width: 100%; }
+.graphs-panel textarea { min-height: 120px; }
+.graph-options { margin-block: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.graphs-panel summary { cursor: pointer; color: var(--lilac); min-height: 44px; display: flex; align-items: center; }
+.graph-editor-nodes { display: grid; gap: 16px; margin-block: 24px 16px; }
+.graph-editor-node, .graph-node-card, .graph-pending-item { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 20px; background: var(--night); }
+.graph-editor-node > .heading-between > span { font-family: ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; font-size: .8rem; }
+.graph-editor-node details { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 8px; }
+.graph-editor-node p, .graph-node-card p, .graph-pending-item p { font-size: .82rem; color: var(--muted); overflow-wrap: anywhere; }
+.graph-scope-preview { border-left: 3px solid var(--lilac); padding: 12px 16px; margin-block: 16px; background: var(--night); font-size: .85rem; overflow-wrap: anywhere; }
+.graph-edges { padding-left: 20px; font-size: .82rem; overflow-wrap: anywhere; }
+.graph-edges li { padding-block: 4px; }
+.graph-edges button { margin-left: 8px; }
+.graph-list-heading, .graph-pending-section, .graph-overview { border-top: 1px solid var(--line); padding-top: 20px; margin-top: 24px; }
+.graph-node-list, .graph-pending-list { list-style: none; padding: 0; display: grid; gap: 16px; margin-block: 24px; }
+.graph-list { grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
+.graph-list-button { overflow-wrap: anywhere; min-width: 0; }
+.graph-list-button strong { font-size: .9rem; }
+.graph-definition pre, .graph-pending-item pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .85rem; line-height: 1.6; }
+#graph-control-pending, #graph-ledger-list { min-inline-size: 0; overflow-wrap: anywhere; }
+#graph-control-pending pre { min-inline-size: 0; max-inline-size: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.graph-blockers { color: var(--rose); font-size: .85rem; overflow-wrap: anywhere; }
+.graph-rebind-choice { align-items: flex-start; }
+.graph-rebind-choice span, .graph-rebind-receipt { min-width: 0; overflow-wrap: anywhere; }
+.graph-rebind-receipt button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.graphs-panel .facts { margin-block: 20px; }
+#graph-input-inspector { min-inline-size: 0; overflow-wrap: anywhere; }
+#graph-input-inspector button { max-inline-size: 100%; min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; }
+#graph-input-artifact { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .graphs-panel .option-grid, .graphs-panel .facts { grid-template-columns: minmax(0, 1fr); } .graph-editor-node, .graph-node-card, .graph-pending-item { padding: 16px 12px; } .graph-entry { flex-direction: column; align-items: stretch; } .graph-entry button { width: 100%; } .graph-edges button { display: block; margin-left: 0; } }
 .workflow-panel .facts { margin-block: 16px; }
 .workflow-panel .routing-evidence-list > li { padding-block: 12px; }
 .workflow-panel .routing-evidence-list p { overflow-wrap: anywhere; }

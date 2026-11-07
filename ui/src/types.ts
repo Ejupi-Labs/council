@@ -1,3 +1,5 @@
+import type { GraphBudgetRef, GraphClaimView, GraphRef } from './graph-types.js';
+
 export type Revision = string;
 export interface Policy {
   mode: 'autonomous' | 'supervised';
@@ -24,7 +26,7 @@ export interface ProjectObservation {
   commit: string | null;
   observedAt: string;
 }
-export interface BoundedError { code: string; message: string; currentRevision?: Revision }
+export interface BoundedError { code: string; message: string; currentRevision?: Revision; graphRef?: GraphRef; graphBudgetRef?: GraphBudgetRef }
 export interface ProjectDetail {
   project: Project;
   observation: ProjectObservation | null;
@@ -54,8 +56,9 @@ export interface Meta {
   capabilities?: string[];
   executionContract?: string;
   workflowContract?: string;
+  graphContract?: string;
   maintenanceContract?: string;
-  capacity?: { resourceId?: string; connectionId?: string; limit: number; activeAttemptId: string | null };
+  capacity?: { resourceId?: string; connectionId?: string; limit: number; activeAttemptId: string | null; occupiedSlots?: '0' | '1' | '2'; activeClaims?: GraphClaimView[] };
   admission?: { state: string; incidentId: string | null; incident?: { code: string; message: string } };
 }
 export interface Receipt { requestId: string; operation: string; committedAt: string }

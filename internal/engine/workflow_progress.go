@@ -12,6 +12,7 @@ import (
 )
 
 type workflowProgress struct {
+	final                                    *graphFinalVerification
 	subject                                  workflowSubject
 	detail                                   domain.TaskDetail
 	version                                  domain.TaskVersionDetail
@@ -39,7 +40,7 @@ func workflowUse(subject workflowSubject, kind, id string, applicability domain.
 	return use
 }
 
-func (e *Engine) currentWorkflowEvidence(ctx context.Context, subject workflowSubject) ([]domain.EvidenceUse, *domain.ReviewRecord, []domain.CheckReceipt, []string, error) {
+func (e *Engine) currentWorkflowEvidence(ctx context.Context, subject workflowSubject, final ...*graphFinalVerification) ([]domain.EvidenceUse, *domain.ReviewRecord, []domain.CheckReceipt, []string, error) {
 	uses, checks, ids := []domain.EvidenceUse{}, []domain.CheckReceipt{}, []string{}
 	var review *domain.ReviewRecord
 	if len(subject.Workflow.EvidenceUses) > domain.MaxWorkflowChecks+1 {
@@ -47,7 +48,7 @@ func (e *Engine) currentWorkflowEvidence(ctx context.Context, subject workflowSu
 	}
 	for _, use := range subject.Workflow.EvidenceUses {
 		scope := domain.CheckScope{Kind: use.Applicability.ScopeKind, Paths: use.Applicability.Paths}
-		current, err := e.workflowApplicability(ctx, subject, scope, use.Applicability.ConditionKeys, use.Applicability.DefinitionSHA256)
+		current, err := e.workflowApplicability(ctx, subject, scope, use.Applicability.ConditionKeys, use.Applicability.DefinitionSHA256, final...)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -111,7 +112,15 @@ func (e *Engine) inspectWorkflowProgress(ctx context.Context, taskID string, w d
 	}
 	out.hasDelta, out.hasIndexDelta = workflowChangeFlags(workspace.CompareManifests(out.subject.RootManifest, out.subject.Manifest))
 	out.direct = e.workflowDirectProof(ctx, out.subject, out.version.OriginalText, out.version.Version) == nil
-	uses, review, checks, ids, err := e.currentWorkflowEvidence(ctx, out.subject)
+	out.final, err = e.loadGraphFinalVerification(ctx, out.subject)
+	if err != nil {
+		return out, err
+	}
+	finalPlan, err := e.graphFinalPlanFacts(ctx, out.final, out.version.OriginalText, out.version.Version)
+	if err != nil {
+		return out, err
+	}
+	uses, review, checks, ids, err := e.currentWorkflowEvidence(ctx, out.subject, out.final)
 	if err != nil {
 		return out, err
 	}
@@ -123,7 +132,7 @@ func (e *Engine) inspectWorkflowProgress(ctx context.Context, taskID string, w d
 			out.checkUses = append(out.checkUses, use)
 		}
 	}
-	input := workflowpolicy.PlanInput{Authority: w.Authority, ResponseOnly: out.version.Version.Acceptance.Deliverable == "response_only", HasSubject: true, HasDelta: out.hasDelta, HasIndexDelta: out.hasIndexDelta, DirectProven: out.direct, Review: out.review, Checks: checks, BlockingFindingIDs: []string{}, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
+	input := workflowpolicy.PlanInput{Authority: w.Authority, ResponseOnly: out.version.Version.Acceptance.Deliverable == "response_only", HasSubject: true, HasDelta: out.hasDelta, HasIndexDelta: out.hasIndexDelta, DirectProven: out.direct, GraphFinal: finalPlan, Review: out.review, Checks: checks, BlockingFindingIDs: []string{}, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
 	cursor := ""
 	for {
 		page, listErr := e.db.WorkflowFindings(ctx, taskID, domain.WorkflowSelector{WorkflowID: w.ID}, 100, cursor)
@@ -233,7 +242,7 @@ func (e *Engine) inspectWorkflowProgress(ctx context.Context, taskID string, w d
 	return out, nil
 }
 
-func (e *Engine) workflowAdmissionFacts(ctx context.Context, progress workflowProgress, previousStepID string) (domain.WorkflowStepAdmissionFacts, error) {
+func (e *Engine) workflowAdmissionFacts(ctx context.Context, progress workflowProgress, previousStepID string, explicit ...*domain.GraphAdvanceInput) (domain.WorkflowStepAdmissionFacts, error) {
 	w, decision := progress.subject.Workflow, progress.decision
 	cycle := w.CorrectionCyclesUsed
 	if decision.Role == "correction" {
@@ -256,6 +265,11 @@ func (e *Engine) workflowAdmissionFacts(ctx context.Context, progress workflowPr
 			return facts, err
 		}
 	}
+	graphFacts, err := e.graphWorkflowStageFacts(ctx, progress, previousStepID, explicit...)
+	if err != nil {
+		return facts, err
+	}
+	facts.Graph = graphFacts
 	return facts, nil
 }
 
@@ -349,6 +363,22 @@ func (e *Engine) acceptCurrentWorkflow(ctx context.Context, progress workflowPro
 	verified, err := e.verifyWorkflowArtifacts(ctx, ids...)
 	if err != nil {
 		return e.failure(requestID, domain.Fail("evidence_unavailable", "Fresh acceptance evidence could not be verified."))
+	}
+	graphProofs, err := e.graphAcceptanceArtifactProofs(ctx, progress.subject)
+	if err != nil {
+		return e.failure(requestID, domain.Fail("evidence_unavailable", "The exact selected graph output and input could not be verified freshly for acknowledgement."))
+	}
+	finalProofs, err := e.graphFinalAcceptanceProofs(ctx, progress.subject, progress.operationID)
+	if err != nil {
+		return e.failure(requestID, domain.Fail("evidence_unavailable", "The current cumulative final and recorded graph delivery could not be verified freshly for acknowledgement."))
+	}
+	graphProofs, err = mergeGraphAcceptanceProofs(graphProofs, finalProofs)
+	if err != nil {
+		return e.failure(requestID, domain.Fail("evidence_unavailable", "The complete cumulative acknowledgement proof set exceeds its bound."))
+	}
+	verified, err = mergeGraphAcceptanceProofs(verified, graphProofs)
+	if err != nil {
+		return e.failure(requestID, domain.Fail("evidence_unavailable", "The complete acceptance proof set could not be retained within its bound."))
 	}
 	authority, authorityErr := domain.WorkflowAuthoritySHA256(w.Authority)
 	if authorityErr != nil {

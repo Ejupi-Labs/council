@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
+	"github.com/Ejupi-Labs/council/v2/internal/workspace"
+	"time"
 )
 
 func (e *Engine) runWorkflowExternal(ctx context.Context, a domain.Attempt, step domain.WorkflowStep, subject workflowSubject) {
@@ -16,14 +18,42 @@ func (e *Engine) runWorkflowExternal(ctx context.Context, a domain.Attempt, step
 		e.settleUnlaunched(a, primary("launch_blocked", "The explicit external action lost current execution authority."), err)
 		return
 	}
-	snapshot, err := e.handoffWorkflowSubject(ctx, a, subject)
+	graphContext, err := e.prepareGraphExternalContext(ctx, a, subject)
+	settlePreparation := func(failure *domain.PrimaryFailure, causes ...error) {
+		if graphContext == nil {
+			e.settleUnlaunched(a, failure, causes...)
+			return
+		}
+		if closeErr := graphContext.close(); closeErr != nil {
+			causes = append(causes, closeErr)
+		}
+		e.settleUnlaunchedEffects(a, failure, graphContext.EffectsKnown, graphContext.effectRefs(), true, causes...)
+	}
+	if graphContext != nil {
+		defer func() {
+			if err := graphContext.close(); err != nil {
+				e.fence(a.ID, "graph_context_close_uncertain", "The graph publisher's private context could not close cleanly; preserve its exact ownership.")
+			}
+		}()
+	}
 	if err != nil {
-		e.settleUnlaunched(a, primary("source_capture_blocked", "The actual external-action subject could not be materialized."), err)
+		problem := domain.SafeError(err)
+		settlePreparation(primary(problem.Code, problem.Message), err)
+		return
+	}
+	var snapshot *workspace.Snapshot
+	if graphContext == nil {
+		snapshot, err = e.handoffWorkflowSubject(ctx, a, subject)
+	} else {
+		snapshot = graphContext.Snapshot
+	}
+	if err != nil || snapshot == nil {
+		settlePreparation(primary("source_capture_blocked", "The actual external-action subject could not be materialized."), err)
 		return
 	}
 	program, err := workflowProgram(action.Command.Executable)
 	if err != nil {
-		e.settleUnlaunched(a, primary("capability_unavailable", "The explicitly declared native program is unavailable."))
+		settlePreparation(primary("capability_unavailable", "The explicitly declared native program is unavailable."))
 		return
 	}
 	timeout := 300
@@ -31,9 +61,9 @@ func (e *Engine) runWorkflowExternal(ctx context.Context, a domain.Attempt, step
 		timeout = *action.Command.TimeoutSeconds
 	}
 	command := domain.CommandDefinition{Executable: program.Executable, PhysicalIdentity: program.PhysicalIdentity, Arguments: append([]string{}, action.Command.Arguments...), RelativeWorkingDirectory: ".", TimeoutSeconds: timeout, SuccessExitCodes: []int{0}}
-	observed, commandErr := e.executeWorkflowCommand(ctx, a, snapshot, command)
+	observed, commandErr := e.executeWorkflowCommand(ctx, a, snapshot, command, graphContext)
 	if !observed.Started && observed.Settlement.Cleanup.State == "" {
-		e.settleUnlaunched(a, primary("launch_failed", "The explicit external action could not be prepared."), commandErr)
+		settlePreparation(primary("launch_failed", "The explicit external action could not be prepared."), commandErr)
 		return
 	}
 	record := domain.ExternalDeliveryRecord{WorkflowID: a.WorkflowID, StepID: step.ID, AttemptID: a.ID, Action: *action, Command: command, Outcome: "unavailable", CreatedAt: domain.Now()}
@@ -76,6 +106,26 @@ func (e *Engine) runWorkflowExternal(ctx context.Context, a domain.Attempt, step
 			settlement.Failure = primary("candidate_stale", "The external command changed its managed source or index after verification. Retain the actual command outcome and inspect its new candidate before acceptance.")
 		}
 	}
+	if graphContext != nil {
+		settlement.EffectsKnown = graphContext.EffectsKnown && !uncertainEvidence(commandErr)
+		if graphContext.Context != nil {
+			verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			_, contextErr := e.workspace.RecheckGraphContext(verifyCtx, graphContext.Context.Prepared)
+			cancel()
+			if contextErr != nil {
+				graphContext.EffectsKnown, settlement.EffectsKnown = false, false
+			}
+		}
+		if closeErr := graphContext.close(); closeErr != nil {
+			settlement.EffectsKnown = false
+		}
+		if !settlement.EffectsKnown {
+			record.Outcome = "uncertain"
+			settlement.EvidenceStatus, settlement.Outcome = "uncertain", "blocked"
+			settlement.Failure = primary("graph_context_evidence_uncertain", "The publisher's exact receiving or context effects remain unresolved.")
+			e.fence(a.ID, "graph_context_evidence_uncertain", "Retain the exact graph publisher claim independently of process cleanup.")
+		}
+	}
 	facts := domain.WorkflowStepFacts{StepID: step.ID, OwnerInstanceID: e.config.OwnerInstanceID, CandidateBinding: subject.Binding, ResponseBinding: subject.Response, External: &record, Settlement: settlement}
-	e.finishWorkflowLocal(a, subject, facts)
+	e.finishWorkflowLocal(a, subject, facts, graphContext)
 }

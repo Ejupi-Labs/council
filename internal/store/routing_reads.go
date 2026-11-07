@@ -81,6 +81,13 @@ func (s *Store) BudgetLedger(ctx context.Context, taskID string, limit int, curs
 	if _, err := s.task(ctx, s.db, taskID); err != nil {
 		return domain.Page[domain.BudgetLedgerEntry]{}, err
 	}
+	ref, e := s.graphMembership(ctx, s.db, taskID)
+	if e != nil {
+		return domain.Page[domain.BudgetLedgerEntry]{}, e
+	}
+	if ref != nil {
+		return domain.Page[domain.BudgetLedgerEntry]{}, graphBudgetError(ref)
+	}
 	return routingHistoryPage[domain.BudgetLedgerEntry](ctx, s.db, "budget_ledger", taskID, "task_id", limit, cursor)
 }
 

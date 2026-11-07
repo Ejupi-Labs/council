@@ -45,9 +45,14 @@ test('explicit guidance retargets a queued version without rerouting its histori
   const f = await fixture(); let owner;
   try {
     owner = await f.start(); const page = await open(f, owner);
-    await page.locator('#task-fake-scenario').selectOption('slow'); await page.locator('#task-text').fill('Occupy the shared managed slot with a Codex fixture.');
+    // Distinct Codex/Claude contexts may overlap under the two-slot pool; this
+    // queued-version case must occupy the exact captured Claude context.
+    await page.locator('#task-harness').selectOption('claude-code');
+    await page.locator('#task-fake-scenario').selectOption('slow'); await page.locator('#task-text').fill('Occupy the captured Claude context with a slow fixture.');
     const firstReply = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/tasks');
     await page.locator('#start-task').click(); const first = (await (await firstReply).json()).data;
+    assert.equal(first.attempt.connectionId, 'claude-native');
+    assert.equal(first.attempt.resolvedTarget.contextId, 'claude-native');
     await page.locator('#attempt-status').filter({ hasText: 'running' }).waitFor();
     await page.locator('#task-fake-scenario').selectOption('response'); await page.locator('#task-harness').selectOption('claude-code'); await page.locator('#task-text').fill('Retain the queued Claude version until explicit new guidance.');
     const secondReply = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/tasks');

@@ -1,5 +1,6 @@
-import { addFact, api, ApiError, element, errorMessage, feedback, readSession, requestId, timeLabel, writeSession } from './api.js';
+import { addFact, api, ApiError, element, errorMessage, feedback, readSession, requestId, supportsGraphCapacity, timeLabel, writeSession } from './api.js';
 import { usageLabel } from './native-observations.js';
+import type { GraphBudgetView } from './graph-types.js';
 import type { Admission, TaskDetail } from './execution-types.js';
 import type { Page } from './types.js';
 import type { BudgetAmendmentResult, BudgetLedgerEntry, CapacityReport, CapacitySubject, CapacityView, ContextView, DeclaredAccount, ReportDimension, ReportRef, RoutingDecision, RoutingOptions, RoutingPolicy, TargetProfile, TaskBudgetView, TaskRoutingView, UsagePage } from './routing-types.js';
@@ -54,6 +55,7 @@ export class RoutingView {
   private detail: TaskDetail | null = null;
   private taskRouting: TaskRoutingView | null = null;
   private taskBudget: TaskBudgetView | null = null;
+  private graphBudget: GraphBudgetView | null = null;
   private budgetEditorTaskId: string | null = null;
   private cursors: Record<string, string | null> = {};
   private busy = new Set<string>();
@@ -231,6 +233,8 @@ export class RoutingView {
       const { data } = await api<CapacityView>('/routing/capacity?' + subjectQuery(subject));
       if (generation !== this.capacityGeneration || subjectKey(subject) !== value('routing-subject')) return;
       if (subjectKey(data.subject) !== subjectKey(subject)) throw new ApiError('invalid_response', 'The capacity response does not identify the selected subject.');
+      const managed = data.managedOccupancy;
+      if (!managed || !supportsGraphCapacity({ resourceId: managed.resourceId, limit: managed.limit, activeAttemptId: managed.activeAttemptId, occupiedSlots: managed.occupiedSlots, activeClaims: managed.activeClaims })) throw new ApiError('invalid_response', 'The current managed claims are incomplete or inconsistent; occupancy is unknown.');
       this.capacity = data; this.renderCapacity();
     } catch (error) { if (generation === this.capacityGeneration) feedback('routing-report-status', errorMessage(error) + ' Refresh before recording a new observation.', 'error'); }
     finally { if (generation === this.capacityGeneration) this.controls(); }
@@ -249,7 +253,10 @@ export class RoutingView {
     const evidenceButtons = element('routing-negative-evidence'); evidenceButtons.replaceChildren();
     for (const ref of new Map(refs.map(ref => [ref.reportId, ref])).values()) { const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = 'Read exact blocking report ' + ref.reportId.slice(0, 8); button.addEventListener('click', () => { void this.readReport(ref); }); evidenceButtons.append(button); }
     addFact(facts, 'Reported eligibility', (capacity.reportEligibility.permitted ? 'Permitted under report policy' : 'Blocked under report policy') + ' · ' + capacity.reportEligibility.policy + ' · occupancy positive ' + capacity.reportEligibility.positiveCoverage.occupancy + ' · allowance positive ' + capacity.reportEligibility.positiveCoverage.allowance + ' · ' + capacity.reportEligibility.reasonCodes.join(', ') + '. Authentication and model access remain unknown.');
-    addFact(facts, 'Council managed occupancy', capacity.managedOccupancy.activeAttemptId ? 'One worker claimed by ' + capacity.managedOccupancy.activeAttemptId + ' · context ' + (capacity.managedOccupancy.activeContextId || 'unknown') + ' · applies to this subject ' + capacity.managedOccupancy.claimsSubject : 'No Council worker claim. External idleness is not established.');
+    const managed = capacity.managedOccupancy;
+    addFact(facts, 'Council managed occupancy', 'Council occupied slots: ' + managed.occupiedSlots + ' · pool limit ' + managed.limit + '. '
+      + managed.activeClaims.map(claim => 'Slot ' + claim.slot + ': ' + claim.attemptId + ' · ' + claim.executorKind + (claim.contextId ? ' · context ' + claim.contextId : ' · no native context') + (claim.legacyBarrier ? ' · legacy barrier reserves the whole pool' : '')).join('; ')
+      + ' · applies to this subject ' + managed.claimsSubject + '. External idleness is not established.');
     const corrections = [{ value: '', label: 'New observation (no correction)' }, ...Array.from(new Map(refs.map(ref => [ref.reportId, ref])).values()).map(ref => ({ value: ref.reportId, label: ref.reportId + ' · ' + ref.state + ' · origin ' + subjectKey(ref.subject) }))];
     const localCorrection = this.editors['routing-report-correction'];
     if (typeof localCorrection === 'string' && /^[a-f0-9]{32}$/.test(localCorrection) && !corrections.some(option => option.value === localCorrection)) corrections.push({ value: localCorrection, label: localCorrection + ' · retained local choice; not a current blocking reference' });
@@ -354,7 +361,7 @@ export class RoutingView {
 
   requiresAdoption(taskId: string): boolean { return this.detail?.task.id === taskId && this.taskRouting?.adoptionRequired === true; }
 
-  clearTask(): void { this.budgetEditorTaskId = null; this.detail = null; this.taskRouting = null; this.taskBudget = null; this.taskGeneration++; this.historyGeneration++; this.cursors = {}; for (const id of ['task-route-facts', 'task-budget-facts', 'task-decisions-list', 'task-ledger-list', 'task-usage-list', 'task-usage-summary']) element(id).replaceChildren(); this.controls(); }
+  clearTask(): void { this.budgetEditorTaskId = null; this.detail = null; this.taskRouting = null; this.taskBudget = null; this.graphBudget = null; this.taskGeneration++; this.historyGeneration++; this.cursors = {}; for (const id of ['task-route-facts', 'task-budget-facts', 'task-decisions-list', 'task-ledger-list', 'task-usage-list', 'task-usage-summary']) element(id).replaceChildren(); this.controls(); }
 
   async setTask(detail: TaskDetail): Promise<void> {
     if (!this.ready) return;
@@ -367,6 +374,18 @@ export class RoutingView {
       if (generation !== this.taskGeneration || this.detail?.task.id !== detail.task.id) return;
       if (routing.data.authority && routing.data.authority.taskVersion !== detail.task.currentVersion) throw new ApiError('revision_conflict', 'The task version changed during this routing read. Refresh detail; local input is retained.');
       if (routing.data.authority && routing.data.authority.taskId !== detail.task.id || routing.data.latestDecision && routing.data.latestDecision.taskId !== detail.task.id || budget.data.budget && budget.data.budget.taskId !== detail.task.id) throw new ApiError('invalid_response', 'The routing/budget observation does not identify this selected task.');
+      const graphRef = detail.task.graphRef;
+      if (graphRef) {
+        const ref = budget.data.graphBudgetRef;
+        if (budget.data.budget !== null || budget.data.adoptionRequired !== false || !ref || ref.graphId !== graphRef.graphId || ref.budgetOwnerTaskId !== graphRef.rootTaskId)
+          throw new ApiError('invalid_response', 'The graph member must identify its shared budget, with no child budget or standalone adoption.');
+        const { data: shared } = await api<GraphBudgetView>('/graphs/' + ref.graphId + '/budget');
+        if (generation !== this.taskGeneration || this.detail?.task.id !== detail.task.id || this.detail.task.currentVersion !== detail.task.currentVersion) return;
+        if (shared.graphId !== graphRef.graphId || shared.budgetOwnerTaskId !== graphRef.rootTaskId || shared.budget?.taskId !== graphRef.rootTaskId
+          || graphRef.kind === 'node' && !shared.nodeConsumption.some(item => item.nodeId === graphRef.nodeId && item.taskId === detail.task.id))
+          throw new ApiError('invalid_response', 'The shared graph budget does not identify this member and its actual root owner.');
+        this.graphBudget = shared;
+      } else if (budget.data.graphBudgetRef) throw new ApiError('invalid_response', 'A standalone task cannot silently adopt a graph budget reference.');
       this.taskRouting = routing.data; this.taskBudget = budget.data; this.renderTask(); this.onTaskObserved();
     } catch (error) { if (generation === this.taskGeneration) feedback('task-routing-status', errorMessage(error) + ' Routing/budget observations are unavailable; prior snapshots are not current authority.', 'error'); }
     finally { if (generation === this.taskGeneration) this.controls(); }
@@ -376,17 +395,27 @@ export class RoutingView {
     const routing = this.taskRouting; const budget = this.taskBudget?.budget; const facts = element('task-route-facts'); facts.replaceChildren();
     addFact(facts, 'Task identity', this.detail!.task.id);
     if (routing?.latestDecision) { const decision = routing.latestDecision; addFact(facts, 'Admitted target', targetLabel(decision)); addFact(facts, 'Immutable route decision', decision.id + ' · attempt ' + decision.attemptId + ' · task version ' + decision.taskVersion + ' · ' + decision.kind); addFact(facts, 'Declared account association', decision.selectedTarget.declaredAccountAssociation ? decision.selectedTarget.declaredAccountAssociation.label + ' · actual login unknown' : 'None · actual login unknown'); addFact(facts, 'Captured uncertainty', decision.uncertainties.join('; ') || 'Native access, actual model, allowance and charges remain unknown unless separately observed.'); }
-    else addFact(facts, 'Routing authority', routing?.adoptionRequired ? 'Legacy task · explicit adoption required for NEW execution. Read, Stop, acceptance and exact old replay remain available.' : 'No admitted routing decision');
+    else addFact(facts, 'Routing authority', this.detail!.task.graphRef
+      ? 'Task-group member · no native routing decision has been admitted. Inspect the current group for dependencies and admission.'
+      : routing?.adoptionRequired ? 'Legacy task · explicit adoption required for NEW execution. Read, Stop, acceptance and exact old replay remain available.' : 'No admitted routing decision');
     if (routing?.authority) { const authority = routing.authority; addFact(facts, 'Captured suitability', authority.suitabilityAssessment.classification + ' · ' + authority.suitabilityAssessment.source); addFact(facts, 'Captured routing policy', authority.policySnapshot.revision + ' · ' + timeLabel(authority.capturedAt)); addFact(facts, 'Automatic continuation', (authority.optionSnapshot.continuation?.maxAutomaticAdmissions ?? authority.policySnapshot.continuation.maxAutomaticAdmissions) === '0' ? 'OFF' : JSON.stringify(authority.optionSnapshot.continuation ?? authority.policySnapshot.continuation)); }
     const bf = element('task-budget-facts'); bf.replaceChildren();
-    if (!budget) addFact(bf, 'Budget', 'Not adopted · no new execution authority; this is not an exhausted zero.');
+    if (this.detail!.task.graphRef && this.graphBudget) {
+      const shared = this.graphBudget, root = shared.budget;
+      addFact(bf, 'Shared task-group budget', shared.graphId + ' · actual owner ' + shared.budgetOwnerTaskId);
+      addFact(bf, 'Shared allowance', root.consumedAdmissions + ' consumed / ' + root.grantedAdmissions + ' granted · ' + root.remainingAdmissions + ' remaining');
+      const debit = shared.nodeConsumption.find(item => item.taskId === this.detail!.task.id);
+      if (debit) addFact(bf, 'This node, included in shared total', debit.consumedAdmissions + ' native admissions · ' + debit.automaticAdmissions + ' automatic');
+      addFact(bf, 'Additional authority', 'Use the current task group. Children have no separate grant or adoption, and their usage remains child-attempt evidence.');
+    } else if (this.detail!.task.graphRef) addFact(bf, 'Shared task-group budget', 'Observation unavailable · owner ' + this.detail!.task.graphRef.rootTaskId + ' · inspect the current task group.');
+    else if (!budget) addFact(bf, 'Budget', 'Not adopted · no new execution authority; this is not an exhausted zero.');
     else { for (const [title, key] of [['Granted admissions', 'grantedAdmissions'], ['Consumed admissions', 'consumedAdmissions'], ['Remaining admissions', 'remainingAdmissions'], ['Automatic admissions', 'automaticAdmissions'], ['Historical admissions', 'historicalAdmissions']] as const) addFact(bf, title, budget[key]); addFact(bf, 'Budget revision', budget.revision); addFact(bf, 'Common task window', budget.currentWindow.windowSeconds + ' wall-clock seconds · number ' + budget.currentWindow.number); addFact(bf, 'First admission', budget.currentWindow.firstAdmissionAt ? timeLabel(budget.currentWindow.firstAdmissionAt) : 'Not started'); addFact(bf, 'Common deadline', budget.currentWindow.deadlineAt ? timeLabel(budget.currentWindow.deadlineAt) : 'Not started'); }
     if (this.budgetEditorTaskId !== this.detail!.task.id) { this.restore('budget-additional-admissions', this.editors[this.editorKey('budget-additional-admissions')] ?? (routing?.adoptionRequired ? '2' : '1')); this.restore('budget-new-window', this.editors[this.editorKey('budget-new-window')] ?? (routing?.adoptionRequired ? '1800' : '')); this.budgetEditorTaskId = this.detail!.task.id; }
     const pendingAdopt = !!this.pending['adopt:' + this.detail!.task.id];
-    element('task-adoption-controls').hidden = !routing?.adoptionRequired && !pendingAdopt && !this.adoptStart;
+    element('task-adoption-controls').hidden = !!this.detail!.task.graphRef || !routing?.adoptionRequired && !pendingAdopt && !this.adoptStart;
     element('adopt-task-budget').hidden = !routing?.adoptionRequired && !pendingAdopt;
     element('adopt-start-task').hidden = !routing?.adoptionRequired && !this.adoptStart;
-    element('task-grant-controls').hidden = !!routing?.adoptionRequired;
+    element('task-grant-controls').hidden = !!this.detail!.task.graphRef || !!routing?.adoptionRequired;
   }
 
   private amendment(action: 'grant' | 'adopt'): PendingRoutingMutation {
@@ -400,13 +429,13 @@ export class RoutingView {
   }
 
   private async amend(action: 'grant' | 'adopt'): Promise<void> {
-    const id = this.detail?.task.id; if (!id) return;
+    const id = this.detail?.task.id; if (!id || this.detail?.task.graphRef) return;
     const result = await this.mutate<BudgetAmendmentResult>(action + ':' + id, () => this.amendment(action), 'task-routing-status');
     if (result) { feedback('task-routing-status', 'Explicit ' + action + ' recorded. No worker was started and no old continuation proof was re-armed.', 'success'); await this.onTaskChanged(id); }
   }
 
   private async adoptAndStart(): Promise<void> {
-    const id = this.detail?.task.id; if (!id || this.busy.has('adoptStart')) return;
+    const id = this.detail?.task.id; if (!id || this.detail?.task.graphRef || this.busy.has('adoptStart')) return;
     try {
       if (!this.adoptStart) this.adoptStart = { taskId: id, amendment: this.amendment('adopt'), start: { requestId: requestId(), ...(checked('task-fake') ? { executionMode: 'fake', fakeScenario: value('task-fake-scenario') } : {}) } };
     } catch (error) { feedback('task-routing-status', errorMessage(error), 'error'); return; }
@@ -458,10 +487,10 @@ export class RoutingView {
 
   private controls(): void {
     element<HTMLButtonElement>('refresh-routing').disabled = !this.ready || this.busy.has('refresh');
-    for (const kind of ['decisions', 'ledger', 'usage']) for (const prefix of ['load', 'more']) element<HTMLButtonElement>(prefix + '-task-' + kind).disabled = !this.ready || !this.detail || this.busy.has('history:' + this.detail.task.id + ':' + kind);
+    for (const kind of ['decisions', 'ledger', 'usage']) for (const prefix of ['load', 'more']) element<HTMLButtonElement>(prefix + '-task-' + kind).disabled = kind === 'ledger' && !!this.detail?.task.graphRef || !this.ready || !this.detail || this.busy.has('history:' + this.detail.task.id + ':' + kind);
     for (const [id, key, title] of [['save-routing-report', 'report', 'Record user report'], ['save-routing-account', 'account', 'Save declaration'], ['save-routing-link', 'link', 'Save association'], ['save-routing-context', 'context', 'Save context'], ['save-routing-profile', 'profile', 'Save profile preference'], ['save-routing-policy', 'policy', 'Save routing defaults']] as const) { const button = element<HTMLButtonElement>(id); button.disabled = !this.ready || this.busy.has(key) || key === 'report' && !this.capacity && !this.pending[key]; button.textContent = this.pending[key] ? 'Retry pending ' + title.toLowerCase() : title; }
-    for (const [id, action] of [['grant-task-budget', 'grant'], ['adopt-task-budget', 'adopt']] as const) { const key = action + ':' + this.detail?.task.id; const button = element<HTMLButtonElement>(id); button.disabled = !this.ready || !this.detail || !this.taskBudget || this.busy.has(key); button.textContent = this.pending[key] ? 'Retry pending ' + action : action === 'grant' ? 'Grant additional authority' : 'Adopt task budget'; }
-    element<HTMLButtonElement>('adopt-start-task').disabled = !this.ready || !this.detail || this.busy.has('adoptStart') || !this.taskBudget;
+    for (const [id, action] of [['grant-task-budget', 'grant'], ['adopt-task-budget', 'adopt']] as const) { const key = action + ':' + this.detail?.task.id; const button = element<HTMLButtonElement>(id); button.disabled = !!this.detail?.task.graphRef || !this.ready || !this.detail || !this.taskBudget || this.busy.has(key); button.textContent = this.pending[key] ? 'Retry pending ' + action : action === 'grant' ? 'Grant additional authority' : 'Adopt task budget'; }
+    element<HTMLButtonElement>('adopt-start-task').disabled = !!this.detail?.task.graphRef || !this.ready || !this.detail || this.busy.has('adoptStart') || !this.taskBudget;
     element('adopt-start-task').textContent = this.adoptStart ? 'Retry pending adoption and Start · ' + this.adoptStart.taskId.slice(0, 8) : 'Adopt and start this captured version';
     element('routing-pending-summary').textContent = Object.values(this.pending).map(pending => 'Pending exact ' + pending.method + ' ' + pending.path + ' · request ' + pending.body['requestId']).join('\n') + (this.adoptStart ? '\nPending adoption/Start for task ' + this.adoptStart.taskId + ' · adoption ' + this.adoptStart.amendment.body['requestId'] + ' · Start ' + this.adoptStart.start['requestId'] + ' · adoption acknowledged ' + !!this.adoptStart.adoptionAcknowledged : '');
   }

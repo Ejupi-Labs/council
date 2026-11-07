@@ -20,12 +20,15 @@ type ExecutionController interface {
 }
 
 func executionOperation(op string) bool {
-	return strings.HasPrefix(op, "workflow.") || strings.HasPrefix(op, "candidates.") || strings.HasPrefix(op, "routing.") || strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
+	return strings.HasPrefix(op, "graphs.") || strings.HasPrefix(op, "workflow.") || strings.HasPrefix(op, "candidates.") || strings.HasPrefix(op, "routing.") || strings.HasPrefix(op, "tasks.") || strings.HasPrefix(op, "attempts.") || strings.HasPrefix(op, "artifacts.") || strings.HasPrefix(op, "execution.") || op == "service.stop"
 }
 
 func (s *Service) executeManaged(ctx context.Context, op string, p Params) domain.Result {
 	if s.Execution == nil {
 		return domain.Failure(domain.MutationIdentity(p.Body), domain.Fail("capability_unavailable", "Managed execution requires a compatible persistent Council owner. Start Council UI or use an execution command."))
+	}
+	if strings.HasPrefix(op, "graphs.") {
+		return s.executeGraph(ctx, op, p)
 	}
 	if strings.HasSuffix(op, ".get") || strings.HasSuffix(op, ".list") || op == "attempts.wait" || op == "artifacts.bytes" || op == "execution.capabilities" {
 		if len(p.Body) > 0 {

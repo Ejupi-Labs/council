@@ -35,7 +35,19 @@ func (e *Engine) Meta(ctx context.Context) (map[string]any, error) {
 		}
 		incident = &found
 	}
-	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery"}, "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 1, "activeAttemptId": g.ActiveAttemptID}}, nil
+	claims, err := e.db.GraphClaims(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs"}, "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": managedCapacity(claims)}, nil
+}
+
+func managedCapacity(claims []domain.GraphClaimView) map[string]any {
+	var sole *string
+	if len(claims) == 1 {
+		sole = &claims[0].AttemptID
+	}
+	return map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 2, "activeAttemptId": sole, "occupiedSlots": strconv.Itoa(len(claims)), "activeClaims": claims}
 }
 
 func cancellationScope() string {
@@ -49,13 +61,16 @@ func capabilities() map[string]any {
 		return map[string]any{"connectionId": id, "harnessId": harness, "interface": "native_exec", "nativeContract": contract, "minimumVersion": minimum, "documentedVersion": documented, "versionSource": source, "supportedPolicyModes": []string{"autonomous"}, "modelSelection": "explicit_selector", "accountSelection": "unsupported", "sessionContinuity": "unsupported", "sessionPersistence": "disabled_for_managed_attempt", "cancellationScope": cancellationScope(), "liveQualification": "unqualified", "fakeMode": true, "limits": map[string]any{"defaultTimeoutSeconds": 1800, "maxTimeoutSeconds": 86400, "promptBytes": domain.MaxPromptBytes, "stdoutBytes": evidence.StdoutLimit, "stderrBytes": evidence.StderrLimit, "jsonlLineBytes": evidence.LineLimit, "eventBytes": domain.MaxEventBytes, "chunkBytes": evidence.ChunkLimit, "finalResponseBytesUpperBound": responseLimit}}
 	}
 	minimum, documented := "2.1.259", "2.1.318"
-	return map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 1, "defaultHarnessId": "codex", "routingContract": "004-v1", "workflowContract": domain.WorkflowContract, "supportedContinuationCategories": []string{"pre_launch_ineligible"}, "recognizedContinuationCategories": []string{"pre_launch_ineligible", "terminal_transient"}, "actualAccountSelection": "unsupported", "paidAPIExecution": "unsupported", "connections": []any{
+	return map[string]any{"resourceId": domain.ManagedNativeResourceID, "limit": 2, "defaultHarnessId": "codex", "routingContract": "004-v1", "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "supportedContinuationCategories": []string{"pre_launch_ineligible"}, "recognizedContinuationCategories": []string{"pre_launch_ineligible", "terminal_transient"}, "actualAccountSelection": "unsupported", "paidAPIExecution": "unsupported", "connections": []any{
 		connection("codex-native", "codex", adapters.CodexContract, nil, nil, "accepted_002_contract", evidence.StdoutLimit),
 		connection("claude-native", "claude-code", adapters.ClaudeContract, &minimum, &documented, "official_documentation_2026-11-06", evidence.LineLimit),
 	}}
 }
 
 func (e *Engine) Read(ctx context.Context, op, id string, q map[string]string) domain.Result {
+	if strings.HasPrefix(op, "graphs.") {
+		return e.readGraph(ctx, op, id, q)
+	}
 	if workflowReadOperation(op) {
 		return e.readWorkflow(ctx, op, id, q)
 	}

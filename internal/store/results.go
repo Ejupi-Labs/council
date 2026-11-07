@@ -34,6 +34,21 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 	if a.Phase == "settled" {
 		return a, nil
 	}
+	member, membershipErr := s.graphMembership(ctx, tx, a.TaskID)
+	if membershipErr != nil {
+		return a, membershipErr
+	}
+	graphNode := member != nil && member.Kind == "node"
+	graphLocalRoot := member != nil && member.Kind == "root" && a.ExecutorKind == "local_graph"
+	// Queued graph work has not entered preparation and cannot own local I/O.
+	// Root-owned basis/input operations have the same known-zero boundary as nodes.
+	if (graphNode || graphLocalRoot) && a.Phase == "queued" && !a.LaunchIntent && a.SourceSnapshotID == nil {
+		in.EffectsKnown = true
+	}
+	graphNodeUnknown := graphNode && !in.EffectsKnown
+	if err := s.graphOutputForSettlement(ctx, tx, a, in, nil, nil, nil); err != nil {
+		return a, err
+	}
 	if !recovery && a.ExecutorKind == "local_application" {
 		var active int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM delivery_operations WHERE attempt_id=? AND active_effect_id IS NOT NULL", a.ID).Scan(&active); err != nil {
@@ -109,7 +124,7 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 			c, e := s.candidate(ctx, tx, *a.CandidateID)
 			usable = usable || (e == nil && (c.HasDelta || c.HasIndexDelta))
 		}
-		validSuccess := a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && *in.ExitCode == 0 && in.UsableOutput && usable
+		validSuccess := !graphNodeUnknown && a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && *in.ExitCode == 0 && in.UsableOutput && usable
 		if a.ExecutorKind == "local_check" {
 			validSuccess = in.BuiltinCompleted && !a.LaunchIntent || a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && in.UsableOutput
 		} else if a.ExecutorKind == "local_application" {
@@ -117,7 +132,14 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 		} else if a.ExecutorKind == "local_external" {
 			validSuccess = a.LaunchIntent && in.RootTerminal && in.InputComplete && in.ExitCode != nil && *in.ExitCode == 0
 		}
-		if !validSuccess || in.EvidenceStatus != "complete" || in.Cleanup.State != "verified" {
+		if a.ExecutorKind == "local_graph" {
+			var ready int
+			if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM graph_inputs WHERE operation_attempt_id=? AND state='ready'", a.ID).Scan(&ready); e != nil {
+				return a, storageError()
+			}
+			validSuccess = ready == 1 && !a.LaunchIntent && in.EffectsKnown && in.InputComplete && in.UsableOutput
+		}
+		if !validSuccess || graphNodeUnknown || in.EvidenceStatus != "complete" || in.Cleanup.State != "verified" {
 			outcome = "failed"
 			seq, e := s.appendEvent(ctx, tx, a.ID, "primary_failure", failureMetadata(in.Failure))
 			if e != nil {
@@ -126,13 +148,20 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 			a.PrimaryFailure = &domain.PrimaryFailure{Code: "result_incomplete", Message: "Authoring did not produce a complete durable usable result with verified root exit and cleanup.", ObservedAt: now, EventSequence: seq}
 		}
 	}
+	if err := s.graphFinalizeOutput(ctx, tx, a, outcome, in); err != nil {
+		return a, err
+	}
 	a.Phase = "settled"
 	a.Outcome = ptr(outcome)
 	a.SettledAt = ptr(now)
 	a.Cleanup = in.Cleanup
 	a.EvidenceStatus = in.EvidenceStatus
-	if a.Cleanup.State == "unknown" || in.EvidenceStatus == "uncertain" {
-		incident := domain.ExecutionIncident{ID: domain.NewID(), AttemptID: ptr(a.ID), Code: "settlement_unresolved", Message: "Process cleanup or evidence durability remains unresolved. Dispatch is fenced.", CreatedAt: now}
+	materializationUncertain, proofErr := s.graphMaterializationUncertain(ctx, tx, a)
+	if proofErr != nil {
+		return a, proofErr
+	}
+	if a.Cleanup.State == "unknown" || in.EvidenceStatus == "uncertain" || a.ExecutorKind == "local_graph" && !in.EffectsKnown || materializationUncertain || graphNodeUnknown {
+		incident := domain.ExecutionIncident{ID: domain.NewID(), AttemptID: ptr(a.ID), Code: "settlement_unresolved", Message: "Process cleanup, local effects or evidence durability remains unresolved. Dispatch is fenced.", CreatedAt: now}
 		if e := s.fence(ctx, tx, incident); e != nil {
 			return a, e
 		}
@@ -142,7 +171,7 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 	if e != nil {
 		return a, e
 	}
-	if a.ExecutorKind == "local_application" && !in.EffectsKnown {
+	if (a.ExecutorKind == "local_application" || a.ExecutorKind == "local_graph") && !in.EffectsKnown || materializationUncertain || graphNodeUnknown {
 		retainEffectClaim = true
 	}
 	if a.Cleanup.State == "verified" && !retainEffectClaim {

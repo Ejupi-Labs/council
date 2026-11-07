@@ -14,9 +14,17 @@ import (
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 )
 
-func workflowPreservedRows(t *testing.T, db *sql.DB) map[string][]string {
+func workflowPreservedRows(t *testing.T, db *sql.DB, currentSchema ...bool) map[string][]string {
 	t.Helper()
 	newTables := map[string]bool{"delivery_preferences": true, "workflows": true, "workflow_steps": true, "workflow_reviews": true, "workflow_checks": true, "workflow_resolutions": true, "workflow_acceptances": true, "delivery_operations": true, "delivery_effects": true}
+	// Only Open through schema6 replaces the physical claim table. Direct
+	// schema4→5 fault tests still compare every original claim byte below.
+	if len(currentSchema) != 0 && currentSchema[0] {
+		newTables["capacity_claims"] = true
+		for _, name := range []string{"task_graphs", "graph_versions", "graph_nodes", "graph_inputs", "graph_dispatches", "graph_admission_observations", "graph_delivery_bindings"} {
+			newTables[name] = true
+		}
+	}
 	rows, e := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name")
 	if e != nil {
 		t.Fatal(e)
@@ -78,7 +86,11 @@ func workflowPreservedRows(t *testing.T, db *sql.DB) map[string][]string {
 func TestWorkflowMigrationPreservesAcceptedSchema4WithoutGrantingAuthority(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "schema4.db")
 	db, ids := workflowSchema4Database(t, databasePath, "", true)
-	before := workflowPreservedRows(t, db)
+	before := workflowPreservedRows(t, db, true)
+	var heldAttempt string
+	if e := db.QueryRow("SELECT attempt_id FROM capacity_claims").Scan(&heldAttempt); e != nil || heldAttempt != ids.ActiveAttemptID {
+		t.Fatal("accepted schema4 lost its actual held claim", heldAttempt, e)
+	}
 	artifactPath := filepath.Join(filepath.Dir(databasePath), "artifacts", strings.Repeat("0a", 16)+".bin")
 	bytesBefore, e := os.ReadFile(artifactPath)
 	if e != nil {
@@ -92,16 +104,18 @@ func TestWorkflowMigrationPreservesAcceptedSchema4WithoutGrantingAuthority(t *te
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if after := workflowPreservedRows(t, s.db); !reflect.DeepEqual(before, after) {
-		t.Fatal("schema5 migration rewrote accepted004 row JSON/receipts/defaults/claim")
+	if after := workflowPreservedRows(t, s.db, true); !reflect.DeepEqual(before, after) {
+		t.Fatal("migration rewrote accepted004 row JSON/receipts/defaults")
 	}
 	var version, workflows int
-	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 5 {
+	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 6 {
 		t.Fatal("accepted004 was not upgraded", version, e)
 	}
 	if e = s.db.QueryRow("SELECT count(*) FROM workflows").Scan(&workflows); e != nil || workflows != 0 {
 		t.Fatal("migration seeded workflow authority", workflows, e)
 	}
+	assertGraphLegacyClaim(t, s, heldAttempt)
+	assertNoMigratedGraphAuthority(t, s)
 	pref, e := s.DeliveryPreference(context.Background())
 	if e != nil || pref.LocalMode != "review_only" || pref.SelectionSource != "default" {
 		t.Fatal("migration inferred local delivery consent", pref, e)

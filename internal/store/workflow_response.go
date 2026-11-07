@@ -164,6 +164,12 @@ func (s *Store) AcceptResponseWithWorkflow(ctx context.Context, taskID string, i
 		if e = saveTask(ctx, tx, t); e != nil {
 			return 0, nil, e
 		}
+		if e = s.projectGraphWorkflow(ctx, tx, t, &w, proofs); e != nil {
+			return 0, nil, e
+		}
+		if e = s.graphResponseAcknowledged(ctx, tx, record, g.OwnerInstanceID); e != nil {
+			return 0, nil, e
+		}
 		return 200, struct {
 			Task       domain.TaskSummary        `json:"task"`
 			Acceptance domain.ResponseAcceptance `json:"acceptance"`

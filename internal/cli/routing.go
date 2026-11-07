@@ -49,7 +49,7 @@ func addRoutingFlags(values map[string]bool) {
 	}
 }
 func repeatableFlag(key string) bool {
-	return key == "require-evidence" || key == "prefer-profile" || key == "allow-continuation"
+	return key == "require-evidence" || key == "prefer-profile" || key == "allow-continuation" || key == "rebind-node"
 }
 func routingCommand(name string) bool {
 	return strings.HasPrefix(name, "routing ") || name == "tasks routing" || name == "tasks routing-decisions" || name == "tasks budget" || name == "tasks budget-ledger" || name == "tasks usage" || name == "tasks adopt"

@@ -1,4 +1,5 @@
 import { addFact, api, ApiError, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, writeSession } from './api.js';
+import { checkGraphTask, rememberGraphTask } from './graph-membership.js';
 import { appendConnectionFacts, factLabel, harnessName, renderNativeModels, usageLabel } from './native-observations.js';
 const input = (id) => element(id).value;
 const checked = (id) => element(id).checked;
@@ -21,6 +22,17 @@ export class TasksView {
     drafts;
     routing;
     workflow;
+    onOpenGraph = (_graphId) => { };
+    async openGraphTask(id, ref) {
+        try {
+            rememberGraphTask(id, ref);
+            await this.openTask(id);
+            element('task-detail').scrollIntoView({ block: 'start' });
+        }
+        catch (error) {
+            feedback('execution-status', errorMessage(error), 'error');
+        }
+    }
     projectId = null;
     policy = null;
     available = false;
@@ -131,7 +143,7 @@ export class TasksView {
         if (meta.admission && meta.admission.state !== 'open')
             feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
         if (!this.available)
-            feedback('execution-status', 'This owner does not advertise verified delivery 005-v1. Reopen with a compatible Council owner.', 'error');
+            feedback('execution-status', 'This owner does not advertise the required 006-v1 execution contracts. Reopen with a compatible Council owner.', 'error');
         this.controls();
         if (this.available && this.projectId)
             void this.refreshTasks();
@@ -171,12 +183,13 @@ export class TasksView {
         const runKey = this.detail ? 'run:' + this.detail.task.id : '';
         const currentWorkflow = this.workflow?.workflow;
         const startAuthor = this.workflow?.authorStartReady === true;
-        element('stop-attempt').disabled = !this.available || !stop || (!!stop.attempt?.settledAt && !this.pending[stop.key]) || !!stop && this.mutationBusy.has(stop.key);
+        const graphMember = !!this.detail?.task.graphRef;
+        element('stop-attempt').disabled = graphMember || !this.available || !stop || (!!stop.attempt?.settledAt && !this.pending[stop.key]) || !!stop && this.mutationBusy.has(stop.key);
         element('stop-attempt').textContent = stop && this.pending[stop.key] ? 'Retry pending Stop · ' + stop.id.slice(0, 8) : stop?.attempt?.stop ? 'Stop accepted · refresh cleanup' : currentWorkflow ? 'Stop current workflow stage' : 'Stop';
-        element('run-attempt').disabled = !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey] || !!this.detail && this.routing?.requiresAdoption(this.detail.task.id) === true && !this.pending[runKey] || !!currentWorkflow && !startAuthor && !this.pending[runKey];
+        element('run-attempt').disabled = graphMember || !this.available || !this.detail || (!!this.detail.latestAttempt && !this.detail.latestAttempt.settledAt && !this.pending[runKey]) || this.mutationBusy.has(runKey) || this.admission !== 'open' && !this.pending[runKey] || !!this.detail && this.routing?.requiresAdoption(this.detail.task.id) === true && !this.pending[runKey] || !!currentWorkflow && !startAuthor && !this.pending[runKey];
         element('run-attempt').textContent = this.pending[runKey] ? 'Retry pending execution' : startAuthor ? 'Run task' : currentWorkflow ? 'Use current workflow control above' : this.detail && this.routing?.requiresAdoption(this.detail.task.id) ? 'Adopt budget before new execution' : 'Start another execution';
         element('save-guidance').textContent = this.detail && this.pending['guidance:' + this.detail.task.id] ? 'Retry pending guidance save' : 'Save guidance';
-        element('save-guidance').disabled = !this.available || !this.detail || this.mutationBusy.has('guidance:' + this.detail.task.id);
+        element('save-guidance').disabled = graphMember || !this.available || !this.detail || this.mutationBusy.has('guidance:' + this.detail.task.id);
         element('read-response').disabled = !a?.responseArtifactId;
         const v = this.detail?.version;
         const response = this.readArtifact;
@@ -333,6 +346,8 @@ export class TasksView {
             const { data } = await api('/tasks?projectId=' + project + (append && this.taskCursor ? '&cursor=' + encodeURIComponent(this.taskCursor) : ''));
             if (generation !== this.listGeneration || project !== this.projectId)
                 return;
+            for (const task of data.items)
+                checkGraphTask(task);
             this.tasks = append ? [...this.tasks, ...data.items] : data.items;
             this.taskCursor = data.nextCursor;
             const list = element('task-list');
@@ -373,6 +388,9 @@ export class TasksView {
             const { data } = await api('/tasks/' + id);
             if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId)
                 return;
+            if (data.task.id !== id || data.task.projectId !== this.projectId)
+                throw new Error('The task detail does not identify this selected task and project.');
+            checkGraphTask(data.task);
             this.detail = data;
             element('task-detail').hidden = false;
             element('execution-link').hidden = false;
@@ -418,6 +436,21 @@ export class TasksView {
         addFact(facts, 'Captured harness choice', harnessName(data.version.pins.harnessId));
         addFact(facts, 'Requested model', data.version.pins.model || 'Auto · no literal model pin; see the admitted resolution separately');
         addFact(facts, 'Current task version', data.task.currentVersion);
+        const membership = element('task-graph-membership');
+        membership.replaceChildren();
+        membership.hidden = !data.task.graphRef;
+        if (data.task.graphRef) {
+            const ref = data.task.graphRef;
+            addFact(facts, 'Task group', ref.graphId + ' · ' + ref.kind + (ref.nodeId ? ' · node ' + ref.nodeId : ''));
+            const note = document.createElement('p');
+            note.textContent = 'This task uses shared group authority. Run, Stop, guidance and additional allowance belong to its current task group; historical producer evidence remains readable.';
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'secondary';
+            open.textContent = 'Open current task group';
+            open.addEventListener('click', () => this.onOpenGraph(ref.graphId));
+            membership.append(note, open);
+        }
         element('guidance-keep-target').textContent = 'Keep captured target · ' + harnessName(data.version.pins.harnessId);
         element('guidance-harness').value = this.guidanceHarnessEditors[data.task.id] ?? 'keep';
         addFact(facts, 'Response acceptance', data.acceptance ? 'Reviewed response accepted · ' + timeLabel(data.acceptance.acceptedAt) : 'Not accepted');
@@ -572,6 +605,7 @@ export class TasksView {
                         return;
                     // This terminal read cannot replace a newer detail request or version.
                     // Current-version metadata refresh does not rewrite the guidance editor.
+                    checkGraphTask(detail.task);
                     this.detail = detail;
                     this.renderTaskFacts(detail);
                     this.renderAttempt();
@@ -729,7 +763,7 @@ export class TasksView {
     async stop() {
         const target = this.stopSelection();
         const taskId = this.selectedTaskId;
-        if (!target || !taskId)
+        if (!target || !taskId || this.detail?.task.graphRef)
             return;
         const result = await this.mutate(target.key, '/attempts/' + target.id + '/stop', { requestId: requestId() });
         if (!result || taskId !== this.selectedTaskId)
@@ -753,7 +787,7 @@ export class TasksView {
     }
     async run() {
         const detail = this.detail;
-        if (!detail)
+        if (!detail || detail.task.graphRef)
             return;
         const workflow = this.workflow?.workflow;
         const key = 'run:' + detail.task.id;
@@ -766,7 +800,7 @@ export class TasksView {
     }
     async guidance() {
         const detail = this.detail;
-        if (!detail)
+        if (!detail || detail.task.graphRef)
             return;
         const key = 'guidance:' + detail.task.id;
         let p = this.pending[key];

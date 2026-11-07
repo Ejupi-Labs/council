@@ -97,7 +97,22 @@ func (s *Store) ContinueRouting(ctx context.Context, ownerID, previousID string,
 		if e != nil {
 			return e
 		}
-		if b == nil || t.Revision != proof.TaskRevision || t.CurrentVersion != proof.TaskVersion || b.Revision != proof.BudgetRevision || t.LatestAttemptID == nil || *t.LatestAttemptID != previousID || b.RemainingAdmissions == "0" {
+		proofWindow := proof.GraphWindowNumber
+		if b != nil && proof.GraphBudgetAuthorityEpoch == "" {
+			proofWindow = b.CurrentWindow.Number
+		}
+		budgetCurrent, e := s.graphBudgetProofCurrent(ctx, tx, t.ID, proof.BudgetRevision, proof.GraphBudgetAuthorityEpoch, proofWindow)
+		if e != nil {
+			return e
+		}
+		member, e := s.graphMembership(ctx, tx, t.ID)
+		if e != nil {
+			return e
+		}
+		if member != nil {
+			return noRoutingContinuation
+		} // A graph replacement must use its atomic dispatch registrar.
+		if b == nil || !budgetCurrent || t.Revision != proof.TaskRevision || t.CurrentVersion != proof.TaskVersion || t.LatestAttemptID == nil || *t.LatestAttemptID != previousID || b.RemainingAdmissions == "0" {
 			return noRoutingContinuation
 		}
 		if b.CurrentWindow.DeadlineAt == nil {

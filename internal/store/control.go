@@ -59,8 +59,8 @@ func (s *Store) StopAttempt(ctx context.Context, attemptID, requestID string) do
 		if e != nil {
 			return 0, nil, e
 		}
-		if !a.LaunchIntent && (g.ActiveAttemptID == nil || *g.ActiveAttemptID != a.ID) {
-			a, e = s.settle(ctx, tx, a, domain.Settlement{Outcome: "cancelled", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: "incomplete"})
+		if !a.LaunchIntent && !claimedAttempt(g.ActiveClaims, a.ID) {
+			a, e = s.settle(ctx, tx, a, domain.Settlement{Outcome: "cancelled", Cleanup: domain.Cleanup{State: "verified", Scope: "not_launched"}, EvidenceStatus: "incomplete", EffectsKnown: true, NoProcessCreated: true})
 			if e != nil {
 				return 0, nil, e
 			}

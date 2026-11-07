@@ -70,9 +70,9 @@ func (e *Engine) expireStopBudget(attemptID string) {
 		e.fenced = wasFenced
 		return
 	}
-	if e.activeID == attemptID && e.activeCancel != nil {
-		e.activeCancel()
-	}
+	// Unresolved owned cleanup fences the shared executor, so reach every
+	// sibling as well as the specific attempt whose Stop budget expired.
+	e.cancelWorkersLocked()
 	incidentID := domain.NewID()
 	reason := "stop_budget_elapsed"
 	message := "The accepted Stop did not reach verified settlement within 15 seconds. Cleanup or evidence remains unresolved; dispatch is fenced."

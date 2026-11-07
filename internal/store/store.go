@@ -79,6 +79,8 @@ func Open(path string) (*Store, error) {
 		err = s.migrateRouting(context.Background())
 	} else if version == 4 && appID == applicationID {
 		err = s.migrateWorkflow(context.Background())
+	} else if version == 5 && appID == applicationID {
+		err = s.migrateGraphs(context.Background())
 	} else if version != schemaVersion || appID != applicationID {
 		return fail()
 	}
@@ -86,19 +88,28 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err // An actual Commit failure remains uncertain.
 	}
-	// Older accepted migration functions retain their own exact boundaries.
-	// Bring their known schema4 result through the additive workflow migration.
-	var currentVersion int
-	if err = db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
-		return fail()
-	}
-	if currentVersion == 4 {
-		if err = s.migrateWorkflow(context.Background()); err != nil {
+	// Accepted migrations retain their exact transaction boundaries and historical
+	// row encodings. Only known successive schema versions are advanced.
+	for {
+		var currentVersion int
+		if err = db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
+			return fail()
+		}
+		if currentVersion == schemaVersion {
+			break
+		}
+		switch currentVersion {
+		case 4:
+			err = s.migrateWorkflow(context.Background())
+		case 5:
+			err = s.migrateGraphs(context.Background())
+		default:
+			return fail()
+		}
+		if err != nil {
 			db.Close()
 			return nil, err
 		}
-	} else if currentVersion != schemaVersion {
-		return fail()
 	}
 	var fk int
 	if err = db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
@@ -115,13 +126,7 @@ func Open(path string) (*Store, error) {
 		}
 		rows.Close()
 	}
-	if err = s.validateExecutionSchema(context.Background()); err != nil {
-		return fail()
-	}
-	if err = s.validateRoutingSchema(context.Background()); err != nil {
-		return fail()
-	}
-	if err = s.validateWorkflowSchema(context.Background()); err != nil {
+	if err = s.validateGraphSchema(context.Background()); err != nil {
 		return fail()
 	}
 	if err = configureDurableJournal(context.Background(), db); err != nil {
@@ -239,7 +244,7 @@ func mutationBeforeCommitFailure(ctx context.Context, id string, err error) doma
 	return domain.Failure(id, domain.SafeError(err))
 }
 func nextSequence(ctx context.Context, q queryer, table string) (int64, error) {
-	if table != "projects" && table != "drafts" && table != "tasks" && table != "attempts" && table != "attempt_events" && table != "artifacts" && table != "routing_accounts" && table != "routing_capacity_reports" && table != "routing_decisions" && table != "budget_ledger" && table != "workflow_steps" && table != "workflow_reviews" && table != "workflow_checks" && table != "workflow_resolutions" && table != "workflow_acceptances" && table != "delivery_operations" {
+	if table != "projects" && table != "drafts" && table != "tasks" && table != "attempts" && table != "attempt_events" && table != "artifacts" && table != "routing_accounts" && table != "routing_capacity_reports" && table != "routing_decisions" && table != "budget_ledger" && table != "workflow_steps" && table != "workflow_reviews" && table != "workflow_checks" && table != "workflow_resolutions" && table != "workflow_acceptances" && table != "delivery_operations" && table != "task_graphs" && table != "graph_inputs" && table != "graph_dispatches" && table != "graph_admission_observations" {
 		return 0, storageError()
 	}
 	var n int64

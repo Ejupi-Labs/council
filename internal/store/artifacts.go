@@ -17,6 +17,13 @@ func (s *Store) artifact(ctx context.Context, q queryer, id string) (domain.Arti
 	if errors.Is(e, sql.ErrNoRows) {
 		return out, notFound()
 	}
+	// A cancelled metadata read does not establish a storage failure.
+	if errors.Is(e, context.Canceled) {
+		return out, context.Canceled
+	}
+	if errors.Is(e, context.DeadlineExceeded) {
+		return out, context.DeadlineExceeded
+	}
 	if e != nil {
 		return out, storageError()
 	}
@@ -42,7 +49,9 @@ func (s *Store) PutArtifact(ctx context.Context, in domain.ArtifactRecord) error
 	switch in.Kind {
 	case "prompt", "stdout", "stderr", "final_response", "source_manifest", "source_file", "index_snapshot", "candidate_manifest", "candidate_delta", "candidate_index", "destination_manifest", "destination_file", "review_result", "delivery_plan", "review_schema":
 	default:
-		return domain.Invalid("artifact kind")
+		if !graphArtifactKind(in.Kind) {
+			return domain.Invalid("artifact kind")
+		}
 	}
 	switch in.Completeness {
 	case "collecting", "complete", "incomplete", "uncertain":
@@ -58,6 +67,9 @@ func (s *Store) PutArtifact(ctx context.Context, in domain.ArtifactRecord) error
 	return s.executionWrite(ctx, func(tx *sql.Tx) error {
 		a, e := s.attempt(ctx, tx, in.AttemptID)
 		if e != nil {
+			return e
+		}
+		if e = s.graphArtifactOwner(ctx, tx, a, in.Kind); e != nil {
 			return e
 		}
 		if in.Kind == "review_schema" && (a.Role != "review" || a.WorkflowID == "") {
@@ -148,35 +160,36 @@ func (s *Store) Artifacts(ctx context.Context, attemptID string, limit int, curs
 	return out, nil
 }
 func (s *Store) PutSourceSnapshot(ctx context.Context, in domain.SourceSnapshot) error {
-	return s.executionWrite(ctx, func(tx *sql.Tx) error {
-		if !domain.ValidID(in.ID) || !domain.ValidSHA256(in.ManifestSHA256) {
-			return domain.Invalid("source snapshot")
-		}
-		a, e := s.attempt(ctx, tx, in.AttemptID)
+	return s.executionWrite(ctx, func(tx *sql.Tx) error { return s.putSourceSnapshot(ctx, tx, in, false) })
+}
+func (s *Store) putSourceSnapshot(ctx context.Context, tx *sql.Tx, in domain.SourceSnapshot, allowStoppedGraph bool) error {
+	if !domain.ValidID(in.ID) || !domain.ValidSHA256(in.ManifestSHA256) {
+		return domain.Invalid("source snapshot")
+	}
+	a, e := s.attempt(ctx, tx, in.AttemptID)
+	if e != nil {
+		return e
+	}
+	if (a.Phase != "preparing" && !(allowStoppedGraph && a.Phase == "cancelling")) || a.LaunchIntent || a.SourceSnapshotID != nil {
+		return domain.Fail("attempt_active", "The source snapshot must be recorded exactly once before launch.")
+	}
+	for _, id := range []string{in.ManifestArtifactID, in.IndexArtifactID} {
+		artifact, e := s.artifact(ctx, tx, id)
 		if e != nil {
 			return e
 		}
-		if a.Phase != "preparing" || a.LaunchIntent || a.SourceSnapshotID != nil {
-			return domain.Fail("attempt_active", "The source snapshot must be recorded exactly once before launch.")
+		if artifact.AttemptID != in.AttemptID || !artifact.Closed || artifact.Completeness != "complete" {
+			return domain.Invalid("complete owned source artifacts")
 		}
-		for _, id := range []string{in.ManifestArtifactID, in.IndexArtifactID} {
-			artifact, e := s.artifact(ctx, tx, id)
-			if e != nil {
-				return e
-			}
-			if artifact.AttemptID != in.AttemptID || !artifact.Closed || artifact.Completeness != "complete" {
-				return domain.Invalid("complete owned source artifacts")
-			}
-		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO source_snapshots VALUES(?,?,?,?,?)", in.ID, in.AttemptID, in.ManifestArtifactID, in.IndexArtifactID, encode(in)); e != nil {
-			return storageError()
-		}
-		a.SourceSnapshotID = ptr(in.ID)
-		if _, e = s.appendEvent(ctx, tx, a.ID, "source_captured", nil); e != nil {
-			return e
-		}
-		return s.bumpState(ctx, tx, &a)
-	})
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO source_snapshots VALUES(?,?,?,?,?)", in.ID, in.AttemptID, in.ManifestArtifactID, in.IndexArtifactID, encode(in)); e != nil {
+		return storageError()
+	}
+	a.SourceSnapshotID = ptr(in.ID)
+	if _, e = s.appendEvent(ctx, tx, a.ID, "source_captured", nil); e != nil {
+		return e
+	}
+	return s.bumpState(ctx, tx, &a)
 }
 func (s *Store) PutCandidate(ctx context.Context, in domain.Candidate) error {
 	return s.executionWrite(ctx, func(tx *sql.Tx) error {

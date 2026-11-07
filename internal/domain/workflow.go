@@ -1,7 +1,7 @@
 package domain
 
 const (
-	WorkflowContract  = "005-v1"
+	WorkflowContract  = "006-v1"
 	ReviewContract    = "005-review-v1"
 	MaxWorkflowChecks = 16
 	MaxReviewFindings = 64
@@ -255,17 +255,18 @@ type WorkflowStep struct {
 	AdvanceProof          *WorkflowAdvanceProof   `json:"advanceProof,omitzero"`
 }
 type WorkflowAdvanceProof struct {
-	PredecessorStepID string           `json:"predecessorStepId"`
-	OwnerInstanceID   string           `json:"ownerInstanceId"`
-	TaskRevision      string           `json:"taskRevision"`
-	TaskVersion       string           `json:"taskVersion"`
-	WorkflowRevision  string           `json:"workflowRevision"`
-	BudgetRevision    string           `json:"budgetRevision"`
-	WindowNumber      string           `json:"windowNumber"`
-	CandidateID       *string          `json:"candidateId"`
-	ResponseBinding   *ResponseBinding `json:"responseBinding,omitzero"`
-	NextLogicalKey    string           `json:"nextLogicalKey"`
-	Trigger           string           `json:"trigger"`
+	GraphBudgetAuthorityEpoch string           `json:"graphBudgetAuthorityEpoch,omitzero"`
+	PredecessorStepID         string           `json:"predecessorStepId"`
+	OwnerInstanceID           string           `json:"ownerInstanceId"`
+	TaskRevision              string           `json:"taskRevision"`
+	TaskVersion               string           `json:"taskVersion"`
+	WorkflowRevision          string           `json:"workflowRevision"`
+	BudgetRevision            string           `json:"budgetRevision"`
+	WindowNumber              string           `json:"windowNumber"`
+	CandidateID               *string          `json:"candidateId"`
+	ResponseBinding           *ResponseBinding `json:"responseBinding,omitzero"`
+	NextLogicalKey            string           `json:"nextLogicalKey"`
+	Trigger                   string           `json:"trigger"`
 }
 
 // Native review JSON deliberately has no optional fields at any object depth.
@@ -388,6 +389,7 @@ type DeliveryConflict struct {
 	EvidenceArtifactID *string `json:"evidenceArtifactId"`
 }
 type DeliveryOperation struct {
+	GraphDeliveryRef   *GraphArtifactRef    `json:"graphDeliveryRef,omitzero"`
 	PlanArtifactID     string               `json:"planArtifactId,omitzero"`
 	ID                 string               `json:"id"`
 	WorkflowID         string               `json:"workflowId"`
@@ -479,6 +481,7 @@ type WorkflowAdmissionFacts struct {
 	Routing RoutingFacts
 }
 type WorkflowStepAdmission struct {
+	GraphBudgetRef  *GraphBudgetRef  `json:"graphBudgetRef,omitzero"`
 	Workflow        Workflow         `json:"workflow"`
 	Step            WorkflowStep     `json:"step"`
 	Attempt         Attempt          `json:"attempt"`
@@ -499,6 +502,7 @@ type WorkflowStagePlan struct {
 }
 
 type WorkflowStepAdmissionFacts struct {
+	Graph                    *GraphStageAdmissionFacts
 	Plan                     WorkflowStagePlan
 	ExpectedTaskRevision     string
 	ExpectedWorkflowRevision string
@@ -516,12 +520,14 @@ type WorkflowAcceptanceFacts struct {
 }
 
 type WorkflowStepFacts struct {
+	GraphOutput            *GraphStepOutputFacts
 	ResultCandidateBinding *CandidateBinding
 	ReviewAllowedPaths     []string
 	ReuseEvidenceUses      []EvidenceUse
 	HasTaskDelta           bool
 	HasTaskIndexDelta      bool
 	DirectProven           bool
+	CumulativeDirectProven bool
 	VerifiedArtifacts      []VerifiedResponse
 	Operation              *DeliveryOperation
 	StepID                 string
@@ -537,6 +543,7 @@ type WorkflowStepFacts struct {
 	Settlement             Settlement
 }
 type DeliveryPermitFacts struct {
+	Graph            *GraphDeliveryFacts
 	OperationID      string
 	OwnerInstanceID  string
 	TaskRevision     string

@@ -173,6 +173,9 @@ func TestKnown003MaintenanceCannotGrant004ExecutionOrRouting(t *testing.T) {
 	metadata := metadataFixture(id, false)
 	metadata["appVersion"], metadata["executionContract"] = "2.0.0-dev.3", "003-v1"
 	metadata["capabilities"] = []string{"workspace_foundation", "managed_execution"}
+	delete(metadata, "graphContract")
+	delete(metadata, "workflowContract")
+	metadata["capacity"] = map[string]any{"resourceId": "managed-native", "limit": 1, "activeAttemptId": nil}
 	body, _ := json.Marshal(domain.Success(200, domain.NewID(), metadata, nil).Envelope)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
 	defer server.Close()

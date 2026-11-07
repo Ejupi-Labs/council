@@ -2,7 +2,7 @@ package domain
 
 import "encoding/json/jsontext"
 
-const ExecutionContract = "005-v1"
+const ExecutionContract = "006-v1"
 const MaxPromptBytes = 256 * 1024
 const MaxEventBytes = 16 * 1024
 
@@ -73,6 +73,7 @@ type ResponseAcceptanceInput struct {
 	Confirmation       string `json:"confirmation"`
 }
 type Task struct {
+	GraphRef        *GraphRef `json:"graphRef,omitzero"`
 	ID              string    `json:"id"`
 	ProjectID       string    `json:"projectId"`
 	OriginalText    string    `json:"originalText"`
@@ -97,19 +98,20 @@ type TaskVersion struct {
 	TimeoutSeconds     int            `json:"timeoutSeconds"`
 }
 type TaskSummary struct {
-	ID              string  `json:"id"`
-	ProjectID       string  `json:"projectId"`
-	CurrentVersion  string  `json:"currentVersion"`
-	Revision        string  `json:"revision"`
-	StateRevision   string  `json:"stateRevision"`
-	LatestAttemptID *string `json:"latestAttemptId"`
-	RequestedMode   string  `json:"requestedMode"`
-	PolicySource    string  `json:"policySource"`
-	CreatedAt       string  `json:"createdAt"`
-	UpdatedAt       string  `json:"updatedAt"`
-	Status          string  `json:"status"`
-	Stage           string  `json:"stage"`
-	NextAction      string  `json:"nextAction"`
+	GraphRef        *GraphRef `json:"graphRef,omitzero"`
+	ID              string    `json:"id"`
+	ProjectID       string    `json:"projectId"`
+	CurrentVersion  string    `json:"currentVersion"`
+	Revision        string    `json:"revision"`
+	StateRevision   string    `json:"stateRevision"`
+	LatestAttemptID *string   `json:"latestAttemptId"`
+	RequestedMode   string    `json:"requestedMode"`
+	PolicySource    string    `json:"policySource"`
+	CreatedAt       string    `json:"createdAt"`
+	UpdatedAt       string    `json:"updatedAt"`
+	Status          string    `json:"status"`
+	Stage           string    `json:"stage"`
+	NextAction      string    `json:"nextAction"`
 }
 type TaskDetail struct {
 	Task          Task                `json:"task"`
@@ -123,6 +125,7 @@ type TaskVersionDetail struct {
 	Version      TaskVersion `json:"version"`
 }
 type Admission struct {
+	GraphBudgetRef  *GraphBudgetRef  `json:"graphBudgetRef,omitzero"`
 	Workflow        *Workflow        `json:"workflow,omitzero"`
 	Step            *WorkflowStep    `json:"step,omitempty"`
 	RoutingDecision *RoutingDecision `json:"routingDecision,omitempty"`
@@ -317,10 +320,11 @@ type ResponseAcceptance struct {
 	AcceptedAt         string `json:"acceptedAt"`
 }
 type ExecutionGate struct {
-	State           string  `json:"state"`
-	OwnerInstanceID string  `json:"ownerInstanceId"`
-	IncidentID      *string `json:"incidentId"`
-	ActiveAttemptID *string `json:"activeAttemptId"`
+	ActiveClaims    []GraphClaimView `json:"activeClaims"`
+	State           string           `json:"state"`
+	OwnerInstanceID string           `json:"ownerInstanceId"`
+	IncidentID      *string          `json:"incidentId"`
+	ActiveAttemptID *string          `json:"activeAttemptId"`
 }
 type ExecutionIncident struct {
 	ID        string  `json:"id"`

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, realpath, lstat, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, lstat, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import { packagePreview, sha256, version } from './package.mjs';
 import { qualifyExtractedWorkflow } from './package-workflow.mjs';
+import { qualifyExtractedGraphs } from './package-graphs.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const executable = process.platform === 'win32' ? 'council.exe' : 'council';
@@ -105,7 +106,8 @@ test('native preview has exact contents, complete notices and an independently v
   const release = await packagePreview({ outputDirectory: path.join(temporary, 'releases') });
   const data = await readFile(release.archive);
   assert.equal(await readFile(release.checksum, 'utf8'), `${sha256(data)}  ${release.archiveName}\n`);
-  assert.match(release.archiveName, /^council-2\.0\.0-dev\.5-(windows|darwin|linux)-(amd64|arm64)\.zip$/);
+  assert.ok(release.archiveName.startsWith('council-' + version + '-'), 'archive names the exact built preview version');
+  assert.match(release.archiveName.slice(('council-' + version + '-').length), /^(windows|darwin|linux)-(amd64|arm64)\.zip$/);
   const entries = readZip(data);
   const manifest = entries.get('SHA256SUMS.txt').contents.toString('utf8');
   const records = manifest.trimEnd().split('\n').map(line => line.match(/^([a-f0-9]{64})  (.+)$/));
@@ -122,7 +124,7 @@ test('native preview has exact contents, complete notices and an independently v
   for (const notice of ['Go 1.27.3/LICENSE', 'Go 1.27.3/PATENTS', 'LICENSE-3RD-PARTY.md', 'LICENSE-SQLITE', 'LICENSE-MMAP-GO']) {
     assert.ok(notices.includes(notice), `retained upstream notice ${notice}`);
   }
-  assert.match(entries.get('README.md').contents.toString('utf8'), /verified workflow preview/);
+  assert.match(entries.get('README.md').contents.toString('utf8'), /task graph preview/);
   assert.match(entries.get('README.md').contents.toString('utf8'), /live\s+provider compatibility remains (?:separately )?unqualified/i);
   assert.match(entries.get('README.md').contents.toString('utf8'), /fixed fake mode uses only local processes/);
   for (const { contents } of entries.values()) {
@@ -173,8 +175,15 @@ test('native preview has exact contents, complete notices and an independently v
   assert.equal(url.hostname, '127.0.0.1');
   const accessToken = new URLSearchParams(url.hash.slice(1)).get('token');
   const ownerMetadata = await (await fetch(url.origin + '/api/v1/meta', { headers: { Authorization: 'Bearer ' + accessToken }, signal: AbortSignal.timeout(10_000) })).json();
-  assert.equal(ownerMetadata.data.appVersion, '2.0.0-dev.5');
-  assert.equal(ownerMetadata.data.executionContract, '005-v1');
+  assert.equal(ownerMetadata.data.appVersion, '2.0.0-dev.6');
+  assert.equal(ownerMetadata.data.executionContract, '006-v1');
+  assert.equal(ownerMetadata.data.workflowContract, '006-v1');
+  assert.equal(ownerMetadata.data.graphContract, '006-v1');
+  assert.ok(ownerMetadata.data.capabilities.includes('task_graphs'));
+  assert.equal(ownerMetadata.data.capacity.limit, 2);
+  assert.equal(ownerMetadata.data.capacity.occupiedSlots, '0');
+  assert.deepEqual(ownerMetadata.data.capacity.activeClaims, []);
+  assert.equal(ownerMetadata.data.capacity.activeAttemptId, null);
   assert.equal(ownerMetadata.data.maintenanceContract, 'owner-stop/1');
   assert.equal(ownerMetadata.data.managedExecution, 'native_codex_claude');
   assert.ok(ownerMetadata.data.capabilities.includes('economical_routing'));
@@ -207,19 +216,33 @@ test('native preview has exact contents, complete notices and an independently v
   }
   assert.ok(git, 'native Git is a declared prerequisite for extracted source capture');
   const gitDirectory = path.dirname(git);
-  const colocatedDevelopmentTools = [];
-  for (const name of process.platform === 'win32' ? ['node.exe', 'go.exe', 'npm.cmd'] : ['node', 'go', 'npm']) {
-    try { await lstat(path.join(gitDirectory, name)); colocatedDevelopmentTools.push(name); } catch {}
+  const developmentNames = process.platform === 'win32' ? ['node.exe', 'nodejs.exe', 'go.exe', 'npm.cmd', 'npm.exe', 'npx.cmd'] : ['node', 'nodejs', 'go', 'npm', 'npx'];
+  let runtimeGitPath = gitDirectory;
+  let gitExecPath;
+  if (process.platform !== 'win32') {
+    // /usr/bin can contain development tools. One owned Git link keeps those
+    // tools off the extracted owner's PATH without copying a Git installation.
+    runtimeGitPath = path.join(temporary, 'git-only-path');
+    assert.equal(await realpath(path.dirname(runtimeGitPath)), await realpath(temporary));
+    await mkdir(runtimeGitPath);
+    await symlink(git, path.join(runtimeGitPath, 'git'));
+    gitExecPath = execFileSync(git, ['--exec-path'], options).trim();
+    assert.ok(path.isAbsolute(gitExecPath), 'native Git helpers have an explicit local absolute directory');
+    assert.equal((await lstat(await realpath(gitExecPath))).isDirectory(), true);
   }
-  t.diagnostic(colocatedDevelopmentTools.length ? `Git's directory also contains ${colocatedDevelopmentTools.join(', ')}; empty-PATH startup above is independently verified.` : 'Execution PATH excludes Node, npm and Go; only the Git installation directory is supplied.');
-  const gitEnvironment = privateEnvironment(home, gitDirectory);
+  for (const name of developmentNames) {
+    await assert.rejects(lstat(path.join(runtimeGitPath, name)), error => error.code === 'ENOENT', 'qualification PATH must exclude development executable ' + name);
+  }
+  t.diagnostic('Execution PATH excludes Node, npm and Go; only the verified Git path is supplied.');
+  const gitEnvironment = privateEnvironment(home, runtimeGitPath);
+  if (gitExecPath) gitEnvironment.GIT_EXEC_PATH = gitExecPath;
   const runtimeOptions = { cwd: elsewhere, env: gitEnvironment, shell: false, encoding: 'utf8', timeout: 30_000 };
   const repository = path.join(temporary, 'runtime-project');
   await mkdir(repository);
   for (const args of [['init', '-b', 'fixture'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
     execFileSync(git, ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', repository, ...args], runtimeOptions);
   }
-  await launchOwner(runtimeOptions);
+  const runtimeLaunch = await launchOwner(runtimeOptions);
   const project = runBinary(binary, ['projects', 'open', repository], runtimeOptions).data.project;
   const admitted = runBinary(binary, ['tasks', 'start', '--project', project.id, '--task', 'Extracted offline fake response fixture.', '--deliverable', 'response_only', '--workflow', 'author_only', '--fake', '--timeout-seconds', '60'], runtimeOptions).data;
   assert.equal(admitted.attempt.executionMode, 'fake');
@@ -332,6 +355,7 @@ test('native preview has exact contents, complete notices and an independently v
   assert.deepEqual(usage.charges, { status: 'unknown', items: [] });
 
   await qualifyExtractedWorkflow({ binary, runtimeOptions, repository, temporary, project, git, runBinary });
+  await qualifyExtractedGraphs({ binary, runtimeOptions, repository, temporary, project, home, ownerURL: runtimeLaunch.data.url, git, runBinary, busyReportId: busy.report.id });
 
   // The same extracted binary can restart and read retained bytes without rerunning work.
   await stopOwnedService(binary);

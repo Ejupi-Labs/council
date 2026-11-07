@@ -111,31 +111,84 @@ export async function api(path, method = 'GET', body) {
     }
     return envelope;
 }
+function validMetadataId(value) {
+    return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+}
+function validMetadataRevision(value) {
+    return typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n;
+}
+export function supportsGraphCapacity(capacity) {
+    if (!capacity || capacity.resourceId !== 'managed-native' || capacity.limit !== 2
+        || Object.keys(capacity).length !== 5
+        || !['resourceId', 'limit', 'activeAttemptId', 'occupiedSlots', 'activeClaims'].every(key => Object.hasOwn(capacity, key))
+        || !Array.isArray(capacity.activeClaims) || capacity.activeClaims.length > 2
+        || capacity.occupiedSlots !== String(capacity.activeClaims.length))
+        return false;
+    const seen = new Set();
+    let previousSlot = '';
+    for (const claim of capacity.activeClaims) {
+        if (!claim || typeof claim !== 'object' || Array.isArray(claim) || Object.keys(claim).length !== 9
+            || !['slot', 'attemptId', 'graphId', 'nodeId', 'executorKind', 'contextId', 'capturedDeclaredAccountId', 'capturedLinkRevision', 'legacyBarrier'].every(key => Object.hasOwn(claim, key))
+            || !['1', '2'].includes(claim.slot) || claim.slot <= previousSlot || !validMetadataId(claim.attemptId) || seen.has(claim.attemptId)
+            || typeof claim.legacyBarrier !== 'boolean')
+            return false;
+        previousSlot = claim.slot;
+        seen.add(claim.attemptId);
+        if (![claim.graphId, claim.nodeId, claim.capturedDeclaredAccountId].every(id => id === null || validMetadataId(id))
+            || claim.nodeId !== null && claim.graphId === null
+            || claim.contextId !== null && !['codex-native', 'claude-native'].includes(claim.contextId)
+            || !['native', 'local_check', 'local_application', 'local_external', 'local_graph'].includes(claim.executorKind)
+            || claim.capturedLinkRevision !== null && !validMetadataRevision(claim.capturedLinkRevision)
+            || (claim.capturedDeclaredAccountId === null) !== (claim.capturedLinkRevision === null)
+            || claim.legacyBarrier && (capacity.activeClaims.length !== 1 || claim.slot !== '1'))
+            return false;
+        if (claim.executorKind === 'native') {
+            if (!claim.legacyBarrier && claim.contextId === null)
+                return false;
+        }
+        else if (claim.contextId !== null || claim.capturedDeclaredAccountId !== null || claim.capturedLinkRevision !== null)
+            return false;
+        if (claim.executorKind === 'local_graph') {
+            if (claim.graphId === null || claim.nodeId !== null)
+                return false;
+        }
+        else if (claim.graphId !== null && claim.nodeId === null)
+            return false;
+    }
+    return capacity.activeClaims.length === 1
+        ? capacity.activeAttemptId === capacity.activeClaims[0].attemptId
+        : capacity.activeAttemptId === null;
+}
 export function supportsManagedExecution(meta) {
-    return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.5' && /^[a-f0-9]{32}$/.test(meta.ownerInstanceId)
+    return meta.apiVersion === 1 && meta.appVersion === '2.0.0-dev.6' && validMetadataId(meta.ownerInstanceId)
         && meta.scope === 'managed_execution' && meta.managedExecution === 'native_codex_claude'
-        && meta.executionContract === '005-v1' && meta.workflowContract === '005-v1' && meta.maintenanceContract === 'owner-stop/1'
-        && Array.isArray(meta.capabilities) && ['workspace_foundation', 'managed_execution', 'economical_routing', 'verified_delivery'].every(capability => meta.capabilities.includes(capability))
+        && meta.executionContract === '006-v1' && meta.workflowContract === '006-v1' && meta.graphContract === '006-v1'
+        && meta.maintenanceContract === 'owner-stop/1'
+        && Array.isArray(meta.capabilities) && ['workspace_foundation', 'managed_execution', 'economical_routing', 'verified_delivery', 'task_graphs'].every(capability => meta.capabilities.includes(capability))
         && !!meta.admission && ['open', 'closing', 'fenced'].includes(meta.admission.state)
-        && (meta.admission.incidentId === null || /^[a-f0-9]{32}$/.test(meta.admission.incidentId))
-        && meta.capacity?.resourceId === 'managed-native' && !meta.capacity.connectionId && meta.capacity.limit === 1
-        && (meta.capacity.activeAttemptId === null || /^[a-f0-9]{32}$/.test(meta.capacity.activeAttemptId));
+        && (meta.admission.incidentId === null || validMetadataId(meta.admission.incidentId))
+        && supportsGraphCapacity(meta.capacity);
 }
 export function supportsOwnerStop(meta) {
     if (supportsManagedExecution(meta))
         return true;
-    const validId = (value) => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
-    if (meta.apiVersion !== 1 || !validId(meta.ownerInstanceId) || meta.scope !== 'managed_execution'
+    if (meta.apiVersion !== 1 || !validMetadataId(meta.ownerInstanceId) || meta.scope !== 'managed_execution'
         || !Array.isArray(meta.capabilities) || !['workspace_foundation', 'managed_execution'].every(capability => meta.capabilities.includes(capability))
         || !meta.admission || !['open', 'closing', 'fenced'].includes(meta.admission.state)
-        || meta.admission.incidentId !== null && !validId(meta.admission.incidentId)
-        || !meta.capacity || meta.capacity.limit !== 1 || meta.capacity.activeAttemptId !== null && !validId(meta.capacity.activeAttemptId))
+        || meta.admission.incidentId !== null && !validMetadataId(meta.admission.incidentId)
+        || !meta.capacity || meta.capacity.limit !== 1 || meta.capacity.activeAttemptId !== null && !validMetadataId(meta.capacity.activeAttemptId)
+        || !!meta.graphContract || meta.capacity.occupiedSlots != null || meta.capacity.activeClaims != null)
         return false;
     if (meta.appVersion === '2.0.0-dev.2')
         return meta.executionContract === '002-v1' && meta.managedExecution === 'native_codex'
             && !meta.maintenanceContract && meta.capacity.connectionId === 'codex-native' && !meta.capacity.resourceId;
+    if (meta.appVersion === '2.0.0-dev.5')
+        return meta.executionContract === '005-v1' && meta.workflowContract === '005-v1'
+            && ['economical_routing', 'verified_delivery'].every(capability => meta.capabilities.includes(capability))
+            && meta.managedExecution === 'native_codex_claude' && meta.maintenanceContract === 'owner-stop/1'
+            && meta.capacity.resourceId === 'managed-native' && !meta.capacity.connectionId;
     return (meta.appVersion === '2.0.0-dev.3' && meta.executionContract === '003-v1'
-        || meta.appVersion === '2.0.0-dev.4' && meta.executionContract === '004-v1')
+        || meta.appVersion === '2.0.0-dev.4' && meta.executionContract === '004-v1' && meta.capabilities.includes('economical_routing'))
         && meta.managedExecution === 'native_codex_claude' && meta.maintenanceContract === 'owner-stop/1'
         && meta.capacity.resourceId === 'managed-native' && !meta.capacity.connectionId;
 }
@@ -143,7 +196,7 @@ export async function verifyOwner() {
     verified = false;
     const { data } = await api('/meta');
     if (!supportsManagedExecution(data)) {
-        throw new ApiError('incompatible_owner', 'Open this workspace with the current Council 005 owner. Older owners require their exact maintenance Stop command before reopening.');
+        throw new ApiError('incompatible_owner', 'Open this workspace with the current Council 006 owner. Older owners require their exact maintenance Stop command before reopening.');
     }
     verified = true;
     return data;

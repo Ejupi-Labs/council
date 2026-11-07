@@ -47,6 +47,9 @@ func (s *Store) AdoptWorkflow(ctx context.Context, ownerID, taskID string, in do
 		return domain.Failure(in.RequestID, invalid)
 	}
 	return s.mutate(ctx, in.RequestID, "tasks.workflow.adopt", WorkflowAdoptFingerprint(taskID, in), func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false); e != nil {
+			return 0, nil, e
+		}
 		g, e := s.gate(ctx, tx)
 		if e != nil {
 			return 0, nil, e

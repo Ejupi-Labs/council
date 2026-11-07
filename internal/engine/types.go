@@ -1,4 +1,4 @@
-// Package engine coordinates one durable, explicitly requested authoring attempt.
+// Package engine coordinates durable, explicitly requested managed work.
 package engine
 
 import (
@@ -48,9 +48,10 @@ type Engine struct {
 	closeOnce    sync.Once
 	closeErr     error
 	watchEnd     chan struct{}
-	activeID     string
-	activeCancel context.CancelFunc
-	workers      sync.WaitGroup
-	fenced       bool
-	stopWatches  map[string]struct{}
+	// activeWorkers retains each cancellation handle until that exact worker exits.
+	// All access is ordered by control; cancellation alone never releases ownership.
+	activeWorkers map[string]context.CancelFunc
+	workers       sync.WaitGroup
+	fenced        bool
+	stopWatches   map[string]struct{}
 }

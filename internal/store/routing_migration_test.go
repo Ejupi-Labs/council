@@ -33,9 +33,11 @@ func TestRoutingMigrationPreservesAcceptedSchema3WithoutGrantingAuthority(t *tes
 	s.db.QueryRow("SELECT count(*) FROM task_budgets").Scan(&budgets)
 	s.db.QueryRow("SELECT count(*) FROM task_routing_versions").Scan(&authorities)
 	s.db.QueryRow("SELECT attempt_id FROM capacity_claims").Scan(&claim)
-	if version != 5 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
+	if version != 6 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
 		t.Fatal("migration granted work or released ownership", version, budgets, authorities, claim)
 	}
+	assertGraphLegacyClaim(t, s, claimBefore)
+	assertNoMigratedGraphAuthority(t, s)
 	replayed := s.CreateTask(context.Background(), "66666666666666666666666666666666", ids.Input)
 	if replayed.Status != 201 || replayed.Envelope.Receipt == nil {
 		t.Fatal("new config/gate prevented old exact replay", replayed)

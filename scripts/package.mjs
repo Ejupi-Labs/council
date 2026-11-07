@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const targets = { win32: 'windows', darwin: 'darwin', linux: 'linux' };
 const architectures = { x64: 'amd64', arm64: 'arm64' };
-export const version = '2.0.0-dev.5';
+export const version = '2.0.0-dev.6';
 
 // Never replace this list with a directory walk or a source-tree archive.
 const documents = Object.freeze([

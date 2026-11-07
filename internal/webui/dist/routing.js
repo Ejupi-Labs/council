@@ -1,4 +1,4 @@
-import { addFact, api, ApiError, element, errorMessage, feedback, readSession, requestId, timeLabel, writeSession } from './api.js';
+import { addFact, api, ApiError, element, errorMessage, feedback, readSession, requestId, supportsGraphCapacity, timeLabel, writeSession } from './api.js';
 import { usageLabel } from './native-observations.js';
 const value = (id) => element(id).value;
 const checked = (id) => element(id).checked;
@@ -56,6 +56,7 @@ export class RoutingView {
     detail = null;
     taskRouting = null;
     taskBudget = null;
+    graphBudget = null;
     budgetEditorTaskId = null;
     cursors = {};
     busy = new Set();
@@ -313,6 +314,9 @@ export class RoutingView {
                 return;
             if (subjectKey(data.subject) !== subjectKey(subject))
                 throw new ApiError('invalid_response', 'The capacity response does not identify the selected subject.');
+            const managed = data.managedOccupancy;
+            if (!managed || !supportsGraphCapacity({ resourceId: managed.resourceId, limit: managed.limit, activeAttemptId: managed.activeAttemptId, occupiedSlots: managed.occupiedSlots, activeClaims: managed.activeClaims }))
+                throw new ApiError('invalid_response', 'The current managed claims are incomplete or inconsistent; occupancy is unknown.');
             this.capacity = data;
             this.renderCapacity();
         }
@@ -355,7 +359,10 @@ export class RoutingView {
             evidenceButtons.append(button);
         }
         addFact(facts, 'Reported eligibility', (capacity.reportEligibility.permitted ? 'Permitted under report policy' : 'Blocked under report policy') + ' · ' + capacity.reportEligibility.policy + ' · occupancy positive ' + capacity.reportEligibility.positiveCoverage.occupancy + ' · allowance positive ' + capacity.reportEligibility.positiveCoverage.allowance + ' · ' + capacity.reportEligibility.reasonCodes.join(', ') + '. Authentication and model access remain unknown.');
-        addFact(facts, 'Council managed occupancy', capacity.managedOccupancy.activeAttemptId ? 'One worker claimed by ' + capacity.managedOccupancy.activeAttemptId + ' · context ' + (capacity.managedOccupancy.activeContextId || 'unknown') + ' · applies to this subject ' + capacity.managedOccupancy.claimsSubject : 'No Council worker claim. External idleness is not established.');
+        const managed = capacity.managedOccupancy;
+        addFact(facts, 'Council managed occupancy', 'Council occupied slots: ' + managed.occupiedSlots + ' · pool limit ' + managed.limit + '. '
+            + managed.activeClaims.map(claim => 'Slot ' + claim.slot + ': ' + claim.attemptId + ' · ' + claim.executorKind + (claim.contextId ? ' · context ' + claim.contextId : ' · no native context') + (claim.legacyBarrier ? ' · legacy barrier reserves the whole pool' : '')).join('; ')
+            + ' · applies to this subject ' + managed.claimsSubject + '. External idleness is not established.');
         const corrections = [{ value: '', label: 'New observation (no correction)' }, ...Array.from(new Map(refs.map(ref => [ref.reportId, ref])).values()).map(ref => ({ value: ref.reportId, label: ref.reportId + ' · ' + ref.state + ' · origin ' + subjectKey(ref.subject) }))];
         const localCorrection = this.editors['routing-report-correction'];
         if (typeof localCorrection === 'string' && /^[a-f0-9]{32}$/.test(localCorrection) && !corrections.some(option => option.value === localCorrection))
@@ -546,7 +553,7 @@ export class RoutingView {
         }
     }
     requiresAdoption(taskId) { return this.detail?.task.id === taskId && this.taskRouting?.adoptionRequired === true; }
-    clearTask() { this.budgetEditorTaskId = null; this.detail = null; this.taskRouting = null; this.taskBudget = null; this.taskGeneration++; this.historyGeneration++; this.cursors = {}; for (const id of ['task-route-facts', 'task-budget-facts', 'task-decisions-list', 'task-ledger-list', 'task-usage-list', 'task-usage-summary'])
+    clearTask() { this.budgetEditorTaskId = null; this.detail = null; this.taskRouting = null; this.taskBudget = null; this.graphBudget = null; this.taskGeneration++; this.historyGeneration++; this.cursors = {}; for (const id of ['task-route-facts', 'task-budget-facts', 'task-decisions-list', 'task-ledger-list', 'task-usage-list', 'task-usage-summary'])
         element(id).replaceChildren(); this.controls(); }
     async setTask(detail) {
         if (!this.ready)
@@ -570,6 +577,21 @@ export class RoutingView {
                 throw new ApiError('revision_conflict', 'The task version changed during this routing read. Refresh detail; local input is retained.');
             if (routing.data.authority && routing.data.authority.taskId !== detail.task.id || routing.data.latestDecision && routing.data.latestDecision.taskId !== detail.task.id || budget.data.budget && budget.data.budget.taskId !== detail.task.id)
                 throw new ApiError('invalid_response', 'The routing/budget observation does not identify this selected task.');
+            const graphRef = detail.task.graphRef;
+            if (graphRef) {
+                const ref = budget.data.graphBudgetRef;
+                if (budget.data.budget !== null || budget.data.adoptionRequired !== false || !ref || ref.graphId !== graphRef.graphId || ref.budgetOwnerTaskId !== graphRef.rootTaskId)
+                    throw new ApiError('invalid_response', 'The graph member must identify its shared budget, with no child budget or standalone adoption.');
+                const { data: shared } = await api('/graphs/' + ref.graphId + '/budget');
+                if (generation !== this.taskGeneration || this.detail?.task.id !== detail.task.id || this.detail.task.currentVersion !== detail.task.currentVersion)
+                    return;
+                if (shared.graphId !== graphRef.graphId || shared.budgetOwnerTaskId !== graphRef.rootTaskId || shared.budget?.taskId !== graphRef.rootTaskId
+                    || graphRef.kind === 'node' && !shared.nodeConsumption.some(item => item.nodeId === graphRef.nodeId && item.taskId === detail.task.id))
+                    throw new ApiError('invalid_response', 'The shared graph budget does not identify this member and its actual root owner.');
+                this.graphBudget = shared;
+            }
+            else if (budget.data.graphBudgetRef)
+                throw new ApiError('invalid_response', 'A standalone task cannot silently adopt a graph budget reference.');
             this.taskRouting = routing.data;
             this.taskBudget = budget.data;
             this.renderTask();
@@ -598,7 +620,9 @@ export class RoutingView {
             addFact(facts, 'Captured uncertainty', decision.uncertainties.join('; ') || 'Native access, actual model, allowance and charges remain unknown unless separately observed.');
         }
         else
-            addFact(facts, 'Routing authority', routing?.adoptionRequired ? 'Legacy task · explicit adoption required for NEW execution. Read, Stop, acceptance and exact old replay remain available.' : 'No admitted routing decision');
+            addFact(facts, 'Routing authority', this.detail.task.graphRef
+                ? 'Task-group member · no native routing decision has been admitted. Inspect the current group for dependencies and admission.'
+                : routing?.adoptionRequired ? 'Legacy task · explicit adoption required for NEW execution. Read, Stop, acceptance and exact old replay remain available.' : 'No admitted routing decision');
         if (routing?.authority) {
             const authority = routing.authority;
             addFact(facts, 'Captured suitability', authority.suitabilityAssessment.classification + ' · ' + authority.suitabilityAssessment.source);
@@ -607,7 +631,18 @@ export class RoutingView {
         }
         const bf = element('task-budget-facts');
         bf.replaceChildren();
-        if (!budget)
+        if (this.detail.task.graphRef && this.graphBudget) {
+            const shared = this.graphBudget, root = shared.budget;
+            addFact(bf, 'Shared task-group budget', shared.graphId + ' · actual owner ' + shared.budgetOwnerTaskId);
+            addFact(bf, 'Shared allowance', root.consumedAdmissions + ' consumed / ' + root.grantedAdmissions + ' granted · ' + root.remainingAdmissions + ' remaining');
+            const debit = shared.nodeConsumption.find(item => item.taskId === this.detail.task.id);
+            if (debit)
+                addFact(bf, 'This node, included in shared total', debit.consumedAdmissions + ' native admissions · ' + debit.automaticAdmissions + ' automatic');
+            addFact(bf, 'Additional authority', 'Use the current task group. Children have no separate grant or adoption, and their usage remains child-attempt evidence.');
+        }
+        else if (this.detail.task.graphRef)
+            addFact(bf, 'Shared task-group budget', 'Observation unavailable · owner ' + this.detail.task.graphRef.rootTaskId + ' · inspect the current task group.');
+        else if (!budget)
             addFact(bf, 'Budget', 'Not adopted · no new execution authority; this is not an exhausted zero.');
         else {
             for (const [title, key] of [['Granted admissions', 'grantedAdmissions'], ['Consumed admissions', 'consumedAdmissions'], ['Remaining admissions', 'remainingAdmissions'], ['Automatic admissions', 'automaticAdmissions'], ['Historical admissions', 'historicalAdmissions']])
@@ -623,10 +658,10 @@ export class RoutingView {
             this.budgetEditorTaskId = this.detail.task.id;
         }
         const pendingAdopt = !!this.pending['adopt:' + this.detail.task.id];
-        element('task-adoption-controls').hidden = !routing?.adoptionRequired && !pendingAdopt && !this.adoptStart;
+        element('task-adoption-controls').hidden = !!this.detail.task.graphRef || !routing?.adoptionRequired && !pendingAdopt && !this.adoptStart;
         element('adopt-task-budget').hidden = !routing?.adoptionRequired && !pendingAdopt;
         element('adopt-start-task').hidden = !routing?.adoptionRequired && !this.adoptStart;
-        element('task-grant-controls').hidden = !!routing?.adoptionRequired;
+        element('task-grant-controls').hidden = !!this.detail.task.graphRef || !!routing?.adoptionRequired;
     }
     amendment(action) {
         if (!this.detail || !this.taskBudget)
@@ -646,7 +681,7 @@ export class RoutingView {
     }
     async amend(action) {
         const id = this.detail?.task.id;
-        if (!id)
+        if (!id || this.detail?.task.graphRef)
             return;
         const result = await this.mutate(action + ':' + id, () => this.amendment(action), 'task-routing-status');
         if (result) {
@@ -656,7 +691,7 @@ export class RoutingView {
     }
     async adoptAndStart() {
         const id = this.detail?.task.id;
-        if (!id || this.busy.has('adoptStart'))
+        if (!id || this.detail?.task.graphRef || this.busy.has('adoptStart'))
             return;
         try {
             if (!this.adoptStart)
@@ -763,7 +798,7 @@ export class RoutingView {
         element('refresh-routing').disabled = !this.ready || this.busy.has('refresh');
         for (const kind of ['decisions', 'ledger', 'usage'])
             for (const prefix of ['load', 'more'])
-                element(prefix + '-task-' + kind).disabled = !this.ready || !this.detail || this.busy.has('history:' + this.detail.task.id + ':' + kind);
+                element(prefix + '-task-' + kind).disabled = kind === 'ledger' && !!this.detail?.task.graphRef || !this.ready || !this.detail || this.busy.has('history:' + this.detail.task.id + ':' + kind);
         for (const [id, key, title] of [['save-routing-report', 'report', 'Record user report'], ['save-routing-account', 'account', 'Save declaration'], ['save-routing-link', 'link', 'Save association'], ['save-routing-context', 'context', 'Save context'], ['save-routing-profile', 'profile', 'Save profile preference'], ['save-routing-policy', 'policy', 'Save routing defaults']]) {
             const button = element(id);
             button.disabled = !this.ready || this.busy.has(key) || key === 'report' && !this.capacity && !this.pending[key];
@@ -772,10 +807,10 @@ export class RoutingView {
         for (const [id, action] of [['grant-task-budget', 'grant'], ['adopt-task-budget', 'adopt']]) {
             const key = action + ':' + this.detail?.task.id;
             const button = element(id);
-            button.disabled = !this.ready || !this.detail || !this.taskBudget || this.busy.has(key);
+            button.disabled = !!this.detail?.task.graphRef || !this.ready || !this.detail || !this.taskBudget || this.busy.has(key);
             button.textContent = this.pending[key] ? 'Retry pending ' + action : action === 'grant' ? 'Grant additional authority' : 'Adopt task budget';
         }
-        element('adopt-start-task').disabled = !this.ready || !this.detail || this.busy.has('adoptStart') || !this.taskBudget;
+        element('adopt-start-task').disabled = !!this.detail?.task.graphRef || !this.ready || !this.detail || this.busy.has('adoptStart') || !this.taskBudget;
         element('adopt-start-task').textContent = this.adoptStart ? 'Retry pending adoption and Start · ' + this.adoptStart.taskId.slice(0, 8) : 'Adopt and start this captured version';
         element('routing-pending-summary').textContent = Object.values(this.pending).map(pending => 'Pending exact ' + pending.method + ' ' + pending.path + ' · request ' + pending.body['requestId']).join('\n') + (this.adoptStart ? '\nPending adoption/Start for task ' + this.adoptStart.taskId + ' · adoption ' + this.adoptStart.amendment.body['requestId'] + ' · Start ' + this.adoptStart.start['requestId'] + ' · adoption acknowledged ' + !!this.adoptStart.adoptionAcknowledged : '');
     }

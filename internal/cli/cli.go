@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Ejupi-Labs/council/v2/internal/app"
@@ -35,7 +36,7 @@ const help = `Council — managed local workspace
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
 Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
-` + executionHelp + routingHelp + workflowHelp
+` + executionHelp + routingHelp + workflowHelp + graphHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
 	if handled, code := fixture.HandleWorkflowInternal(args); handled {
@@ -92,7 +93,12 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), bindErr))
 			}
 		}
-		result := forward(ctx, desc, c)
+		var result domain.Result
+		if strings.HasPrefix(c.op, "graphs.") && c.method == "POST" {
+			result = forwardGraphIntent(ctx, root, desc, c)
+		} else {
+			result = forward(ctx, desc, c)
+		}
 		if ctx.Err() != nil && c.requestID == "" {
 			_ = emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("observation_interrupted", "Observation ended; owned work continues. Inspect the attempt again.")))
 			return 130
@@ -118,7 +124,12 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				return emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), bindErr))
 			}
 		}
-		result := forward(ctx, desc, c)
+		var result domain.Result
+		if strings.HasPrefix(c.op, "graphs.") && c.method == "POST" {
+			result = forwardGraphIntent(ctx, root, desc, c)
+		} else {
+			result = forward(ctx, desc, c)
+		}
 		if ctx.Err() != nil && c.requestID == "" {
 			_ = emit(stdout, stderr, c.json, domain.Failure(requestIdentity(c), domain.Fail("observation_interrupted", "Observation ended; owned work continues. Inspect the attempt again.")))
 			return 130

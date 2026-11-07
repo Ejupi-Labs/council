@@ -104,8 +104,16 @@ func New(service Executor, config Config) http.Handler {
 				fail("unsupported_media_type", "Send application/json with UTF-8 encoding.")
 				return
 			}
-			body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, domain.MaxBodyBytes))
+			bodyLimit := int64(domain.MaxBodyBytes)
+			if op == "graphs.start" {
+				bodyLimit = domain.MaxGraphDeclarationBytes
+			}
+			body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
 			if err != nil {
+				if op == "graphs.start" {
+					fail("input_too_large", "The graph declaration exceeds 2 MiB or could not be read. Reduce it explicitly.")
+					return
+				}
 				fail("input_too_large", "The request body exceeds 32 MiB or could not be read. Reduce it explicitly.")
 				return
 			}

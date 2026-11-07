@@ -1,3 +1,4 @@
+import type { GraphBudgetRef, GraphClaimView } from './graph-types.js';
 import type { ConnectionCapability, Fact, NativeModelsObservation, TaskSummary, TaskVersion, UsageObservation } from './execution-types.js';
 
 // API 1 / 004-v1 DTO mirror of internal/domain/routing.go. Exact counts and price
@@ -39,7 +40,7 @@ export interface CapacityView {
   subject: CapacitySubject; revision: string; asOf: string; accountLink: AccountLink | null;
   dimensions: { occupancy: CapacityDimension; allowance: CapacityDimension; service: CapacityDimension };
   reportEligibility: { policy: 'allow' | 'require_positive'; permitted: boolean; positiveCoverage: { occupancy: boolean; allowance: boolean }; reasonCodes: string[] };
-  managedOccupancy: { resourceId: 'managed-native'; limit: 1; activeAttemptId: string | null; activeContextId: ContextId | null; claimsSubject: boolean };
+  managedOccupancy: { resourceId: 'managed-native'; limit: 2; activeAttemptId: string | null; activeContextId: ContextId | null; claimsSubject: boolean; occupiedSlots: '0' | '1' | '2'; activeClaims: GraphClaimView[] };
 }
 export interface ContextView { id: ContextId; harnessId: 'codex' | 'claude-code'; connectionId: string; label: string; enabled: boolean; revision: string; updatedAt: string; capabilities: ConnectionCapability; accountLink: AccountLink; capacity: CapacityView }
 export interface CapacityReport {
@@ -65,11 +66,12 @@ export interface TaskBudget { taskId: string; revision: string; grantedAdmission
 export interface RoutingDecision {
   id: string; taskId: string; taskVersion: string; attemptId: string; requestId: string; authorityId: string;
   kind: string; previousAttemptId: string | null; createdAt: string; candidateAssessments: CandidateAssessment[];
-  selectedTarget: ResolvedTarget; budgetEffect: { admissionUnits: string; remainingAdmissions: string; budgetRevision: string; window: BudgetWindow };
+  selectedTarget: ResolvedTarget; budgetEffect: { admissionUnits: string; remainingAdmissions: string; budgetRevision: string; window: BudgetWindow; graphBudgetRef?: GraphBudgetRef };
   capacityEvidence: CandidateCapacityEvidence[]; evidenceSnapshot: RoutingFacts; uncertainties: string[];
 }
 export interface TaskRoutingView { authority: TaskRoutingAuthority | null; latestDecision: RoutingDecision | null; adoptionRequired: boolean }
-export interface TaskBudgetView { budget: TaskBudget | null; adoptionRequired: boolean }
+export type TaskBudgetView = { budget: TaskBudget | null; adoptionRequired: boolean; graphBudgetRef?: never }
+  | { budget: null; adoptionRequired: false; graphBudgetRef: GraphBudgetRef };
 export interface BudgetAmendment { id: string; taskId: string; requestId: string; action: string; additionalAdmissions: string; newWindowSeconds: number | null; priorBudget: TaskBudget | null; budget: TaskBudget; authorityId: string | null; taskVersion: string; createdAt: string }
 export interface BudgetAmendmentResult { task: TaskSummary; version?: TaskVersion; amendment: BudgetAmendment; budget: TaskBudget; authority?: TaskRoutingAuthority }
 export interface BudgetLedgerEntry { id: string; sequence: string; taskId: string; budgetRevision: string; kind: string; requestId: string; attemptId: string | null; grantedDelta: string; consumedDelta: string; window: BudgetWindow; createdAt: string }

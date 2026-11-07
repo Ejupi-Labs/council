@@ -3,6 +3,9 @@ package httpapi
 import "strings"
 
 func executionRoute(p, verb string) (op, id, methods string, queries []string) {
+	if graphOp, graphID, graphMethods, graphQueries := graphRoute(p, verb); graphOp != "" {
+		return graphOp, graphID, graphMethods, graphQueries
+	}
 	if workflowOp, workflowID, workflowMethods, workflowQueries := workflowRoute(p, verb); workflowOp != "" {
 		return workflowOp, workflowID, workflowMethods, workflowQueries
 	}

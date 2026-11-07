@@ -46,11 +46,8 @@ func (s *Store) ClaimAttempt(ctx context.Context, id, ownerID string) (domain.At
 		if e = s.workflowAttemptControls(ctx, tx, a); e != nil {
 			return e
 		}
-		if g.ActiveAttemptID != nil {
-			return domain.Fail("attempt_active", "The managed native resource already has an owned attempt. Keep this attempt queued.")
-		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO capacity_claims VALUES('managed-native',?)", id); e != nil {
-			return storageError()
+		if e = s.claimCapacity(ctx, tx, a, ownerID); e != nil {
+			return e
 		}
 		a.Phase = "preparing"
 		if _, e = s.appendEvent(ctx, tx, id, "preparation_started", nil); e != nil {
@@ -60,6 +57,9 @@ func (s *Store) ClaimAttempt(ctx context.Context, id, ownerID string) (domain.At
 			return e
 		}
 		if e = s.syncWorkflowClaim(ctx, tx, a); e != nil {
+			return e
+		}
+		if e = s.projectGraphAttemptPhase(ctx, tx, a); e != nil {
 			return e
 		}
 		out = a
@@ -85,8 +85,14 @@ func (s *Store) RecordLaunchIntent(ctx context.Context, id string) (domain.Attem
 		if e = checkGate(g); e != nil {
 			return e
 		}
-		if a.Phase != "preparing" || a.Stop != nil || g.ActiveAttemptID == nil || *g.ActiveAttemptID != id {
+		if a.Phase != "preparing" || a.Stop != nil {
 			return domain.Fail("attempt_active", "The attempt is not eligible for native launch.")
+		}
+		if g.OwnerInstanceID != "" && g.OwnerInstanceID != a.OwnerInstanceID {
+			return domain.Fail("dispatch_fenced", "The launch claim belongs to another owner epoch.")
+		}
+		if e = s.checkAttemptClaim(ctx, tx, a.OwnerInstanceID, id); e != nil {
+			return e
 		}
 		t, e := s.task(ctx, tx, a.TaskID)
 		if e != nil {
@@ -97,6 +103,9 @@ func (s *Store) RecordLaunchIntent(ctx context.Context, id string) (domain.Attem
 		}
 		if expired(a) {
 			return domain.Fail("capability_unavailable", "The execution deadline expired. Do not launch this attempt.")
+		}
+		if e = s.graphDispatchControls(ctx, tx, a.OwnerInstanceID, a, true); e != nil {
+			return e
 		}
 		if a.SourceSnapshotID == nil {
 			return domain.Fail("source_capture_blocked", "A durable current-source snapshot is required before launch.")
@@ -182,6 +191,11 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, u domain.AttemptUp
 					return e
 				}
 			}
+			if u.Kind == "worker_started" && u.Phase == "running" {
+				if e = s.recordGraphKnownFirstGO(ctx, tx, a, *u.StartedAt); e != nil {
+					return e
+				}
+			}
 			a.StartedAt = u.StartedAt
 		}
 		if u.SourceSnapshotID != nil {
@@ -260,6 +274,11 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, u domain.AttemptUp
 		}
 		if e = s.bumpState(ctx, tx, &a); e != nil {
 			return e
+		}
+		if u.Phase != "" {
+			if e = s.projectGraphAttemptPhase(ctx, tx, a); e != nil {
+				return e
+			}
 		}
 		out = a
 		return nil

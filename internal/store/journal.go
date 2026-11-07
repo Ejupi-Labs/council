@@ -49,6 +49,9 @@ func sqliteDSN(path string) (string, error) {
 		uriPath = "/" + uriPath
 	}
 	query := url.Values{}
+	// Acquire the writer lock before reading admission authority. Concurrent
+	// clients then wait before capturing a snapshot instead of failing its upgrade.
+	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "foreign_keys(1)")
 	query.Add("_pragma", "synchronous(2)")

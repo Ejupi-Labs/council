@@ -1,8 +1,10 @@
 import type { Policy } from './types.js';
+import type { GraphBudgetRef, GraphRef } from './graph-types.js';
 import type { Workflow, WorkflowStep } from './workflow-types.js';
 import type { ResolvedTarget, RoutingDecision, RoutingOptions, TaskBudget } from './routing-types.js';
 
 export interface TaskSummary {
+  graphRef?: GraphRef;
   id: string; projectId: string; currentVersion: string; revision: string; stateRevision: string;
   latestAttemptId: string | null; requestedMode: string; policySource: string; status: string; stage: string; nextAction: string;
 }
@@ -34,7 +36,7 @@ export interface ConnectionCapability {
   sessionContinuity: string; sessionPersistence: string; cancellationScope: string;
   liveQualification: string; fakeMode: boolean; limits: Record<string, number>;
 }
-export interface ExecutionCapabilities { resourceId: 'managed-native'; limit: 1; defaultHarnessId: 'codex'; connections: ConnectionCapability[]; routingContract?: '004-v1'; supportedContinuationCategories?: string[]; recognizedContinuationCategories?: string[]; actualAccountSelection?: string; paidAPIExecution?: string }
+export interface ExecutionCapabilities { resourceId: 'managed-native'; limit: 2; defaultHarnessId: 'codex'; connections: ConnectionCapability[]; routingContract?: '004-v1'; supportedContinuationCategories?: string[]; recognizedContinuationCategories?: string[]; actualAccountSelection?: string; paidAPIExecution?: string }
 export interface Attempt {
   workflowId?: string; stepId?: string; role?: string; executorKind?: string; inputCandidateId?: string; trigger?: string;
   routingDecisionId?: string; resolvedTarget?: ResolvedTarget;
@@ -57,7 +59,7 @@ export interface Attempt {
   };
 }
 export interface TaskDetail { task: Task; version: TaskVersion; latestAttempt: Attempt | null; acceptance: { responseArtifactId: string; acceptedAt: string } | null }
-export interface Admission { task: TaskSummary; version: TaskVersion; attempt: Attempt; routingDecision?: RoutingDecision; budget?: TaskBudget; workflow?: Workflow; step?: WorkflowStep }
+export interface Admission { task: TaskSummary; version: TaskVersion; attempt: Attempt; routingDecision?: RoutingDecision; budget?: TaskBudget | null; graphBudgetRef?: GraphBudgetRef; workflow?: Workflow; step?: WorkflowStep }
 export interface Artifact { id: string; attemptId: string; kind: string; byteLength: string; closed: boolean; completeness: string; sha256: string | null; createdAt: string }
 export interface ArtifactChunk { artifactId: string; offset: string; nextOffset: string; through: string; bytesBase64: string; eof: boolean; streamClosed: boolean; completeness: string; sha256: string | null }
 export interface AttemptEvent { sequence: string; kind: string; observedAt: string; metadata: unknown }

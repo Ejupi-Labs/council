@@ -26,7 +26,7 @@ func (s *Store) workflowNeedsFindingReview(ctx context.Context, q queryer, w dom
 
 // Resolution joins a fresh qualifying inspection with observed affected checks.
 // A model's list is only a claim; no list alone changes an old finding/outcome.
-func (s *Store) resolveWorkflowFindings(ctx context.Context, tx *sql.Tx, w domain.Workflow, review *domain.ReviewRecord, checks []domain.CheckReceipt, direct bool) error {
+func (s *Store) resolveWorkflowFindings(ctx context.Context, tx *sql.Tx, w domain.Workflow, review *domain.ReviewRecord, checks []domain.CheckReceipt, direct bool, graphFinal *workflowpolicy.GraphFinalPlanFacts) error {
 	if w.CorrectionCyclesUsed == 0 {
 		return nil
 	}
@@ -34,7 +34,7 @@ func (s *Store) resolveWorkflowFindings(ctx context.Context, tx *sql.Tx, w domai
 	if e != nil {
 		return e
 	}
-	plan := workflowpolicy.Plan(workflowpolicy.PlanInput{Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: w.SelectedCandidateID != nil || w.SelectedResponseBinding != nil, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed})
+	plan := workflowpolicy.Plan(workflowpolicy.PlanInput{GraphFinal: graphFinal, Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: w.SelectedCandidateID != nil || w.SelectedResponseBinding != nil, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed})
 	if plan.Action != "accept" && plan.Action != "response_acceptance_pending" && plan.Role != "local_delivery" && plan.Role != "external_delivery" {
 		return nil
 	}

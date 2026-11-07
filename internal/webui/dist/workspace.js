@@ -3,6 +3,7 @@ import { TasksView } from './tasks.js';
 import { DraftsView } from './drafts.js';
 import { RoutingView } from './routing.js';
 import { WorkflowView } from './workflow.js';
+import { GraphsView } from './graphs.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, verifyOwner, writeSession } from './api.js';
 function isAbsolute(path) {
     return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || /^\\\\[^\\]+\\[^\\]+/.test(path);
@@ -13,6 +14,7 @@ class Workspace {
     routing = new RoutingView();
     workflow = new WorkflowView();
     tasks = new TasksView(this.drafts, this.routing, this.workflow);
+    graphs = new GraphsView();
     agents = new AgentsView(id => this.tasks.selectHarness(id), capabilities => this.tasks.setCapabilities(capabilities));
     path = element('project-path');
     projectSelect = element('project-select');
@@ -34,6 +36,10 @@ class Workspace {
     pendingOpen = readSession('pendingOpen');
     pendingPolicy = readSession('pendingPolicy');
     constructor() {
+        this.graphs.onOpenTask = (id, ref) => { void this.tasks.openGraphTask(id, ref); };
+        this.graphs.onTasksChanged = projectId => { if (projectId === this.selectedId)
+            void this.tasks.refreshTasks(); };
+        this.tasks.onOpenGraph = id => { void this.graphs.open(id); };
         this.routing.onTaskChanged = id => this.tasks.refreshAfterRoutingMutation(id);
         this.routing.onTaskObserved = () => this.tasks.refreshRoutingControls();
         this.workflow.onTaskChanged = id => this.tasks.refreshAfterRoutingMutation(id);
@@ -87,6 +93,7 @@ class Workspace {
         const generation = ++this.connectionGeneration;
         this.routing.setReady(false);
         this.workflow.setReady(false);
+        this.graphs.disconnect();
         feedback('app-status', 'Verifying access to the local owner…');
         element('reconnect').disabled = true;
         try {
@@ -98,7 +105,8 @@ class Workspace {
             this.routing.setReady(supportsManagedExecution(meta));
             this.workflow.setReady(supportsManagedExecution(meta));
             this.tasks.setOwner(meta);
-            feedback('app-status', meta.executionContract === '005-v1' ? 'Connected to the local workspace. Auto uses finite verified workflows with one shared managed worker slot.' : 'Connected to the local workspace. This owner does not support managed execution.');
+            this.graphs.setOwner(meta);
+            feedback('app-status', supportsManagedExecution(meta) ? 'Connected to the local workspace. Auto uses finite verified workflows. Up to two managed workers can run; context, account and task limits may reduce concurrency.' : 'Connected to the local workspace. This owner does not support managed execution.');
             // Recovery never replays a cached mutation automatically; each retry remains explicit.
             await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh(), this.routing.refresh(), this.workflow.refreshPreference()]);
         }
@@ -109,6 +117,7 @@ class Workspace {
             this.routing.setReady(false);
             this.workflow.setReady(false);
             this.tasks.disconnect();
+            this.graphs.disconnect();
             this.updateControls();
             feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');
         }
@@ -179,6 +188,7 @@ class Workspace {
         writeSession('selectedProject', id);
         this.drafts.setProject(id);
         this.tasks.setProject(id);
+        this.graphs.setProject(id);
         const project = this.projects.get(id);
         if (project)
             this.renderProject({ project, observation: null });
@@ -250,6 +260,7 @@ class Workspace {
                 writeSession('selectedProject', data.project.id);
                 this.drafts.setProject(data.project.id);
                 this.tasks.setProject(data.project.id);
+                this.graphs.setProject(data.project.id);
                 this.renderProjects();
                 this.renderProject(data);
                 feedback('project-status', 'Project opened. Existing files, staging and branch are unchanged.', 'success');
@@ -280,6 +291,7 @@ class Workspace {
                 return;
             this.policy = data;
             this.tasks.setPolicy(data);
+            this.graphs.setPolicy(data);
             if (editGeneration === this.policyEditGeneration && !this.pendingPolicy)
                 this.policyMode.value = data.mode;
             feedback('policy-status', 'Saved requested preference: ' + policyName(data.mode) + '. Revision ' + data.revision
@@ -316,6 +328,7 @@ class Workspace {
             this.policyReadGeneration++;
             this.policy = data;
             this.tasks.setPolicy(data);
+            this.graphs.setPolicy(data);
             this.pendingPolicy = null;
             writeSession('pendingPolicy', null);
             if (this.policyEditGeneration === pending.editGeneration)

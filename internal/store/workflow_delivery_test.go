@@ -50,10 +50,40 @@ func deliveryDAOFixture(t *testing.T) deliveryDAOState {
 	step.InputCandidateID = ptr(facts.CandidateBinding.CandidateID)
 	attempt.Role, attempt.ExecutorKind, attempt.ConnectionID, attempt.Phase = "local_delivery", "local_application", "local-application", "running"
 	attempt.LaunchIntent = false
+	attempt.StartedAt, attempt.ResolvedTarget, attempt.RoutingDecisionID = nil, nil, nil
 	attempt.InputCandidateID = ptr(facts.CandidateBinding.CandidateID)
-	workflowListExec(t, s, "UPDATE workflow_steps SET role=?,executor_kind=?,logical_key=?,status=?,input_candidate_id=?,data=? WHERE id=?", step.Role, step.ExecutorKind, step.LogicalKey, step.Status, *step.InputCandidateID, encode(step), step.ID)
-	workflowListExec(t, s, "UPDATE attempts SET phase=?,data=? WHERE id=?", attempt.Phase, encode(attempt), attempt.ID)
-	workflowListExec(t, s, "UPDATE workflows SET state=?,authority_data=?,data=? WHERE id=?", w.State, encode(w.Authority), encode(w), w.ID)
+	// This synthetic executor conversion must release the original native
+	// reservation while its stored attempt still matches, then acquire local
+	// ownership through the same claim allocator used by actual local stages.
+	if e = s.executionWrite(ctx, func(tx *sql.Tx) error {
+		if err := s.checkAttemptClaim(ctx, tx, owner, attempt.ID); err != nil {
+			return err
+		}
+		released, err := tx.ExecContext(ctx, "DELETE FROM capacity_claims WHERE attempt_id=? AND owner_instance_id=?", attempt.ID, owner)
+		if err != nil {
+			return err
+		}
+		count, err := released.RowsAffected()
+		if err != nil || count != 1 {
+			return errors.New("controlled delivery fixture lost its original claim")
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE workflow_steps SET role=?,executor_kind=?,logical_key=?,status=?,input_candidate_id=?,data=? WHERE id=?", step.Role, step.ExecutorKind, step.LogicalKey, step.Status, *step.InputCandidateID, encode(step), step.ID); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE attempts SET phase=?,data=? WHERE id=?", attempt.Phase, encode(attempt), attempt.ID); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE workflows SET state=?,authority_data=?,data=? WHERE id=?", w.State, encode(w.Authority), encode(w), w.ID); err != nil {
+			return err
+		}
+		return s.claimCapacity(ctx, tx, attempt, owner)
+	}); e != nil {
+		t.Fatal(e)
+	}
+	claims, e := s.GraphClaims(ctx)
+	if e != nil || len(claims) != 1 || claims[0].AttemptID != attempt.ID || claims[0].ExecutorKind != "local_application" || claims[0].ContextID != nil || claims[0].CapturedDeclaredAccountID != nil || claims[0].CapturedLinkRevision != nil {
+		t.Fatal("controlled local fixture did not acquire its actual claim shape", claims, e)
+	}
 	hash, invalid := domain.WorkflowAuthoritySHA256(w.Authority)
 	if invalid != nil {
 		t.Fatal(invalid)
@@ -193,9 +223,8 @@ func TestWorkflowDeliveryDAOStopAllowsOnlyAlreadyPermittedAcknowledgement(t *tes
 	if e != nil || attempt.Stop == nil || attempt.Stop.RequestID != stopID || attempt.Phase != "cancelling" {
 		t.Fatal("effect acknowledgement rewrote primary Stop", attempt, e)
 	}
-	var claim string
-	if e = f.store.db.QueryRow("SELECT attempt_id FROM capacity_claims WHERE resource_id='managed-native'").Scan(&claim); e != nil || claim != attempt.ID {
-		t.Fatal("Stop released ownership before controller settlement", claim, e)
+	if e = f.store.checkAttemptClaim(ctx, f.store.db, f.owner, attempt.ID); e != nil {
+		t.Fatal("Stop released exact ownership before controller settlement", attempt.ID, e)
 	}
 }
 
@@ -227,9 +256,8 @@ func TestWorkflowDeliveryDAOUnacknowledgedPermitCannotReleaseOwnership(t *testin
 			if e != nil || attempt.Phase == "settled" || attempt.Outcome != nil {
 				t.Fatal("rejected settlement partially committed terminal", attempt, e)
 			}
-			var claim string
-			if e = f.store.db.QueryRow("SELECT attempt_id FROM capacity_claims WHERE resource_id='managed-native'").Scan(&claim); e != nil || claim != attempt.ID {
-				t.Fatal("rejected settlement lost shared ownership", claim, e)
+			if e = f.store.checkAttemptClaim(ctx, f.store.db, f.owner, attempt.ID); e != nil {
+				t.Fatal("rejected settlement lost exact owned claim", attempt.ID, e)
 			}
 			rows, active := deliveryDAORows(t, f)
 			if len(rows) != 1 || !active.Valid {

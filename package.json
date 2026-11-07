@@ -1,6 +1,6 @@
 {
   "name": "council-development",
-  "version": "2.0.0-dev.5",
+  "version": "2.0.0-dev.6",
   "private": true,
   "description": "Native Council development tooling. Runtime releases are self-contained binaries.",
   "type": "module",

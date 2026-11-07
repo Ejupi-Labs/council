@@ -55,6 +55,9 @@ func emit(kind string, fields map[string]any) error {
 }
 
 func HandleInternal(args []string) (bool, int) {
+	if handled, code := handleGraphInternal(args); handled {
+		return true, code
+	}
 	if handled, code := handleClaudeInternal(args); handled {
 		return true, code
 	}

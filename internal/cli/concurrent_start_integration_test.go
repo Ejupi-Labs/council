@@ -6,6 +6,7 @@ import (
 	json "encoding/json/v2"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func concurrentCLIEnvelope(t *testing.T, result concurrentCLIResult) domain.Enve
 	return envelope
 }
 
-func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
+func TestConcurrentIndependentCLIStartsShareTwoSlotsAndSerializeCapturedContext(t *testing.T) {
 	f := newCLIFixture(t) // Registers authenticated owner cleanup before admission.
 	var project struct {
 		Project domain.Project `json:"project"`
@@ -80,7 +81,9 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 			decodeCLIData(t, envelope, &admissions[result.index])
 			processIDs[result.index] = result.pid
 			admitted := admissions[result.index]
-			if admitted.Version.Pins.HarnessID != []string{"codex", "claude-code"}[result.index] || admitted.Attempt.ConnectionID != []string{"codex-native", "claude-native"}[result.index] {
+			if admitted.Version.Pins.HarnessID != []string{"codex", "claude-code"}[result.index] || admitted.Attempt.ConnectionID != []string{"codex-native", "claude-native"}[result.index] ||
+				admitted.Attempt.ResolvedTarget == nil || admitted.Attempt.ResolvedTarget.ContextID != []string{"codex-native", "claude-native"}[result.index] ||
+				admitted.Attempt.ResolvedTarget.ConnectionID != admitted.Attempt.ConnectionID || admitted.Attempt.ResolvedTarget.HarnessID != admitted.Version.Pins.HarnessID {
 				t.Fatalf("independent clients lost their captured different targets: %+v", admitted)
 			}
 			if envelope.RequestID != requestIDs[result.index] || envelope.Receipt == nil || envelope.Receipt.RequestID != requestIDs[result.index] || envelope.Receipt.Operation != "tasks.start" || admitted.Attempt.StartRequestID != requestIDs[result.index] {
@@ -101,6 +104,10 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 	if err != nil || ownerID == "" || ownerID != admissions[1].Attempt.OwnerInstanceID || ownerID != descriptor.OwnerInstanceID {
 		t.Fatalf("concurrent bootstrap did not converge on one continuing owner: first=%s second=%s descriptor=%s err=%v", ownerID, admissions[1].Attempt.OwnerInstanceID, descriptor.OwnerInstanceID, err)
 	}
+	captured := map[string]domain.Attempt{}
+	for _, admitted := range admissions {
+		captured[admitted.Attempt.ID] = admitted.Attempt
+	}
 	read := func(args ...string) domain.Envelope {
 		t.Helper()
 		return concurrentCLIEnvelope(t, concurrentCLICommand(ctx, f, 0, args...))
@@ -109,8 +116,12 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 		t.Helper()
 		var attempt domain.Attempt
 		decodeCLIData(t, read("attempts", "get", id), &attempt)
-		if attempt.ID != id || attempt.OwnerInstanceID != ownerID {
-			t.Fatalf("observation changed the admitted attempt/owner identity: %+v", attempt)
+		expected, exists := captured[id]
+		if !exists || attempt.ID != id || attempt.OwnerInstanceID != ownerID || attempt.TaskID != expected.TaskID ||
+			attempt.StartRequestID != expected.StartRequestID || attempt.ConnectionID != expected.ConnectionID ||
+			!reflect.DeepEqual(attempt.ResolvedTarget, expected.ResolvedTarget) ||
+			attempt.ExecutionMode != "fake" || attempt.FakeScenario != "slow" {
+			t.Fatalf("observation changed the admitted attempt/owner/target identity: %+v", attempt)
 		}
 		return attempt
 	}
@@ -121,32 +132,6 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("concurrent worker observation exceeded its bounded context")
 		}
-	}
-	active, queued := -1, -1
-	var observed [2]domain.Attempt
-	for active < 0 {
-		for index := range admissions {
-			observed[index] = get(admissions[index].Attempt.ID)
-			if observed[index].Phase == "settled" {
-				t.Fatalf("slow fixture settled before the serialization observation: %+v", observed[index])
-			}
-		}
-		if observed[0].LaunchIntent && observed[1].LaunchIntent {
-			t.Fatalf("two native launch intents escaped the single-worker queue: %+v", observed)
-		}
-		for index := range observed {
-			other := 1 - index
-			if observed[index].Phase == "running" && observed[other].Phase == "queued" {
-				active, queued = index, other
-			}
-		}
-		if active < 0 {
-			pause()
-		}
-	}
-	first, second := observed[active], observed[queued]
-	if !first.LaunchIntent || first.StartedAt == nil || first.SourceSnapshotID == nil || second.LaunchIntent || second.StartedAt != nil || second.SourceSnapshotID != nil || second.SourceSnapshot != nil {
-		t.Fatalf("queued attempt acquired source or native launch evidence while capacity was occupied: active=%+v queued=%+v", first, second)
 	}
 	events := func(id string) []domain.AttemptEvent {
 		t.Helper()
@@ -168,49 +153,107 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 		t.Fatal("fixture event history exceeded its bounded page count")
 		return nil
 	}
-	for _, event := range events(second.ID) {
-		if event.Kind == "preparation_started" || event.Kind == "launch_intent" || event.Kind == "worker_started" {
-			t.Fatalf("queued attempt escaped capacity before the first Stop: %+v", event)
-		}
-	}
-	read("attempts", "stop", first.ID)
+
+	// Schema6's global pool permits two independent captured contexts. Neither
+	// this fresh home nor these starts installs a legacy or shared-account barrier.
+	var observed [2]domain.Attempt
 	for {
-		first = get(first.ID)
-		if first.Phase == "settled" {
+		for index := range admissions {
+			observed[index] = get(admissions[index].Attempt.ID)
+			if observed[index].Phase == "settled" {
+				t.Fatalf("slow fixture settled before the two-worker overlap observation: %+v", observed[index])
+			}
+		}
+		if observed[0].Phase == "running" && observed[1].Phase == "running" {
 			break
 		}
 		pause()
 	}
-	if first.Outcome == nil || *first.Outcome != "cancelled" || first.Cleanup.State != "verified" || first.Cleanup.Scope == "not_launched" {
-		t.Fatalf("first Stop did not settle verified native ownership: %+v", first)
+	codex, claude := observed[0], observed[1]
+	for _, attempt := range observed {
+		if !attempt.LaunchIntent || attempt.StartedAt == nil || attempt.SourceSnapshotID == nil {
+			t.Fatalf("two-context capacity did not start an actual owned worker: %+v", attempt)
+		}
 	}
+	if *codex.SourceSnapshotID == *claude.SourceSnapshotID {
+		t.Fatal("distinct native workers reused one retained source identity")
+	}
+
+	thirdRequest := domain.NewID()
+	thirdEnvelope := read("tasks", "start", "--project", project.Project.ID, "--harness", "codex",
+		"--task", "third controlled Codex waits for its captured context", "--deliverable", "response_only",
+		"--fake", "--fake-scenario", "slow", "--timeout-seconds", "60", "--request-id", thirdRequest)
+	var thirdAdmission domain.Admission
+	decodeCLIData(t, thirdEnvelope, &thirdAdmission)
+	third := thirdAdmission.Attempt
+	if thirdEnvelope.RequestID != thirdRequest || thirdEnvelope.Receipt == nil || thirdEnvelope.Receipt.RequestID != thirdRequest ||
+		thirdEnvelope.Receipt.Operation != "tasks.start" || third.StartRequestID != thirdRequest ||
+		thirdAdmission.Version.Pins.HarnessID != "codex" || third.ConnectionID != "codex-native" ||
+		third.ResolvedTarget == nil || third.ResolvedTarget.ContextID != "codex-native" || third.ResolvedTarget.ConnectionID != "codex-native" || third.ResolvedTarget.HarnessID != "codex" ||
+		third.OwnerInstanceID != ownerID || third.ExecutionMode != "fake" || third.FakeScenario != "slow" ||
+		third.ID == "" || third.TaskID == "" || third.ID == codex.ID || third.ID == claude.ID ||
+		third.TaskID == codex.TaskID || third.TaskID == claude.TaskID {
+		t.Fatalf("third independent client lost its exact request/owner/captured context: %+v", thirdAdmission)
+	}
+	captured[third.ID] = third
+	assertQueued := func(stage string) {
+		t.Helper()
+		waiting := get(third.ID)
+		if waiting.Phase != "queued" || waiting.LaunchIntent || waiting.StartedAt != nil ||
+			waiting.SourceSnapshotID != nil || waiting.SourceSnapshot != nil {
+			t.Fatalf("%s: waiting captured context acquired preparation or native effects: %+v", stage, waiting)
+		}
+		for _, event := range events(third.ID) {
+			if event.Kind == "preparation_started" || event.Kind == "launch_intent" || event.Kind == "worker_started" {
+				t.Fatalf("%s: queued attempt escaped its occupied capacity/context: %+v", stage, event)
+			}
+		}
+	}
+	assertQueued("both global slots occupied")
+	if get(codex.ID).Phase != "running" || get(claude.ID).Phase != "running" {
+		t.Fatal("both actual workers must remain active while the third waits")
+	}
+	stopAndSettle := func(attemptID string) domain.Attempt {
+		t.Helper()
+		read("attempts", "stop", attemptID)
+		for {
+			current := get(attemptID)
+			if current.Phase == "settled" {
+				if current.Outcome == nil || *current.Outcome != "cancelled" || current.Cleanup.State != "verified" || current.Cleanup.Scope == "not_launched" {
+					t.Fatalf("Stop did not retain verified actual native settlement: %+v", current)
+				}
+				return current
+			}
+			pause()
+		}
+	}
+
+	// A free global slot alone cannot bypass the still occupied Codex context.
+	// Final event ordering below checks the entire held interval, not just a poll.
+	claude = stopAndSettle(claude.ID)
+	if current := get(codex.ID); current.Phase != "running" {
+		t.Fatalf("releasing Claude changed the independently running Codex worker: %+v", current)
+	}
+	assertQueued("Claude released but the captured Codex context remains occupied")
+	codex = stopAndSettle(codex.ID)
 	for {
-		second = get(second.ID)
-		if second.Phase == "running" {
+		third = get(third.ID)
+		if third.Phase == "running" {
 			break
 		}
-		if second.Phase == "settled" {
-			t.Fatalf("queued attempt did not obtain the released worker capacity: %+v", second)
+		if third.Phase == "settled" {
+			t.Fatalf("waiting Codex did not obtain its actually released context: %+v", third)
 		}
 		pause()
 	}
-	if !second.LaunchIntent || second.StartedAt == nil || second.SourceSnapshotID == nil {
-		t.Fatalf("released capacity did not launch the queued attempt: %+v", second)
+	if !third.LaunchIntent || third.StartedAt == nil || third.SourceSnapshotID == nil {
+		t.Fatalf("the released exact context did not launch the queued worker: %+v", third)
 	}
-	read("attempts", "stop", second.ID)
-	for {
-		second = get(second.ID)
-		if second.Phase == "settled" {
-			break
-		}
-		pause()
-	}
-	if second.Outcome == nil || *second.Outcome != "cancelled" || second.Cleanup.State != "verified" || second.Cleanup.Scope == "not_launched" {
-		t.Fatalf("second Stop did not settle verified native ownership: %+v", second)
-	}
-	// Event sequences are global persisted order. Exactly one launch/start/settled
-	// event per attempt, and a second preparation claim after first settlement,
-	// prove that these two independently admitted clients never overlap workers.
+	third = stopAndSettle(third.ID)
+
+	// Global persisted event sequences prove actual first-pair overlap, then
+	// third-worker preparation only after its captured context's known settlement.
+	// Each attempt must still retain exactly one complete native lifecycle.
 	lifecycle := func(attemptID string) map[string]int64 {
 		t.Helper()
 		ordered := map[string]int64{}
@@ -235,11 +278,14 @@ func TestConcurrentIndependentCLIStartsSerializeNativeWorkers(t *testing.T) {
 		}
 		return ordered
 	}
-	firstLifecycle, secondLifecycle := lifecycle(first.ID), lifecycle(second.ID)
-	if firstLifecycle["settled"] >= secondLifecycle["preparation_started"] {
-		t.Fatalf("second worker capacity was claimed before verified first settlement: first=%+v second=%+v", firstLifecycle, secondLifecycle)
+	codexLifecycle, claudeLifecycle, thirdLifecycle := lifecycle(codex.ID), lifecycle(claude.ID), lifecycle(third.ID)
+	if codexLifecycle["worker_started"] >= claudeLifecycle["settled"] || claudeLifecycle["worker_started"] >= codexLifecycle["settled"] {
+		t.Fatalf("the two actual distinct-context workers did not overlap: codex=%+v claude=%+v", codexLifecycle, claudeLifecycle)
+	}
+	if claudeLifecycle["settled"] >= codexLifecycle["settled"] || codexLifecycle["settled"] >= thirdLifecycle["preparation_started"] {
+		t.Fatalf("third preparation bypassed the full pool or occupied captured context: codex=%+v claude=%+v third=%+v", codexLifecycle, claudeLifecycle, thirdLifecycle)
 	}
 	if current, err := localstate.ReadDescriptor(filepath.Join(f.home, ".council", "v2")); err != nil || current.OwnerInstanceID != ownerID {
-		t.Fatalf("the two independent task starts did not retain one owner through cleanup: %+v %v", current, err)
+		t.Fatalf("the independent task starts did not retain one owner through cleanup: owner=%s err=%v", current.OwnerInstanceID, err)
 	}
 }

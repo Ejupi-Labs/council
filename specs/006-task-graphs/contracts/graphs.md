@@ -150,6 +150,15 @@ Engine ownership is per attempt. Stop, fence, cleanup and shutdown enumerate all
 A singular compatibility activeAttemptId=null never proves zero claims when several are active;
 current metadata includes a bounded active set and actual occupied capacity.
 
+Current metadata requires graphContract:"006-v1" and the task_graphs capability alongside the
+existing four capabilities. Its capacity is {resourceId:"managed-native",limit:2,
+activeAttemptId:null|ID,occupiedSlots:"0"|"1"|"2",activeClaims:GraphClaimView[]}.
+Claims are sorted by canonical slot, at most two, with unique slots/attempt IDs; occupiedSlots
+is their exact count. The singular compatibility marker equals the sole claim ID when one is
+held, and is null when zero or two are held. Every claim uses operations.md's exact nullable
+context/account/graph ownership fields. Known dev.2–dev.5 maintenance compatibility retains
+its actual one-slot shape; a newer/future contract never gains execution from these old rules.
+
 ## Dependencies, input and acceptance
 
 Ready selection is deterministic in declared order among independently eligible nodes. Exact
@@ -230,6 +239,11 @@ retain existing machine-readable versus stderr separation.
 | GET /graphs/ID/inputs/INPUT/members | graphs input-members ID --input INPUT | Full bounded member/origin/blob metadata. |
 | GET /graphs/ID/dispatches | graphs dispatches ID --input INPUT --node KEY | Bounded exact receiving executions/observations; input/node filters optional. |
 | GET /graphs/ID/dispatches/DISPATCH | graphs dispatch ID --dispatch DISPATCH | Exact immutable admission plus its append-once receiving-attempt materialization observation. |
+
+Dispatch lists use exact optional inputId and nodeKey query selectors; CLI --input and --node map
+to those fields without substituting latest inputs or node IDs. Internal operations are graphs.start,
+list/get/definition.get/wait/budget.get/budget.ledger, inputs.list/get/members, dispatches.list/get
+and the corresponding exact mutation names. These names are controller dispatch, not vendor tools.
 
 Input views link exact dispatch/receivingAttemptId records; never label the latest materialization
 of one retry as proof for another. An absent observation is explicitly not observed, not complete;

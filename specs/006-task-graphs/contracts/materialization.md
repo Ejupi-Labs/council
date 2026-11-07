@@ -66,6 +66,10 @@ exception below is explicit; no generic recursive/self-referential hashing is pe
 The new fixed artifact kinds are `graph_index_blob`, `graph_index_blobs`, `graph_output_closure`, `graph_input_manifest`,
 `graph_input_provenance`, `graph_context`, `graph_context_digest` and `graph_operation_effects`.
 The receiving-owned receipt artifact kind is `graph_materialization`.
+`graph_original` retains a lossless original-text payload and `graph_acceptance` retains the
+complete captured `TaskAcceptance` JSON. Only real root `local_graph` preparation creates these
+source artifacts. They are not prompt/declaration substitutes and do not widen existing producer
+roles; stage context references the exact required original subset.
 Final-subject proof artifacts are `graph_conditions`, `graph_cumulative_delta` and
 `graph_final_verification`.
 Root/receiving source manifests keep `source_manifest`; actual selected outputs keep
@@ -444,6 +448,13 @@ the generic condition record does not create a final-only exception for other no
   root to actual selected full manifest/index, including retained before/after bindings.
 - `hasCumulativeWorkingDelta`, `hasCumulativeIndexDelta` and `bindingSha256` (seal excludes itself).
 
+In `graph_cumulative_delta`, `graph_final_verification` and graph delivery proof artifacts,
+`rootBinding` is the existing public `GraphRootView`: stable IDs, retained artifact references,
+source scope and the original `basisSha256`. It excludes private `projectIdentity` and
+`repositoryIdentity`. The controller/store must load and compare the complete private root from
+persisted state for physical verification; the root seal binds that private identity without
+serializing it into a readable artifact. Raw control artifacts have no privacy exception.
+
 This is a verification BASIS, not a passed verdict. Construct in acyclic order while the actual
 candidate producer remains unsettled: output closure first, then this binding referencing it,
 then the candidate branch's `finalVerificationRef` in the append-once output observation. Install
@@ -456,6 +467,34 @@ Its applicability binds root, final candidate, contributor vector and graph cond
 node/input-only receipts or predecessor receipts do not automatically become cumulative proof.
 Verify physical closure outside SQL, then current registered binding/control tuples inside SQL.
 
+For these final `node_subject` stages, the optional `GraphSourceBasis.finalVerificationRef`
+records the exact selected basis; ordinary dispatches omit it. The actual stage controller
+rechecks the association and complete physical closure before preparation, GO and settlement.
+Final review/check applicability uses the existing applicability shape with a distinct
+`006-final-applicability-v1` source-control digest over the exact final reference and binding
+seal. The original check/review definition and effective conditions digests remain unchanged.
+Do not apply this loader globally while a new author/correction output is still being captured:
+its own final basis is associated only at terminal settlement, so an older basis cannot grant
+evidence reuse to that new candidate.
+
+Role context supplies the retained final binding, cumulative delta and root manifest/index/staged
+envelopes, plus complete changed/deleted before payloads and distinct staged before/after payloads.
+Unchanged root bytes may use identical physically verified selected bytes. Transport stays in the
+existing private per-attempt context and shares its total64-reference/256KiB prompt bounds with
+ordinary subject/context references. Excess or unavailable access blocks explicitly; no private
+state path, shortened original or predecessor verdict substitutes for cumulative verification.
+
+For a captured command check on this final graph subject, preserve executable, argv and stdin.
+Provide the single reserved `COUNCIL_GRAPH_CONTEXT_FILE` environment variable pointing to an
+owner-authored descriptor in that same private context directory. The descriptor identifies
+copied fixed ordinal files, exact closed references and authority scopes, including complete
+original/condition access through the existing packet. Inherit other process environment values
+without logging or persisting them; replace only this reserved key using the platform's key
+comparison. Ordinary005 command checks retain their existing environment behavior. Availability
+of this descriptor is access evidence, not proof that a command read it. Unknown context-copy or
+acknowledgement effects prevent qualification and retain their exact effects/ownership even when
+the command process itself was cleaned up successfully.
+
 The pure planner gains optional INTERNAL `GraphFinalPlanFacts`:
 `{verificationBindingRef, declaredFileFinal, currentSubject, hasCumulativeWorkingDelta,
 hasCumulativeIndexDelta, cumulativeDirectProven}`. Only controller/store-verified facts for the
@@ -466,6 +505,11 @@ cumulative applicability/direct proof rather than a zero-delta shortcut. Ordinar
 explicit response-only planning retain their exact005 behavior. A response acknowledgement never
 promotes inherited files into qualified delivery.
 `currentSubject` is the complete actual final `CandidateBinding`, not a supplied true/false flag.
+The controller's private `WorkflowStepFacts.cumulativeDirectProven` is separate from ordinary
+node `directProven`, including builtin/supporting stages with no new graph output. Store ignores
+that fact unless it independently derives this exact registered selected final basis. Producers
+use their newly captured same-terminal basis; later stages use their persisted source-basis
+final reference and fresh proofs. No duplicate or fabricated output is required for a builtin.
 
 Keep `Candidate.HasDelta`, `HasIndexDelta` and node/workflow creation/change facts truthful to their
 existing node-local bases; they remain false when the node did not edit. Graph views separately
@@ -482,6 +526,15 @@ deliveryScopeSha256, bindingSha256}`. It is derived from current server records.
 must have exact current accepted outcomes; required file ancestry must be incorporated through
 file edges. The final cumulative candidate requires current applicable pre-delivery checks/review
 and known prior settlement. Its own acceptance is not a prerequisite for its delivery.
+
+The graph delivery operation records an additive optional `graphDeliveryRef` to the closed
+binding; standalone005 operations omit it and historical records stay byte-exact. The controller
+supplies private `GraphDeliveryFacts` (typed binding, exact binding reference and bounded fresh
+artifact proofs), never a public effect-enable flag. Graph Begin/Ready and each durable permit
+must join that exact operation binding, current selected final, required other acceptances and
+graph/node/window controls. Complete retained-source physical verification runs before those
+transactions outside SQL/control; the transaction checks registered tuples before granting the
+unchanged005 single-effect permit. A changed/stopped scope receives no next permit.
 
 The final candidate keeps its ordinary005 node-owned source ancestry. The graph binding separately
 authorizes comparing original graph root to actual final selected manifest. The controller uses
@@ -545,3 +598,70 @@ cannot duplicate an already accepted or uncertain effect; exact replay returns i
 
 All tests use controlled local fixtures and supported Git/native helpers. New006 behavior needs
 actual six-platform/race qualification after implementation; accepted005 results do not qualify it.
+
+## 11. Native context transport clarification
+
+The immutable packet is an access plan, not evidence that a model consumed its contents.
+Every required original, guidance/acceptance record, constraint and contributed evidence reference
+requires complete supported inline/file access. Identical artifact aliases may share a complete
+transport while their source scopes remain distinct. Both packet construction and physical input
+verification reject a missing plan. Actual native preparation verifies the transport separately.
+
+`PrepareGraphContext(ctx, GraphContextPrepareRequest{receivingAttemptId,inputBinding})` returns
+private `GraphPreparedContext` facts: packet, directory/identity, entries with exact source refs,
+file paths or inline text, effect reference, effectsKnown, evidenceStatus and state.
+`RecheckGraphContext` revalidates the private copies before `Prepare` and GO and after cleanup.
+Paths and native identities do not enter the public packet. A held private directory root is
+released through `Close`; the actual controller owns lifetime and current dispatch authorization.
+
+File transport uses a fresh private sibling directory
+`workspaces/graph-context-<receivingAttemptId>`, outside every candidate worktree. Only selected
+closed artifacts are copied to fixed controller-generated names; no hardlinks, symlinks,
+unrelated histories or whole-state-directory grants are introduced. Existing unresolved directories
+are retained and rejected. Copies remain attributable preparation effects. Per-file64MiB and
+aggregate512MiB copy bounds are local I/O limits, not estimates of provider token capacity.
+
+The adapter adds a separate `graphContext` property to the existing native prompt JSON without
+rewriting original task fields, pins, permissions or role. Complete receiver original/guidance/
+acceptance bytes already present identically in that base JSON are referenced there rather than
+duplicated. The TOTAL graph plus ordinary workflow subject/check/review references remain at most64;
+the actual complete encoded prompt remains at most256KiB. Missing access or excess size is an
+explicit pre-native-Prepare blocker; no clipping, model summarization or silent pin change occurs.
+An earlier base-builder size refusal is also an explicit capacity blocker, not permission to
+replace stored task text.
+
+For Claude, only the exact prepared directory is passed through the documented `--add-dir`
+file-access mechanism, retaining the existing review Read/Glob/Grep profile. Codex `--add-dir`
+grants writable roots and is not added to a read-only review. Installed readable-root policies,
+managed restrictions and native sandbox accounts may still deny access. Council does not relax
+private ACLs, rewrite vendor settings or promise a universal sandbox to bypass them. Such failures
+remain access gaps; documented profile support and controlled fake reads are not live qualification.
+
+## Stable internal edge identity
+
+An immutable declared edge has one deterministic identity across complete reads, exact retries and
+input preparation. `GraphEdgeID` hashes UTF-8 fixed-field-order JSON with keys `graphId`,
+`graphVersion`, `fromNodeId`, `toNodeId`, `kind`, in that order, using the persisted opaque node
+identities and canonical graph version. Its ID is the first 32 lowercase hexadecimal characters of
+SHA-256. Inputs must have canonical valid IDs/version and kind `files` or `context`. This internal
+identity rule grants no dependency, acceptance or publication authority; each selection must still
+match the actual immutable declaration and current accepted contributor. Reads allocate no IDs.
+
+## Receiving namespace qualification
+
+Composition does not infer filesystem case behavior from an operating-system name. The engine
+must preserve supported case-dependent trees. If both explicit case policies produce identical
+successful semantic plans, or the same known causal conflict, no additional probe is necessary.
+When their outcomes differ, qualify the actual newly allocated managed assembly directory before
+selecting a policy. Existing causal conflicts that are independent of case remain reportable
+before assembly allocation.
+
+`ProbeGraphNamespace` is a private local preparation operation scoped to that exact managed
+snapshot/native directory identity and retained Git controls. Its scope is
+`ascii_case_in_exact_directory`, not a claim about every Unicode collation or other directories.
+Retain an acknowledged intent before exclusive random sentinel I/O, determine same-file versus
+distinct-file behavior using retained handles, remove only exact owned sentinels, verify absence
+and unchanged identity/controls, and acknowledge terminal effects. Failed acknowledgement or
+uncertain cleanup yields no usable case capability and preserves ownership. Private native identity
+is absent from the effects artifact and public projections. Complete actual materialization and
+pre-GO inventory/index checks remain required for all native name/Unicode compatibility.

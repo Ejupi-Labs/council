@@ -176,7 +176,15 @@ func (s *Store) DispatchRouting(ctx context.Context, id string, facts domain.Rou
 				}
 				return storageError()
 			}
-			proof := domain.ContinuationProof{AttemptID: a.ID, OwnerInstanceID: a.OwnerInstanceID, TaskID: a.TaskID, TaskVersion: a.TaskVersion, TaskRevision: t.Revision, BudgetRevision: b.Revision, Category: "pre_launch_ineligible", ExpectedOutputMissing: false, EvidenceReportIDs: reports, ReasonCode: "current_target_ineligible", Eligible: true, CreatedAt: domain.Now()}
+			epoch, epochErr := s.graphAttemptBudgetEpoch(ctx, tx, a)
+			if epochErr != nil {
+				return epochErr
+			}
+			graphWindow := ""
+			if epoch != "" {
+				graphWindow = b.CurrentWindow.Number
+			}
+			proof := domain.ContinuationProof{GraphBudgetAuthorityEpoch: epoch, GraphWindowNumber: graphWindow, AttemptID: a.ID, OwnerInstanceID: a.OwnerInstanceID, TaskID: a.TaskID, TaskVersion: a.TaskVersion, TaskRevision: t.Revision, BudgetRevision: b.Revision, Category: "pre_launch_ineligible", ExpectedOutputMissing: false, EvidenceReportIDs: reports, ReasonCode: "current_target_ineligible", Eligible: true, CreatedAt: domain.Now()}
 			if _, e = tx.ExecContext(ctx, "INSERT INTO routing_continuation_proofs VALUES(?,?,?,?) ON CONFLICT(attempt_id) DO NOTHING", a.ID, a.OwnerInstanceID, proof.Category, encode(proof)); e != nil {
 				return storageError()
 			}

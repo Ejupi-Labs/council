@@ -2,9 +2,13 @@
 
 **Branch**: `refactor` | **Feature context**: `006-task-graphs` | **Date**: 2026-11-06
 **Spec**: [spec.md](spec.md)
-**Status**: Specification/design/tasks reviewed; all design findings closed. This documentation
-commit is the immutable gate before006 application implementation. Its actual revision is recorded
-in the subsequent implementation ledger rather than introducing a self-referential commit ID.
+**Status**: Implementation active, not accepted. The immutable specification/design/task gate
+is c9b8a0d63730ddb04236f9b31c7182026b062d1f, committed before any006 application edits.
+All eleven design findings and final foreign consistency reviews closed before that gate.
+Specify implement prerequisites resolve this absolute feature directory; requirements checklist
+passes14/14, and no extension hooks are installed. Bounded implementation evidence is recorded in
+implementation.md and evidence-matrix.md; feature-wide local, visual, extracted-package and native
+acceptance remains open.
 
 ## Summary
 

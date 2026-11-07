@@ -266,11 +266,13 @@ type ReportEligibility struct {
 	ReasonCodes      []string         `json:"reasonCodes"`
 }
 type ManagedOccupancy struct {
-	ResourceID      string  `json:"resourceId"`
-	Limit           int     `json:"limit"`
-	ActiveAttemptID *string `json:"activeAttemptId"`
-	ActiveContextID *string `json:"activeContextId"`
-	ClaimsSubject   bool    `json:"claimsSubject"`
+	ActiveClaims    []GraphClaimView `json:"activeClaims,omitzero"`
+	OccupiedSlots   string           `json:"occupiedSlots,omitzero"`
+	ResourceID      string           `json:"resourceId"`
+	Limit           int              `json:"limit"`
+	ActiveAttemptID *string          `json:"activeAttemptId"`
+	ActiveContextID *string          `json:"activeContextId"`
+	ClaimsSubject   bool             `json:"claimsSubject"`
 }
 type CapacityDimensions struct {
 	Occupancy CapacityDimension `json:"occupancy"`
@@ -334,12 +336,13 @@ type RoutingSnapshot struct {
 	ManagedOccupancy ManagedOccupancy  `json:"managedOccupancy"`
 }
 type RoutingSelectionInput struct {
-	Snapshot   RoutingSnapshot
-	Pins       ExecutionPins
-	Options    RoutingOptions
-	Assessment SuitabilityAssessment
-	Facts      []NativeContextFact
-	Now        string
+	RequireManagedReservation bool
+	Snapshot                  RoutingSnapshot
+	Pins                      ExecutionPins
+	Options                   RoutingOptions
+	Assessment                SuitabilityAssessment
+	Facts                     []NativeContextFact
+	Now                       string
 }
 type DeclaredAccountAssociation struct {
 	AccountID    string `json:"accountId"`
@@ -415,10 +418,11 @@ type TaskBudget struct {
 	UpdatedAt            string       `json:"updatedAt"`
 }
 type BudgetEffect struct {
-	AdmissionUnits      string       `json:"admissionUnits"`
-	RemainingAdmissions string       `json:"remainingAdmissions"`
-	BudgetRevision      string       `json:"budgetRevision"`
-	Window              BudgetWindow `json:"window"`
+	GraphBudgetRef      *GraphBudgetRef `json:"graphBudgetRef,omitzero"`
+	AdmissionUnits      string          `json:"admissionUnits"`
+	RemainingAdmissions string          `json:"remainingAdmissions"`
+	BudgetRevision      string          `json:"budgetRevision"`
+	Window              BudgetWindow    `json:"window"`
 }
 type RoutingDecision struct {
 	CapacityEvidence     []CandidateCapacityEvidence `json:"capacityEvidence"`
@@ -443,8 +447,9 @@ type TaskRoutingView struct {
 	AdoptionRequired bool                  `json:"adoptionRequired"`
 }
 type TaskBudgetView struct {
-	Budget           *TaskBudget `json:"budget"`
-	AdoptionRequired bool        `json:"adoptionRequired"`
+	GraphBudgetRef   *GraphBudgetRef `json:"graphBudgetRef,omitzero"`
+	Budget           *TaskBudget     `json:"budget"`
+	AdoptionRequired bool            `json:"adoptionRequired"`
 }
 type BudgetAmendmentInput struct {
 	RequestID              string          `json:"requestId"`
@@ -489,20 +494,22 @@ type BudgetLedgerEntry struct {
 	CreatedAt      string       `json:"createdAt"`
 }
 type ContinuationProof struct {
-	AttemptID             string   `json:"attemptId"`
-	OwnerInstanceID       string   `json:"ownerInstanceId"`
-	TaskID                string   `json:"taskId"`
-	TaskVersion           string   `json:"taskVersion"`
-	TaskRevision          string   `json:"taskRevision"`
-	BudgetRevision        string   `json:"budgetRevision"`
-	Category              string   `json:"category"`
-	PrepareAttempted      bool     `json:"prepareAttempted"`
-	CreateAttempted       bool     `json:"createAttempted"`
-	ExpectedOutputMissing bool     `json:"expectedOutputMissing"`
-	EvidenceReportIDs     []string `json:"evidenceReportIds"`
-	ReasonCode            string   `json:"reasonCode"`
-	Eligible              bool     `json:"eligible"`
-	CreatedAt             string   `json:"createdAt"`
+	GraphBudgetAuthorityEpoch string   `json:"graphBudgetAuthorityEpoch,omitzero"`
+	GraphWindowNumber         string   `json:"graphWindowNumber,omitzero"`
+	AttemptID                 string   `json:"attemptId"`
+	OwnerInstanceID           string   `json:"ownerInstanceId"`
+	TaskID                    string   `json:"taskId"`
+	TaskVersion               string   `json:"taskVersion"`
+	TaskRevision              string   `json:"taskRevision"`
+	BudgetRevision            string   `json:"budgetRevision"`
+	Category                  string   `json:"category"`
+	PrepareAttempted          bool     `json:"prepareAttempted"`
+	CreateAttempted           bool     `json:"createAttempted"`
+	ExpectedOutputMissing     bool     `json:"expectedOutputMissing"`
+	EvidenceReportIDs         []string `json:"evidenceReportIds"`
+	ReasonCode                string   `json:"reasonCode"`
+	Eligible                  bool     `json:"eligible"`
+	CreatedAt                 string   `json:"createdAt"`
 }
 
 type UsageItem struct {

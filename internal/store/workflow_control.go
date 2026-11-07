@@ -56,12 +56,25 @@ func (s *Store) workflowAttemptControls(ctx context.Context, tx *sql.Tx, a domai
 	if e != nil {
 		return e
 	}
-	if budget == nil || budget.CurrentWindow.DeadlineAt == nil {
+	if budget == nil {
 		return domain.Fail("budget_expired", "No open captured task window permits this stage.")
 	}
-	deadline, validationErr := domain.ParseRoutingTime(*budget.CurrentWindow.DeadlineAt)
-	if validationErr != nil {
-		return storageError()
+	var deadline time.Time
+	if budget.CurrentWindow.DeadlineAt == nil {
+		localDeadline, err := s.graphUnopenedLocalDeadline(ctx, tx, a, budget)
+		if err != nil {
+			return err
+		}
+		if localDeadline == nil {
+			return domain.Fail("budget_expired", "No open captured task window permits this stage.")
+		}
+		deadline = *localDeadline
+	} else {
+		var validationErr *domain.Error
+		deadline, validationErr = domain.ParseRoutingTime(*budget.CurrentWindow.DeadlineAt)
+		if validationErr != nil {
+			return storageError()
+		}
 	}
 	if !time.Now().UTC().Before(deadline) {
 		return domain.Fail("budget_expired", "The common task window expired before this stage effect.")
@@ -105,7 +118,7 @@ func (s *Store) syncWorkflowClaim(ctx context.Context, tx *sql.Tx, a domain.Atte
 // Internal queue/Stop/deadline/recovery settlement has no fresh continuation proof.
 func (s *Store) syncWorkflowTerminal(ctx context.Context, tx *sql.Tx, a domain.Attempt) error {
 	if a.WorkflowID == "" {
-		return nil
+		return s.projectGraphTerminal(ctx, tx, a)
 	}
 	step, e := s.workflowStep(ctx, tx, a.StepID)
 	if e != nil {
@@ -139,7 +152,10 @@ func (s *Store) syncWorkflowTerminal(ctx context.Context, tx *sql.Tx, a domain.A
 		if e != nil {
 			return e
 		}
-		return saveWorkflow(ctx, tx, w)
+		if e = saveWorkflow(ctx, tx, w); e != nil {
+			return e
+		}
+		return s.projectGraphTerminal(ctx, tx, a)
 	}
 	return nil
 }

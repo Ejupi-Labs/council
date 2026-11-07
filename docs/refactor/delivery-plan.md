@@ -8,10 +8,11 @@ Feature004 qualified at3f4a18e on six native targets plus Linux race in run42172
 Its38-row evidence matrix and independent review are closed. Feature005 design was committed
 at `24b0cf1`; accepted dev.5/005-v1 source `794f08032b96434d1217f8bb3797c6803263f39c`
 passes all seven jobs in run42224386878. Its35-row matrix,22 independent corrections and local
-visual review are closed; the first failed hosted run remains documented. Feature006 has reviewed
-functional specification and active design/tasks under specs/006-task-graphs; runtime acceptance
-is still unperformed. Features007–012 remain planned. The parent rebuild is incomplete.
-Date: 6 November 2026.
+visual review are closed; the first failed hosted run remains documented. Feature006 dev.6/006-v1
+is implemented and under qualification in specs/006-task-graphs. Its bounded offline runtime
+checks and foreign corrections are recorded, while complete visual/client/package checks, final
+local commands and all seven matching-source native/race jobs remain open. Features007–012 remain
+planned. The parent rebuild is incomplete. Date: 7 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -80,8 +81,8 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Features001–005 are accepted;006 is in its design/task gate and not implemented;007–012 are
-planned. The exit descriptions define each slice's acceptance boundary and are not
+Features001–005 are accepted;006 is implemented and under qualification;007–012 are planned.
+The exit descriptions define each slice's acceptance boundary and are not
 pass claims. The order is sequential; later slices build on accepted earlier ones and must
 preserve their working journeys.
 
@@ -217,22 +218,44 @@ required settlement; a retained applied effect cannot erase a failed/cancelled t
 
 ### 006 — Dependent and parallel task graphs with scoped handoffs
 
-Planned context: `specs/006-task-graphs/`.
+Active context: `specs/006-task-graphs/`; dev.6/006-v1 implementation under qualification.
+The [draft matrix](../../specs/006-task-graphs/evidence-matrix.md) separates observed bounded
+checks from remaining acceptance gates.
 
-Run independent work concurrently within the existing ownership and account capacity controls.
-Honor explicit dependencies and block followers of failed or unverified prerequisites while
-admitted siblings settle. Handoffs identify the accepted predecessor base/change and make it
-available in the follower's actual workspace; a path or prose summary does not prove availability.
+Optional groups contain up to16 required nodes and64 acyclic file/context dependencies in one
+project, with a complete2MiB declaration bound. Default managed capacity is at most two eligible
+native contexts, narrowed by graph/account/context restrictions; held migrated legacy claims
+remain sole barriers. One captured finite root allowance/common window covers all native
+roles/retries. Local scheduling, materialization and derived context add no model admission.
+Standalone Auto and existing saved task authority remain intact.
 
-Assemble focused stage context with original constraints, scoped retrieval and provenance-linked
-summaries. Preserve full originals and make context limits explicit. Propagate only authorized
-relevant evidence. Apply guidance and policy updates at admission boundaries, and support stopping
-new graph admission while in-flight work settles.
+Exact accepted predecessor versions/results supply retained working/index/staged files in the
+receiver's real isolated workspace. Context-only edges imply no file incorporation. Compatible
+causal fan-in deduplicates shared ancestry and permits proven descendant refinements; divergent
+or unverified inputs block before native preparation. Focused stage context retains every
+applicable original condition, labelled digests, complete-original access and explicit local
+reference/prompt limits without claiming known provider token capacity or peer-created authority.
 
-Exit evidence: two independent fixtures overlap, a dependent fixture starts only after both
-required predecessors qualify, a failed branch retains sibling evidence, and a follower inspects
-the intended predecessor files. Context tests retain every applicable constraint, retrieve cited
-originals, expose insufficient capacity and reject peer-created payment/publication authority.
+Separate reviewable results are the default. Only a prospectively designated final node may
+apply or externally deliver, after every required result qualifies and file branches reach it
+through file edges. Current cumulative graph-root-to-final checks/review precede one application;
+intermediate changes are not applied twice. Mixed response/file and pure-response outcomes remain
+distinct. External action/destination must be explicit task scope.
+
+Guidance and deliberate Advance operate at captured boundaries. Explicit named rebind creates a
+derived dependency_rebind version with unchanged originals/options and retained history, never
+fresh allowance or silent completed-work replay. Group Stop cancels admitted work and closes later
+admission. Node Stop cancels its own work and blocks unstarted descendants while independent
+siblings settle; known-first-GO continuation preserves its captured inputs unless guidance or its
+own/group controls change. Restart observes retained state without replay or implicit Advance.
+
+Exit evidence: actual default overlap and narrower-capacity counterexamples; accepted A+B receiving
+files/index and diamond/conflict cases; one shared last-unit transaction contest; focused complete
+context and missing/oversize access blocks; exact controls/rebind/history/restart; final cumulative
+qualification/application and response-only/publication boundaries. Complete actual UI/CLI and
+1440px/360px keyboard/focus/reduced-motion/asset review, extracted Git-only native journeys,
+independent review/corrections, final build/test/check and all seven exact-source native/race jobs
+must close before007. Existing focused evidence is not feature acceptance.
 
 ### 007 — Recovery, checkpoints, backup and reviewed cleanup
 

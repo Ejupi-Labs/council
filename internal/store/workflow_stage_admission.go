@@ -34,7 +34,11 @@ func (s *Store) ContinueWorkflow(ctx context.Context, ownerID, predecessorStepID
 		if e != nil {
 			return e
 		}
-		if b == nil || w.CurrentStepID == nil || *w.CurrentStepID != previous.ID || w.TaskVersion != t.CurrentVersion || t.Revision != p.TaskRevision || w.Revision != p.WorkflowRevision || b.Revision != p.BudgetRevision || b.CurrentWindow.Number != p.WindowNumber || f.ExpectedTaskRevision != t.Revision || f.ExpectedWorkflowRevision != w.Revision || f.Plan.LogicalKey != p.NextLogicalKey || !reflect.DeepEqual(w.SelectedCandidateID, p.CandidateID) || !reflect.DeepEqual(w.SelectedResponseBinding, p.ResponseBinding) {
+		budgetCurrent, e := s.graphBudgetProofCurrent(ctx, tx, t.ID, p.BudgetRevision, p.GraphBudgetAuthorityEpoch, p.WindowNumber)
+		if e != nil {
+			return e
+		}
+		if b == nil || !budgetCurrent || w.CurrentStepID == nil || *w.CurrentStepID != previous.ID || w.TaskVersion != t.CurrentVersion || t.Revision != p.TaskRevision || w.Revision != p.WorkflowRevision || f.ExpectedTaskRevision != t.Revision || f.ExpectedWorkflowRevision != w.Revision || f.Plan.LogicalKey != p.NextLogicalKey || !reflect.DeepEqual(w.SelectedCandidateID, p.CandidateID) || !reflect.DeepEqual(w.SelectedResponseBinding, p.ResponseBinding) {
 			return noWorkflowContinuation
 		}
 		var used int
@@ -44,11 +48,11 @@ func (s *Store) ContinueWorkflow(ctx context.Context, ownerID, predecessorStepID
 		if used != 0 {
 			return noWorkflowContinuation
 		}
-		admission, e := s.admitWorkflowStage(ctx, tx, ownerID, &t, &w, b, f, domain.NewID(), previous.ID)
+		admission, e := s.admitWorkflowContinuation(ctx, tx, ownerID, &t, &w, b, f, domain.NewID(), previous.ID)
 		if e != nil {
 			return e
 		}
-		out = &admission
+		out = admission
 		return nil
 	})
 	if errors.Is(e, noWorkflowContinuation) {
@@ -65,6 +69,20 @@ func (s *Store) ContinueWorkflow(ctx context.Context, ownerID, predecessorStepID
 
 func (s *Store) admitWorkflowStage(ctx context.Context, tx *sql.Tx, ownerID string, t *domain.Task, w *domain.Workflow, b *domain.TaskBudget, f domain.WorkflowStepAdmissionFacts, requestID, consumption string) (domain.WorkflowStepAdmission, error) {
 	var out domain.WorkflowStepAdmission
+	member, memberErr := s.graphMembership(ctx, tx, t.ID)
+	if memberErr != nil {
+		return out, memberErr
+	}
+	var graphStage *graphStageScope
+	if member != nil {
+		if f.Graph == nil {
+			return out, graphScopeError(member)
+		}
+		graphStage, memberErr = s.graphWorkflowStageScope(ctx, tx, ownerID, *t, *w, b, f)
+		if memberErr != nil {
+			return out, memberErr
+		}
+	}
 	g, e := s.gate(ctx, tx)
 	if e != nil {
 		return out, e
@@ -90,7 +108,18 @@ func (s *Store) admitWorkflowStage(ctx context.Context, tx *sql.Tx, ownerID stri
 	}
 	var deadline time.Time
 	if b.CurrentWindow.DeadlineAt == nil {
-		if f.Plan.Role != "author" || f.Plan.ExecutorKind != "native" {
+		if graphStage != nil && graphStage.OwnerResumeRequestID != nil {
+			if f.Plan.ExecutorKind != "native" {
+				var invalid *domain.Error
+				deadline, invalid = domain.ParseRoutingTime(graphStage.Header.PreparationDeadlineAt)
+				if invalid != nil {
+					return out, storageError()
+				}
+				if !time.Now().UTC().Before(deadline) {
+					return out, domain.Fail("budget_expired", "The fixed graph preparation deadline expired before this local stage.")
+				}
+			}
+		} else if f.Plan.Role != "author" || f.Plan.ExecutorKind != "native" {
 			return out, domain.Fail("budget_expired", "No open common task window permits this stage.")
 		}
 	} else {
@@ -215,7 +244,7 @@ func (s *Store) admitWorkflowStage(ctx context.Context, tx *sql.Tx, ownerID stri
 		if authority == nil {
 			return out, domain.Fail("routing_adoption_required", "No captured routing authority permits this model stage.")
 		}
-		d, e := s.admitRouting(ctx, tx, *t, v, &a, *authority, b, f.Routing, "manual")
+		d, e := s.admitRouting(ctx, tx, *t, v, &a, *authority, b, f.Routing, "manual", graphStage != nil)
 		if e != nil {
 			return out, e
 		}
@@ -258,7 +287,7 @@ func (s *Store) admitWorkflowStage(ctx context.Context, tx *sql.Tx, ownerID stri
 			}
 		}
 		if deadline.Before(timeMust(a.DeadlineAt)) {
-			a.DeadlineAt = *b.CurrentWindow.DeadlineAt
+			a.DeadlineAt = deadline.Format("2006-01-02T15:04:05.000Z")
 		}
 	}
 	ordinal := "1"
@@ -340,6 +369,13 @@ func (s *Store) admitWorkflowStage(ctx context.Context, tx *sql.Tx, ownerID stri
 	if e = saveWorkflow(ctx, tx, *w); e != nil {
 		return out, e
 	}
-	return domain.WorkflowStepAdmission{Workflow: *w, Step: step, Attempt: a, Budget: *b, RoutingDecision: decision}, nil
+	admission := domain.WorkflowStepAdmission{Workflow: *w, Step: step, Attempt: a, Budget: *b, RoutingDecision: decision}
+	if graphStage != nil {
+		if _, e = s.registerGraphWorkflowStage(ctx, tx, *graphStage, *t, *w, step, a, *b); e != nil {
+			return out, e
+		}
+		admission.GraphBudgetRef = &domain.GraphBudgetRef{GraphID: member.GraphID, BudgetOwnerTaskID: member.RootTaskID}
+	}
+	return admission, nil
 }
 func timeMust(value string) time.Time { t, _ := domain.ParseRoutingTime(value); return t }

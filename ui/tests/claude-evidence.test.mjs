@@ -75,7 +75,7 @@ test('a controlled earlier-owner metadata shape cannot authorize new Claude exec
     await page.route('**/api/v1/meta', async route => {
       const response = await route.fetch(); const envelope = await response.json();
       envelope.data.appVersion = '2.0.0-dev.2'; envelope.data.managedExecution = 'native_codex'; envelope.data.executionContract = '002-v1';
-      envelope.data.capacity = { connectionId: 'codex-native', limit: 1, activeAttemptId: null }; delete envelope.data.maintenanceContract; delete envelope.data.workflowContract;
+      envelope.data.capacity = { connectionId: 'codex-native', limit: 1, activeAttemptId: null }; delete envelope.data.maintenanceContract; delete envelope.data.workflowContract; delete envelope.data.graphContract;
       envelope.data.capabilities = ['workspace_foundation', 'managed_execution'];
       await route.fulfill({ response, json: envelope });
     });

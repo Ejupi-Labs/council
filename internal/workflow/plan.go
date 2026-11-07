@@ -8,6 +8,7 @@ import (
 )
 
 type PlanInput struct {
+	GraphFinal                                                      *GraphFinalPlanFacts
 	Authority                                                       domain.WorkflowAuthority
 	ResponseOnly, HasSubject, HasDelta, HasIndexDelta, DirectProven bool
 	NeedsFindingReview                                              bool
@@ -39,7 +40,12 @@ func Plan(in PlanInput) PlanDecision {
 	if in.Authority.OptionSnapshot.Mode == "author_only" {
 		return block("author_only", "standalone_result_has_no_automatic_workflow")
 	}
-	if !in.ResponseOnly && !in.HasDelta && !in.HasIndexDelta {
+	final := qualifyingGraphFinalPlanFacts(in)
+	if final != nil {
+		// Node-local direct proof does not qualify the inherited cumulative files.
+		in.DirectProven = final.CumulativeDirectProven
+	}
+	if !in.ResponseOnly && !in.HasDelta && !in.HasIndexDelta && final == nil {
 		return block("candidate_change_required", "no_authored_candidate_delta")
 	}
 	if in.ResponseOnly && (in.HasDelta || in.HasIndexDelta) {

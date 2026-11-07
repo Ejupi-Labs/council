@@ -35,6 +35,13 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 		if a.Phase == "settled" {
 			return nil
 		}
+		outputCandidate := f.CandidateBinding
+		if f.ResultCandidateBinding != nil {
+			outputCandidate = f.ResultCandidateBinding
+		}
+		if e = s.graphOutputForSettlement(ctx, tx, a, f.Settlement, f.GraphOutput, outputCandidate, f.ResponseBinding); e != nil {
+			return e
+		}
 		if a.ExecutorKind == "local_application" {
 			var active int
 			if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM delivery_operations WHERE attempt_id=? AND active_effect_id IS NOT NULL", a.ID).Scan(&active); e != nil {
@@ -52,7 +59,12 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 		if f.TaskRevision != "" && f.TaskRevision != t.Revision || f.WorkflowRevision != "" && f.WorkflowRevision != w.Revision {
 			current = false
 		}
-		clean := f.Settlement.Cleanup.State == "verified" && f.Settlement.EvidenceStatus == "complete" && a.Stop == nil && a.PrimaryFailure == nil && f.Settlement.Failure == nil
+		membership, readErr := s.graphMembership(ctx, tx, a.TaskID)
+		if readErr != nil {
+			return readErr
+		}
+		effectsKnown := membership == nil || membership.Kind != "node" || f.Settlement.EffectsKnown
+		clean := effectsKnown && f.Settlement.Cleanup.State == "verified" && f.Settlement.EvidenceStatus == "complete" && a.Stop == nil && a.PrimaryFailure == nil && f.Settlement.Failure == nil
 		qualify := clean && current && f.Settlement.Outcome == "succeeded"
 		checkFailure := clean && current && step.Role == "check" && f.Check != nil && f.Check.Outcome == "failed" && f.Settlement.Outcome == "failed" && !f.Check.SourceChanged
 		checkRecorded := false
@@ -168,6 +180,10 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 			step.OutputCandidateID = ptr(candidate.ID)
 			w.HasTaskDelta, w.HasTaskIndexDelta = f.HasTaskDelta, f.HasTaskIndexDelta
 			w.EvidenceUses = append([]domain.EvidenceUse{}, f.ReuseEvidenceUses...)
+			w.EvidenceUses, err = s.graphFinalEvidenceUses(ctx, tx, w, w.EvidenceUses)
+			if err != nil {
+				return err
+			}
 			if _, _, err := s.workflowUses(ctx, tx, w, w.EvidenceUses, f.VerifiedArtifacts); err != nil {
 				return err
 			}
@@ -201,6 +217,10 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 		w.NextAction = "inspect_retained_stage"
 		w.NextOwner = "user"
 		if qualify || checkFailure {
+			w.EvidenceUses, e = s.graphFinalEvidenceUses(ctx, tx, w, w.EvidenceUses)
+			if e != nil {
+				return e
+			}
 			review, checks, e := s.workflowUses(ctx, tx, w, w.EvidenceUses, f.VerifiedArtifacts)
 			if e != nil {
 				return e
@@ -216,7 +236,11 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 					direct = true
 				}
 			}
-			if e := s.resolveWorkflowFindings(ctx, tx, w, review, checks, direct); e != nil {
+			graphFinal, e := s.graphFinalPlanFacts(ctx, tx, w, a, f)
+			if e != nil {
+				return e
+			}
+			if e := s.resolveWorkflowFindings(ctx, tx, w, review, checks, direct, graphFinal); e != nil {
 				return e
 			}
 			blockers, _, e := s.workflowBlockers(ctx, tx, w)
@@ -227,7 +251,7 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 			if e != nil {
 				return e
 			}
-			input := workflowpolicy.PlanInput{NeedsFindingReview: needsFindingReview, BlockingFindingIDs: blockers, Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: w.SelectedCandidateID != nil || w.SelectedResponseBinding != nil, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
+			input := workflowpolicy.PlanInput{GraphFinal: graphFinal, NeedsFindingReview: needsFindingReview, BlockingFindingIDs: blockers, Authority: w.Authority, ResponseOnly: v.Acceptance.Deliverable == "response_only", HasSubject: w.SelectedCandidateID != nil || w.SelectedResponseBinding != nil, HasDelta: w.HasTaskDelta, HasIndexDelta: w.HasTaskIndexDelta, DirectProven: direct, Review: review, Checks: checks, CorrectionCyclesUsed: w.CorrectionCyclesUsed}
 			if f.Operation != nil {
 				input.LocalOutcome = f.Operation.Status
 				input.LocalApplied = f.Operation.Status == "applied"
@@ -275,7 +299,20 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 					if invalid != nil {
 						return invalid
 					}
-					step.AdvanceProof = &domain.WorkflowAdvanceProof{PredecessorStepID: step.ID, OwnerInstanceID: a.OwnerInstanceID, TaskRevision: t.Revision, TaskVersion: t.CurrentVersion, WorkflowRevision: w.Revision, BudgetRevision: b.Revision, WindowNumber: b.CurrentWindow.Number, CandidateID: w.SelectedCandidateID, ResponseBinding: w.SelectedResponseBinding, NextLogicalKey: key, Trigger: "workflow_stage"}
+					epoch, epochErr := s.graphAttemptBudgetEpoch(ctx, tx, a)
+					if epochErr != nil {
+						return epochErr
+					}
+					budgetCurrent, epochErr := s.graphBudgetProofCurrent(ctx, tx, a.TaskID, b.Revision, epoch, b.CurrentWindow.Number)
+					if epochErr != nil {
+						return epochErr
+					}
+					if budgetCurrent {
+						step.AdvanceProof = &domain.WorkflowAdvanceProof{GraphBudgetAuthorityEpoch: epoch, PredecessorStepID: step.ID, OwnerInstanceID: a.OwnerInstanceID, TaskRevision: t.Revision, TaskVersion: t.CurrentVersion, WorkflowRevision: w.Revision, BudgetRevision: b.Revision, WindowNumber: b.CurrentWindow.Number, CandidateID: w.SelectedCandidateID, ResponseBinding: w.SelectedResponseBinding, NextLogicalKey: key, Trigger: "workflow_stage"}
+					} else {
+						w.NextOwner = "user"
+						w.NextAction = "advance_current_workflow"
+					}
 				}
 			}
 		} else if settled.Outcome != nil {
@@ -299,6 +336,9 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 			return e
 		}
 		if e = saveWorkflow(ctx, tx, w); e != nil {
+			return e
+		}
+		if e = s.projectGraphWorkflow(ctx, tx, t, &w, f.VerifiedArtifacts); e != nil {
 			return e
 		}
 		out = w

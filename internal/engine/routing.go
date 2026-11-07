@@ -63,6 +63,9 @@ func (e *Engine) MutateRouting(ctx context.Context, op, id string, body []byte) 
 		} else if replayed != nil {
 			return *replayed
 		}
+		if err := e.db.CheckStandaloneAuthority(ctx, id, true); err != nil {
+			return e.failure(in.RequestID, err)
+		}
 		if in.Action == "adopt" {
 			detail, err := e.db.Task(ctx, id)
 			if err != nil {

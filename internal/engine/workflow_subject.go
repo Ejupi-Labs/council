@@ -173,6 +173,9 @@ func workflowProofEntries(manifest workspace.Manifest) ([]workflowpolicy.ProofFi
 }
 
 func (e *Engine) workflowDirectProof(ctx context.Context, s workflowSubject, original string, version domain.TaskVersion) *domain.Error {
+	if invalid := e.graphDirectProofGuard(ctx, s.Workflow, original, version); invalid != nil {
+		return invalid
+	}
 	op, recognized := workflowpolicy.RecognizeDocument(original, version)
 	if !recognized || s.Binding == nil {
 		return domain.Fail("evidence_unavailable", "This task does not have a supported complete direct proof.")

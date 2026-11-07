@@ -23,6 +23,13 @@ const ClaudeResponseText = "\ufeffCouncil deterministic Claude fake response (00
 // third argument is a private Council directory used only for helper markers;
 // no response file is created, passed to a vendor or imported.
 func ArgsForHarness(harnessID, scenario, auxiliaryPath string) ([]string, error) {
+	if ValidGraphScenario(scenario) {
+		response := auxiliaryPath
+		if harnessID == "claude-code" {
+			response = ""
+		}
+		return GraphArgs(harnessID, scenario, "author", response)
+	}
 	if harnessID == "" || harnessID == "codex" {
 		return Args(scenario, auxiliaryPath)
 	}

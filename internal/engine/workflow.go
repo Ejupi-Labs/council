@@ -56,6 +56,11 @@ func (e *Engine) MutateWorkflow(ctx context.Context, op, id string, body []byte)
 	} else if previous != nil {
 		return *previous
 	}
+	if op != "workflow.preferences.update" {
+		if err := e.db.CheckStandaloneAuthority(ctx, id, false); err != nil {
+			return e.failure(requestID, err)
+		}
+	}
 	if in, ok := input.(*domain.DeliveryPreferenceInput); ok {
 		e.prepareGate.Lock()
 		defer e.prepareGate.Unlock()

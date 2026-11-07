@@ -118,6 +118,13 @@ func (s *Store) initialBudget(ctx context.Context, tx *sql.Tx, a domain.TaskRout
 	return b, nil
 }
 func appendBudgetLedger(ctx context.Context, tx *sql.Tx, b domain.TaskBudget, kind, requestID string, attemptID *string, granted, consumed string) error {
+	ref, readErr := graphTaskMembership(ctx, tx, b.TaskID)
+	if readErr != nil {
+		return readErr
+	}
+	if ref != nil {
+		b.TaskID = ref.RootTaskID
+	}
 	seq, e := nextSequence(ctx, tx, "budget_ledger")
 	if e != nil {
 		return e
@@ -128,7 +135,7 @@ func appendBudgetLedger(ctx context.Context, tx *sql.Tx, b domain.TaskBudget, ki
 	}
 	return nil
 }
-func (s *Store) admitRouting(ctx context.Context, tx *sql.Tx, t domain.Task, v domain.TaskVersion, a *domain.Attempt, authority domain.TaskRoutingAuthority, b *domain.TaskBudget, facts domain.RoutingFacts, kind string) (domain.RoutingDecision, error) {
+func (s *Store) admitRouting(ctx context.Context, tx *sql.Tx, t domain.Task, v domain.TaskVersion, a *domain.Attempt, authority domain.TaskRoutingAuthority, b *domain.TaskBudget, facts domain.RoutingFacts, kind string, managedReservation ...bool) (domain.RoutingDecision, error) {
 	if b.RemainingAdmissions == "0" {
 		return domain.RoutingDecision{}, domain.Fail("budget_exhausted", "This task has no remaining managed admissions. Grant additional authority explicitly before starting another attempt.")
 	}
@@ -154,7 +161,7 @@ func (s *Store) admitRouting(ctx context.Context, tx *sql.Tx, t domain.Task, v d
 		return domain.RoutingDecision{}, err
 	}
 	snapshot.Policy = p
-	selection, e := routing.Select(domain.RoutingSelectionInput{Snapshot: snapshot, Pins: v.Pins, Options: authority.OptionSnapshot, Assessment: authority.SuitabilityAssessment, Facts: facts.Contexts, Now: a.AdmittedAt})
+	selection, e := routing.Select(domain.RoutingSelectionInput{RequireManagedReservation: len(managedReservation) != 0 && managedReservation[0], Snapshot: snapshot, Pins: v.Pins, Options: authority.OptionSnapshot, Assessment: authority.SuitabilityAssessment, Facts: facts.Contexts, Now: a.AdmittedAt})
 	if e != nil {
 		return domain.RoutingDecision{}, e
 	}
@@ -194,6 +201,13 @@ func (s *Store) admitRouting(ctx context.Context, tx *sql.Tx, t domain.Task, v d
 	a.ConnectionID = selection.SelectedTarget.ConnectionID
 	a.ResolvedTarget = &selection.SelectedTarget
 	d := domain.RoutingDecision{ID: domain.NewID(), TaskID: t.ID, TaskVersion: v.Version, AttemptID: a.ID, RequestID: a.StartRequestID, AuthorityID: authority.ID, Kind: kind, PreviousAttemptID: a.PreviousAttemptID, CreatedAt: a.AdmittedAt, CandidateAssessments: selection.Candidates, SelectedTarget: selection.SelectedTarget, BudgetEffect: domain.BudgetEffect{AdmissionUnits: "1", RemainingAdmissions: b.RemainingAdmissions, BudgetRevision: b.Revision, Window: b.CurrentWindow}, EvidenceSnapshot: domain.RoutingFacts{Assessment: authority.SuitabilityAssessment, Contexts: facts.Contexts}, CapacityEvidence: selection.CapacityEvidence, Uncertainties: selection.Uncertainties}
+	member, readErr := s.graphMembership(ctx, tx, t.ID)
+	if readErr != nil {
+		return d, readErr
+	}
+	if member != nil {
+		d.BudgetEffect.GraphBudgetRef = &domain.GraphBudgetRef{GraphID: member.GraphID, BudgetOwnerTaskID: member.RootTaskID}
+	}
 	if len(encode(d)) > domain.MaxRoutingDecisionBytes {
 		return d, domain.Fail("routing_unavailable", "The complete routing decision exceeds its bounded evidence envelope. Inspect capacity reports before new work.")
 	}

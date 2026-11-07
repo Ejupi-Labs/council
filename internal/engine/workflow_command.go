@@ -48,8 +48,31 @@ func (e *Engine) handoffWorkflowSubject(ctx context.Context, a domain.Attempt, s
 
 // This executor records owned native command observations only. It never parses
 // TAP/Go/Cargo text into invented test counts or treats an exit as remote proof.
-func (e *Engine) executeWorkflowCommand(parent context.Context, a domain.Attempt, snapshot *workspace.Snapshot, command domain.CommandDefinition) (workflowCommandResult, error) {
+func (e *Engine) executeWorkflowCommand(parent context.Context, a domain.Attempt, snapshot *workspace.Snapshot, command domain.CommandDefinition, graph ...*graphCheckCommandContext) (workflowCommandResult, error) {
 	result := workflowCommandResult{}
+	if len(graph) > 1 {
+		return result, domain.Invalid("one exact graph command context")
+	}
+	var graphContext *graphCheckCommandContext
+	if len(graph) == 1 {
+		graphContext = graph[0]
+	}
+	var environment []string
+	if graphContext != nil {
+		if !graphLocalCommandRole(a) || graphContext.Snapshot == nil || snapshot == nil || graphContext.Snapshot.ID != snapshot.ID || !graphContext.EffectsKnown {
+			return result, domain.Fail("graph_input_stale", "The command has no exact acknowledged graph check source.")
+		}
+		if graphContext.Final != nil {
+			if graphContext.Context == nil || graphContext.Context.Prepared.DescriptorPath == "" {
+				return result, domain.Fail("graph_context_unavailable", "The final command has no exact private descriptor.")
+			}
+			var envErr error
+			environment, envErr = graphFinalCommandEnvironment(graphContext.Context.Prepared.DescriptorPath)
+			if envErr != nil {
+				return result, envErr
+			}
+		}
+	}
 	timeout := time.Duration(command.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -78,6 +101,10 @@ func (e *Engine) executeWorkflowCommand(parent context.Context, a domain.Attempt
 		return result, errors.Join(cause, err, closeErr)
 	}
 	e.prepareGate.Lock()
+	if err = e.recheckGraphCheckCommand(ctx, a, graphContext); err != nil {
+		e.prepareGate.Unlock()
+		return closeUnlaunched(err)
+	}
 	e.control.Lock()
 	var guardErr error
 	if e.fenced {
@@ -94,7 +121,7 @@ func (e *Engine) executeWorkflowCommand(parent context.Context, a domain.Attempt
 	if e.config.Prepare != nil {
 		prepare = e.config.Prepare
 	}
-	owned, err := prepare(ctx, process.NativeSpec{Executable: command.Executable, Args: command.Arguments, Cwd: cwd, Stdin: []byte{}, Stdout: out, Stderr: stderr})
+	owned, err := prepare(ctx, process.NativeSpec{Executable: command.Executable, Args: command.Arguments, Cwd: cwd, Stdin: []byte{}, Stdout: out, Stderr: stderr, Env: environment})
 	e.prepareGate.Unlock()
 	if err != nil {
 		if errors.Is(err, process.ErrOwnershipUncertain) {
@@ -103,10 +130,11 @@ func (e *Engine) executeWorkflowCommand(parent context.Context, a domain.Attempt
 		}
 		return closeUnlaunched(err)
 	}
+	guardErr = e.recheckGraphCheckCommand(ctx, a, graphContext)
 	e.control.Lock()
 	if e.fenced {
 		guardErr = domain.Fail("dispatch_fenced", "The owner was fenced before local command start.")
-	} else {
+	} else if guardErr == nil {
 		_, guardErr = e.db.RecordLaunchIntent(ctx, a.ID)
 	}
 	if guardErr == nil && ctx.Err() == nil && !e.fenced {

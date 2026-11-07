@@ -23,6 +23,9 @@ func (s *Store) CreateTaskWithWorkflow(ctx context.Context, ownerID string, in d
 }
 
 func (s *Store) bindInitialWorkflow(ctx context.Context, tx *sql.Tx, t domain.Task, v domain.TaskVersion, a *domain.Attempt, routingAuthorityID string, in domain.StartTaskInput, capture *domain.WorkflowCapture) (domain.Workflow, domain.WorkflowStep, error) {
+	return s.bindInitialWorkflowWithGraph(ctx, tx, t, v, a, routingAuthorityID, in, capture, nil)
+}
+func (s *Store) bindInitialWorkflowWithGraph(ctx context.Context, tx *sql.Tx, t domain.Task, v domain.TaskVersion, a *domain.Attempt, routingAuthorityID string, in domain.StartTaskInput, capture *domain.WorkflowCapture, graph *graphWorkflowAuthority) (domain.Workflow, domain.WorkflowStep, error) {
 	var w domain.Workflow
 	var step domain.WorkflowStep
 	if capture == nil || !domain.ValidID(ownerOf(a)) {
@@ -69,36 +72,42 @@ func (s *Store) bindInitialWorkflow(ctx context.Context, tx *sql.Tx, t domain.Ta
 	if options.Review == "" {
 		options.Review = "auto"
 	}
-	pref, e := s.deliveryPreference(ctx, tx)
-	if e != nil {
-		return w, step, e
-	}
-	localMode := pref.LocalMode
-	source := "saved_preference"
-	if pref.SelectionSource == "default" {
-		source = "default"
-	}
-	var external *domain.ExternalActionInput
-	if options.Delivery != nil {
-		if options.Delivery.LocalMode != "" {
-			localMode = options.Delivery.LocalMode
-			source = "task_scope"
+	if graph != nil {
+		if !reflect.DeepEqual(authority.Delivery, graph.Scope) {
+			return w, step, domain.Invalid("matching immutable graph delivery scope")
 		}
-		external = options.Delivery.ExternalAction
+		options.Delivery = &domain.WorkflowDeliveryInput{LocalMode: graph.Scope.LocalMode, ExternalAction: graph.Scope.ExternalAction}
+	} else {
+		pref, err := s.deliveryPreference(ctx, tx)
+		if err != nil {
+			return w, step, err
+		}
+		localMode, source := pref.LocalMode, "saved_preference"
+		if pref.SelectionSource == "default" {
+			source = "default"
+		}
+		var external *domain.ExternalActionInput
+		if options.Delivery != nil {
+			if options.Delivery.LocalMode != "" {
+				localMode = options.Delivery.LocalMode
+				source = "task_scope"
+			}
+			external = options.Delivery.ExternalAction
+		}
+		if authority.Delivery.LocalMode != "" && authority.Delivery.LocalMode != localMode {
+			return w, step, domain.Fail("revision_conflict", "The saved delivery preference changed during preparation. Reload it before starting.")
+		}
+		if authority.Delivery.PreferenceRevision != "" && source != "task_scope" && authority.Delivery.PreferenceRevision != pref.Revision {
+			return w, step, domain.RevisionConflict(pref.Revision)
+		}
+		if !reflect.DeepEqual(authority.Delivery.ExternalAction, external) {
+			return w, step, domain.Invalid("matching explicit external declaration")
+		}
+		authority.Delivery.LocalMode = localMode
+		authority.Delivery.Source = source
+		authority.Delivery.PreferenceRevision = pref.Revision
+		options.Delivery = &domain.WorkflowDeliveryInput{LocalMode: localMode, ExternalAction: external}
 	}
-	if authority.Delivery.LocalMode != "" && authority.Delivery.LocalMode != localMode {
-		return w, step, domain.Fail("revision_conflict", "The saved delivery preference changed during preparation. Reload it before starting.")
-	}
-	if authority.Delivery.PreferenceRevision != "" && source != "task_scope" && authority.Delivery.PreferenceRevision != pref.Revision {
-		return w, step, domain.RevisionConflict(pref.Revision)
-	}
-	if !reflect.DeepEqual(authority.Delivery.ExternalAction, external) {
-		return w, step, domain.Invalid("matching explicit external declaration")
-	}
-	authority.Delivery.LocalMode = localMode
-	authority.Delivery.Source = source
-	authority.Delivery.PreferenceRevision = pref.Revision
-	options.Delivery = &domain.WorkflowDeliveryInput{LocalMode: localMode, ExternalAction: external}
 	if e := domain.ValidateWorkflowInput(&options); e != nil {
 		return w, step, e
 	}
@@ -163,6 +172,9 @@ func (s *Store) bindInitialWorkflow(ctx context.Context, tx *sql.Tx, t domain.Ta
 	if err != nil {
 		return w, step, domain.Invalid("canonical workflow condition digests")
 	}
+	if graph != nil {
+		conditions = graphEffectiveWorkflowConditions(conditions, graph.ConditionsSHA256)
+	}
 	if authority.InstructionSHA256 != "" && authority.InstructionSHA256 != instruction || authority.ConditionsSHA256 != "" && authority.ConditionsSHA256 != conditions {
 		return w, step, domain.Invalid("matching workflow instructions and conditions")
 	}
@@ -215,6 +227,10 @@ func (s *Store) bindInitialWorkflow(ctx context.Context, tx *sql.Tx, t domain.Ta
 	a.Role = "author"
 	a.ExecutorKind = "native"
 	a.Trigger = "user_request"
+	if graph != nil {
+		step.Trigger = "workflow_stage"
+		a.Trigger = "workflow_stage"
+	}
 	w = domain.Workflow{EvidenceUses: []domain.EvidenceUse{}, ID: wID, TaskID: t.ID, TaskVersion: v.Version, Authority: authority, Revision: "1", StateRevision: "1", State: "queued", CurrentStepID: ptr(step.ID), NextAction: "observe_attempt", NextOwner: "council", CreatedAt: a.AdmittedAt, UpdatedAt: a.AdmittedAt}
 	raw, e = json.Marshal(w.Authority)
 	if e != nil || len(raw) > domain.MaxWorkflowBytes {

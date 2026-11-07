@@ -122,7 +122,7 @@ a replacement target. Use text and accessible names as well as colour.
 | Separate qualified outputs | Reviewable results; distinguish each node's accepted files/response and do not imply combined qualification or integration. |
 | Response ready/accepted | Bind acceptance to the complete exact response and its conditions. Pure-response groups can complete without a file candidate. |
 | Mixed response/file result | A review-only group may complete with separately qualified files and an accepted summary. Response acceptance cannot qualify or apply the cumulative files. |
-| Requested file delivery blocked | State that the response is accepted but cumulative file qualification/delivery is still required; identify the remaining action. |
+| Requested file delivery blocked | Show the retained/reviewed response and accepted file evidence. While required cumulative file qualification/delivery is absent, its exact summary acknowledgement is refused with application_unsupported (HTTP 422); the final node and group remain unaccepted. Retain both results and name the remaining action. Rechecking files alone cannot automatically resume an incompatible response-only final. |
 | Final delivery | Distinguish review-only, actual applied local change and external-command result. Partial/uncertain effects never become completed delivery. |
 
 Final delivery eligibility is not final acceptance. All other required nodes must have current
@@ -315,7 +315,7 @@ the control or blocker being qualified.
 | Budget/window | Exhausted/expired shared authority; group grant acknowledgement starts no stage and child controls cannot refill allowance. |
 | Stop group | Active plus waiting work; captured Stop acknowledgement and actual process/output/cleanup settlement with prior results preserved. |
 | Stop node | Its worker cancelled and waiting descendant prevented while independent admitted work settles under its own outcome. |
-| Responses and mixed results | Pure-response completion without candidate; mixed review-only completion; requested-file-delivery blocker despite an accepted summary. |
+| Responses and mixed results | Pure-response completion without candidate; mixed review-only completion with an accepted summary; requested file delivery retains the reviewed response/file evidence but refuses the exact summary acknowledgement (application_unsupported, HTTP 422) without partial acceptance, completion or delivery. |
 | Final delivery | Qualified cumulative local application preserving unrelated source/index, distinct review-only outcome and actual partial/uncertain effect presentation. |
 | Current/history and graph ownership | Read-only historical node/input evidence versus current controls/producer; actual root and pending no-workflow node TaskSummary/Task GraphRef suppress standalone Run/adoption/grants, and all graph admissions expose budget:null plus the correct shared reference. |
 | Explicit rebind | Changed accepted predecessor input stales a captured workflow; omitted rebind IDs do not mutate/relaunch it. Explicit named rebinding yields a new derived TaskVersion/provenance without refill, preserves old history and rejects Stop/unchanged-completed replay. Held rebind/Advance reply cannot capture newer selected IDs or proofs. |

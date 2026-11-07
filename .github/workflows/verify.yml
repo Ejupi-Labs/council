@@ -82,5 +82,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.3'
-      - name: Run supported native race detector
-        run: go test -race ./cmd/... ./internal/... ./scripts/packagearchive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.1'
+      - name: Run every supported native race case in bounded packages
+        run: node scripts/test-go.mjs --race

@@ -18,6 +18,7 @@ type command struct {
 	json, noOpen            bool
 	params                  app.Params
 	requestID               string
+	graphIntent             *graphIntentPlan
 }
 
 func parse(args []string, stdin io.Reader) (command, *domain.Error) {
@@ -41,6 +42,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	addExecutionFlags(bools, values)
 	addRoutingFlags(values)
 	addWorkflowFlags(values)
+	addGraphFlags(values)
 	bools["version"] = !taskVersionCommand
 	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
@@ -100,6 +102,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		return c, domain.Invalid("command")
 	}
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
+	if graphCommand(c.name) {
+		return parseGraph(c, positionals, flags, repeated, stdin)
+	}
 	if routingCommand(c.name) {
 		return parseRouting(c, positionals, flags, repeated, stdin)
 	}

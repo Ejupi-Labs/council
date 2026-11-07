@@ -87,6 +87,15 @@ Known budget/routing/evidence/control blocks suspend the affected automatic scop
 or report alone cannot rearm it. A new owner preserves the old registration as history and requires
 fresh explicit Advance. Reads and scans of retained terminals never generate release events.
 
+When that explicit Advance resumes a healthy retained workflow under a new owner, retain its
+original logical admission and known first-GO anchor. A private dispatch association to the
+committed Advance receipt must prove the new owner's exact graph/node/version/workflow/input
+and resumed dispatch; its later same-owner stages inherit that association. A newer live
+registration generation alone neither proves this owner transition nor revokes an already
+admitted unchanged stage. Check the durable association during claim preparation and GO as
+well as admission. Historical terminals, their owners and original anchor bytes remain intact;
+old-owner callbacks receive no renewed execution authority.
+
 Advance returns 200 `GraphAdvanceResult`, including when current intent is acknowledged but work
 waits for capacity/dependencies. It is not a false native admission. Genuine validation/control
 conflicts and persistence faults retain their existing error semantics.
@@ -123,8 +132,11 @@ plus own/group Stop and changed-ancestor-version counterexamples.
 `guidanceText` is required and may be empty, preserving the established clear/update distinction.
 The existing optional input rules remain. A graph-node `routing.budget`, any `workflow.delivery`
 or `workflow.mode:"author_only"` rejects, including forbidden members supplied as null. Graph
-delivery scope/layout cannot be expanded through the ordinary task guidance route. Omitted
-workflow choices inherit the current captured node options; explicit empty checks remain empty.
+delivery scope/layout cannot be expanded through the ordinary task guidance route. Graph guidance patches workflow choices field by field: omitted workflow objects or omitted fields
+inherit the current captured node options. A nonempty explicit review choice replaces review;
+`review:"auto"` resets it to Auto. Explicit `checks:[]` clears declared checks, and explicit
+`maxCorrectionCycles:0` clears correction allowance. Other omitted choices remain captured.
+Standalone005 guidance retains its established whole-object replacement behavior.
 Guidance appends a task/workflow version and invalidates affected node/descendant input authority;
 it starts no worker, creates no allowance and does not refresh a live registration.
 
@@ -134,6 +146,11 @@ totals remain checked int64. Optional `newWindowSeconds` uses the existing 1–8
 bound. New-window authority requires known settlement of all work owning the graph budget and
 current unfenced controls. The grant increments budget authority and records the existing
 root-owned amendment/ledger; it creates no task version, admission or automatic dispatch.
+An initial unopened window has the fixed graph-creation preparation deadline of 300 seconds.
+An explicitly granted replacement unopened window captures a new fixed preparation deadline at
+grant time plus `min(300, newWindowSeconds)` seconds. Reads, retries and individual preparation
+operations cannot renew that deadline. The first native admission still opens the shared execution
+window; the grant alone neither opens it nor refreshes a live dispatch registration.
 Ordinary root-task and child grant/adoption routes reject with the graph budget reference.
 
 ## Response DTOs
@@ -175,6 +192,13 @@ legacyBarrier}`. There are at most two, describing the actual global pool includ
 standalone/graph occupancy, rather than only the selected group's claims. It reports Council reservations, never authenticated
 accounts, external occupancy or provider quota. Private native scope/effect records remain private.
 
+Claim invariants are explicit: local executors have null native context/account/link fields;
+captured declared account and link revision are present as a pair. A non-legacy native reservation
+has its actual supported context; a migrated legacy barrier may retain unknown context. A legacy
+barrier is the sole held claim in slot1 and prevents all new claims. local_graph identifies a root
+graph member (graphId present, nodeId null); other graph-owned executors identify their exact node.
+A standalone claim has null graph/node IDs. These fields are observations, never caller authority.
+
 ### Budget projections
 
 `GraphBudgetRef` is `{graphId,budgetOwnerTaskId}`. A child `TaskBudgetView` is exactly
@@ -214,6 +238,70 @@ must equal the stored graph root task. `GraphNodeConsumption` is
 `{nodeId,taskId,consumedAdmissions,automaticAdmissions}` in declared order, at most sixteen.
 These are included in root totals, never extra expenditure. Local graph/workflow stages do not
 increase them or pretend to measure zero tokens/charges. Historical ledger/read data stays paged.
+
+### Public input and member views
+
+Internal/persisted `GraphRootBinding` retains exact private physical identities for verification
+and sealing. Public reads use typed `GraphRootView`, never serialize that internal record and
+never hide fields through a generic map. `GraphRootView` has `graphId,rootTaskId,operationAttemptId,
+sourceSnapshotId,manifest,index,stagedBlobs,projectId,selectedRelativePath,baseCommit,branch,basisSha256`;
+`branch` is nullable. Private project/repository physical identities, absolute paths, handles and
+workspace/Git-control fingerprints are absent. It is an inspection projection, not a client proof.
+
+`GraphInputSummary` has `id,graphId,graphVersion,rootTaskId,operationAttemptId,kind,state,current,
+receivingNodeId,receivingTaskId,receivingTaskVersion,rootBasisSha256,inputSha256,failure,createdAt,
+updatedAt`. `kind` is `root_basis|node_input`; receiver fields are nullable for a root basis.
+Unobserved hashes and failure are nullable. `state` is
+`preparing|ready|blocked|incomplete|uncertain|interrupted`. `current` is a computed boolean:
+retained ready history does not become current merely because its bytes remain complete.
+
+`GraphInputDetail` is `{summary,rootBinding,inputBinding,conditionsRef,contextPacket,operationEffects,
+conflictArtifact}`. `rootBinding:null|GraphRootView` and `inputBinding:null|GraphInputBinding` are
+mutually exclusive when a complete binding exists; both may be null during nonqualifying
+preparation. The remaining fields are nullable closed `GraphArtifactRef`s except `contextPacket`,
+which is a nullable complete `GraphContextPacket`. Conditions/context must name this exact
+receiver/version. The input detail never substitutes a latest materialization: follow exact
+dispatch/receiving-attempt links for that separate observation.
+
+`GraphMemberView` is `{dimension,path,state,type,mode,byteLength,sha256,target,objectId,artifactRef,
+origins}`. `dimension` is `working|index`, state `present|absent`; `path` is the canonical retained
+manifest/provenance path. Type/mode/byteLength/sha256/target/objectId/artifactRef are nullable when
+not applicable or absent. A regular working payload and a staged index blob retain distinct
+refs/hashes; a symlink target is not silently followed. Raw file bytes remain in exact artifacts.
+Working `mode` is the canonical decimal string of the retained native mode bits; index `mode`
+preserves the exact Git mode string. A client may display working permissions in octal without
+changing that wire value.
+`origins` contains `GraphMemberOrigin {kind,nodeId,taskId,taskVersion,acceptanceKind,acceptanceId,
+producerAttemptId,inputId,stateSha256}`. Kind is `root|node`; node/acceptance/version fields are
+nullable for the explicit root origin. There are at most sixteen graph-node heads plus the root;
+ordinary within-node attempt lineage stays separately retrievable. These are complete row
+provenance references, not claims that a model inspected all original evidence. Origin `stateSha256`
+identifies the source head: the root basis digest for `root`, and the exact contributing node's
+verified sealed `GraphOutputClosure.closureSha256` for `node` (loaded through that exact historical
+contributor's `outputClosureRef`). It is neither the closure-file hash, a per-path state hash nor
+an attribution hash.
+Root origins identify the root task, root operation and root input; node origins must match the
+input's complete exact contributor vector. Raw payload references come from verified working and
+staged manifests, never from an unchecked provenance reference.
+
+Summary/member pages use the existing whole-item byte/count limits and immutable input-bound
+cursors. Rows do not include private destination/checkout identities. Unsupported or excessive
+complete detail is an explicit gap/artifact link, never a clipped row presented as full proof.
+
+### Public declaration and captured delivery scope
+
+`GET /graphs/{graphId}/definition` returns `GraphDefinitionView`:
+`{graphId,graphVersion,rootTaskId,original,requestedPolicy,routingPolicy,delivery,createdAt}`.
+`original` is the complete exact `GraphStartInput`; omitted declaration choices remain omitted.
+`delivery` is `GraphDeliveryScopeView {localMode,preferenceRevision?,source,projectId,
+selectedRelativePath,branch,destination,externalAction?}`. The external action is only the
+explicit authored action/command declaration. Public scope contains no native project/repository
+identity keys, resolved executable identity, private checkout paths or empty identity placeholders.
+
+The complete persisted `GraphDefinition` retains private `DeliveryScope` identity facts for
+verification/recovery. The controller-only `GraphDefinitionPrivate` getter returns that exact
+record; it is never serialized as an API result. Public projection does not modify persisted
+definition bytes, declaration hash or captured scope.
 
 ### Exact receiving execution and output
 

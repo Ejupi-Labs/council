@@ -1,12 +1,15 @@
-# Council verified workflow preview
+# Council task graph preview
 
-Version 2.0.0-dev.5. Feature 005 implementation is under qualification; acceptance
-and its six-native-target/race gate are not yet claimed. Features 001–004 remain
-accepted; features 006–012 remain planned. This preview opens local Git projects
+Version 2.0.0-dev.6. Feature006 implementation is under qualification; its final
+local, visual, extracted-package and six-native-target/race gates are not yet
+accepted. Features001–005 are accepted; features007–012 remain planned.
+This preview opens local Git projects
 and runs native Codex or Claude Code in isolated managed workspaces. Auto connects
 authoring, proportionate checks, necessary independent review, bounded correction
 and captured delivery. Economical routing uses optional user-reported capacity
-and declared account associations. Both connections share one managed worker slot.
+and declared account associations. Up to two managed workers can run across eligible
+native contexts; graph limits and context/shared-account reservations may narrow
+capacity. A held migrated legacy claim remains a sole dispatch barrier until settled.
 Exact output, source-relative candidates, stage lineage, cancellation and recovery
 evidence remain available.
 Live provider compatibility remains separately unqualified for both connections;
@@ -54,7 +57,7 @@ it cannot select the native authenticated account. Optional reports can exclude 
 exhausted or denied capacity. Missing observations remain unknown, and unresolved
 exhaustion needs an explicit correction.
 
-Fresh 005 homes default to four managed model admissions in one shared 30-minute
+Fresh homes retain the005 default of four managed model admissions in one shared 30-minute
 wall-clock window from the first admission. Every saved existing default, including
 two, is preserved. Task grants, consumed units and deadlines are never refilled by
 an upgrade or saved-default change. Author/reviewer/corrector processes consume model
@@ -96,9 +99,47 @@ separate from legacy state. Existing instructions/history/receipts retain their
 meaning. Explicitly adopt missing budget authority before new work; workflow adoption
 separately creates a new version and starts no work. Use Run task for the adopted
 first author, then advance eligible existing stages. Current execution requires
-dev.5 with execution/workflow contracts 005-v1 and current capabilities. Known
-dev.2/dev.3/dev.4 owners support only their exact maintenance Stop compatibility
+dev.6 with execution/workflow/graph contracts006-v1 and current capabilities. Known
+dev.2/dev.3/dev.4/dev.5 owners support only their exact maintenance Stop compatibility
 path, not current execution.
+
+Optional task groups accept one strict UTF-8 declaration of at most2MiB,16 required
+nodes and64 acyclic dependencies in one project. They default to Separate reviewable
+results, at most two workers and one finite shared allowance/common window. Nodes,
+guidance and derived versions never refill it. Native authors/reviews/corrections/
+retries debit the root once; local scheduling, context and materialization add no
+model admission or fabricated zero-token measurement.
+
+File dependencies reconstruct accepted predecessor files/index in the actual isolated
+receiver; context-only dependencies imply no files. Fan-in retains compatible shared
+ancestry once and blocks incompatible changes. Focused context keeps complete original
+constraints and attributable evidence behind labelled digests. Missing/inaccessible or
+oversize required material blocks;64 supplied references and256KiB combined prompt
+limits are transport bounds, not measured provider context capacity.
+
+Only a declared final node can deliver under prospectively captured scope. Every
+required node must qualify, and file inputs must reach the final through file edges.
+Fresh cumulative checks/review qualify the graph-root-to-final change before a single
+application. Intermediate results remain reviewable. Accepted summaries do not qualify
+unapplied file deltas; pure-response groups never fabricate file delivery.
+
+```text
+council graphs start --project PROJECT_ID --graph-file graph.json --request-id START_REQUEST_ID --json
+council graphs get GRAPH_ID --json
+council graphs input GRAPH_ID --input INPUT_ID --json
+council graphs advance GRAPH_ID --rebind-node NODE_KEY --request-id REBIND_REQUEST_ID --json
+council graphs stop-node GRAPH_ID --node NODE_KEY --request-id STOP_REQUEST_ID --json
+```
+
+Use returned identities and one request ID per intended mutation. The CLI captures
+omitted proof groups once and retains exact intent for retry; explicit proof flags
+must be supplied as a complete group. Guidance creates a new version without work.
+Advance admits eligible unfinished work within current authority. A named rebind
+creates a derived dependency_rebind version only for changed accepted inputs, retaining
+originals/options/history without refill. Omission does not rewrite an existing workflow
+or replay completed work. Grants and reads start nothing. Group/node Stop retain actual
+cleanup and independent sibling results. Restart preserves history and requires fresh
+explicit Advance for eligible unfinished work.
 
 Inspect `--help` for workflow preferences, stages, reviews, checks, findings, deliveries,
 routing, budgets, usage, history, guidance, Stop, full artifact reads and exact retries.
@@ -110,4 +151,6 @@ The adjacent `.zip.sha256` checks the complete archive. `SHA256SUMS.txt` checks 
 distributed files except itself. Keep LICENSE and third-party notices with the
 binary. Ejupi Labs artwork remains company identity; generic icons retain MIT notices.
 
-Source and feature evidence: https://github.com/Ejupi-Labs/council/tree/refactor
+Source, complete declarations and qualification evidence: [refactor branch](https://github.com/Ejupi-Labs/council/tree/refactor),
+[task graph quickstart](https://github.com/Ejupi-Labs/council/blob/refactor/specs/006-task-graphs/quickstart.md).
+Live adapter compatibility, actual account/quota use and savings remain separately unqualified.

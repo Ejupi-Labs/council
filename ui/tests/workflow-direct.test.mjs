@@ -12,18 +12,19 @@ test('the shipped client requires exact verified-delivery metadata and limits kn
   const meta = (await ownerAPI(owner, '/meta')).envelope.data;
   const result = await page.evaluate(async actual => {
     const { supportsManagedExecution, supportsOwnerStop } = await import('/api.js');
-    const known4 = { ...actual, appVersion: '2.0.0-dev.4', executionContract: '004-v1' }; delete known4.workflowContract;
+    const known5 = { ...actual, appVersion: '2.0.0-dev.5', executionContract: '005-v1', workflowContract: '005-v1', capacity: { resourceId: 'managed-native', limit: 1, activeAttemptId: null } }; delete known5.graphContract;
+    const known4 = { ...known5, appVersion: '2.0.0-dev.4', executionContract: '004-v1' }; delete known4.workflowContract;
     const known3 = { ...known4, appVersion: '2.0.0-dev.3', executionContract: '003-v1' };
     const known2 = { ...known4, appVersion: '2.0.0-dev.2', executionContract: '002-v1', managedExecution: 'native_codex', capacity: { limit: 1, connectionId: 'codex-native', activeAttemptId: null } }; delete known2.maintenanceContract;
     return {
       current: supportsManagedExecution(actual), missingWorkflow: supportsManagedExecution({ ...actual, workflowContract: undefined }),
       missingCapability: supportsManagedExecution({ ...actual, capabilities: actual.capabilities.filter(c => c !== 'verified_delivery') }),
-      oldExecute: [known2, known3, known4].map(supportsManagedExecution), oldStop: [known2, known3, known4].map(supportsOwnerStop),
+      oldExecute: [known2, known3, known4, known5].map(supportsManagedExecution), oldStop: [known2, known3, known4, known5].map(supportsOwnerStop),
       inventedStop: supportsOwnerStop({ ...known4, appVersion: '2.0.0-dev.6' }),
     };
   }, meta);
   assert.equal(result.current, true); assert.equal(result.missingWorkflow, false); assert.equal(result.missingCapability, false);
-  assert.deepEqual(result.oldExecute, [false, false, false]); assert.deepEqual(result.oldStop, [true, true, true]); assert.equal(result.inventedStop, false);
+  assert.deepEqual(result.oldExecute, [false, false, false, false]); assert.deepEqual(result.oldStop, [true, true, true, true]); assert.equal(result.inventedStop, false);
 });
 
 test('minimal Auto completes one authored document with observed builtin proof and honest review-only delivery', { timeout: 60000 }, async t => {

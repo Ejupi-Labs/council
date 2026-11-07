@@ -58,15 +58,28 @@ func makeSchema2(t *testing.T, path string, populated ...bool) (*sql.DB, string,
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	// This synthetic fixture owns this disposable current database. Strip only
-	// authored005/004 tables before restoring frozen accepted002 claim DDL.
-	// Frozen accepted003/004 fixtures independently qualify real upgrade shapes.
+	// This synthetic fixture owns this disposable current database. Remove only
+	// explicitly known empty006 tables before stripping authored005/004 tables
+	// and restoring frozen accepted002 claim DDL. Never discard graph records.
+	// Frozen accepted003/004/005 fixtures independently qualify real shapes.
+	if _, err = db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"} {
+		var count int
+		if err = db.QueryRow("SELECT count(*) FROM " + name).Scan(&count); err != nil || count != 0 {
+			t.Fatal("Synthetic schema2 setup must not discard graph state", name, count, err)
+		}
+		if _, err = db.Exec("DROP TABLE " + name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, name := range []string{"delivery_effects", "workflow_resolutions", "workflow_acceptances", "delivery_operations", "workflow_reviews", "workflow_checks", "workflow_steps", "workflows", "delivery_preferences", "budget_ledger", "budget_amendments", "routing_continuation_proofs", "routing_decisions", "task_budgets", "task_routing_versions", "routing_report_bindings", "routing_capacity_reports", "routing_capacity_state", "routing_account_links", "routing_accounts", "routing_profiles", "routing_contexts", "routing_policy"} {
 		if _, err = db.Exec("DROP TABLE " + name); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = db.Exec("PRAGMA foreign_keys=ON; DROP TABLE capacity_claims; " + frozenClaimV2 + "; INSERT INTO capacity_claims VALUES('codex-native','" + a.ID + "'); PRAGMA user_version=2"); err != nil {
+	if _, err = db.Exec("DROP TABLE capacity_claims; " + frozenClaimV2 + "; INSERT INTO capacity_claims VALUES('codex-native','" + a.ID + "'); PRAGMA foreign_keys=ON; PRAGMA user_version=2"); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -105,6 +118,13 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schema2.db")
 	db, attemptID, request := makeSchema2(t, path, true)
 	before := unaffectedRows(t, db)
+	var receiptBefore, ownerBefore string
+	if err := db.QueryRow("SELECT envelope FROM receipts WHERE request_id=?", request).Scan(&receiptBefore); err != nil || receiptBefore == "" {
+		t.Fatal("The old exact acknowledged receipt is absent", err)
+	}
+	if err := db.QueryRow("SELECT json_extract(data,'$.ownerInstanceId') FROM attempts WHERE id=?", attemptID).Scan(&ownerBefore); err != nil || !domain.ValidID(ownerBefore) {
+		t.Fatal("The old held attempt has no exact owner", ownerBefore, err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +137,24 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 		t.Fatal("unaffected rows changed", before, after)
 	}
 	var version int
-	var resource, claim string
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 6 {
 		t.Fatal(version, err)
 	}
-	if err = s.db.QueryRow("SELECT resource_id,attempt_id FROM capacity_claims").Scan(&resource, &claim); err != nil || resource != "managed-native" || claim != attemptID {
-		t.Fatal(resource, claim, err)
+	claims, err := s.GraphClaims(context.Background())
+	if err != nil || len(claims) != 1 || claims[0].Slot != "1" || claims[0].AttemptID != attemptID || !claims[0].LegacyBarrier ||
+		claims[0].ExecutorKind != "native" || claims[0].ContextID == nil || *claims[0].ContextID != "codex-native" || claims[0].GraphID != nil || claims[0].NodeID != nil {
+		t.Fatal("The original singleton claim lost its exact legacy barrier", claims, err)
 	}
+	assertGraphLegacyClaim(t, s, attemptID)
+	// Inspect retained ownership without asking the deliberately fenced gate to
+	// authorize new work. The public effect guard must remain closed.
+	if err = s.checkAttemptClaim(context.Background(), s.db, ownerBefore, attemptID); err != nil {
+		t.Fatal("Migration changed or released the exact original owned claim", err)
+	}
+	if err = s.CheckAttemptClaim(context.Background(), ownerBefore, attemptID); err == nil {
+		t.Fatal("The retained fenced claim incorrectly authorized another effect")
+	}
+	assertNoMigratedGraphAuthority(t, s)
 	g, err := s.Gate(context.Background())
 	if err != nil || g.State != "fenced" || g.ActiveAttemptID == nil || *g.ActiveAttemptID != attemptID || g.IncidentID == nil {
 		t.Fatal(g, err)
@@ -132,8 +163,8 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 	if err = s.db.QueryRow("SELECT envelope FROM receipts WHERE request_id=?", request).Scan(&receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt == "" {
-		t.Fatal("receipt lost")
+	if receipt != receiptBefore {
+		t.Fatal("Migration changed the exact original receipt bytes")
 	}
 	assertDurableJournal(t, s)
 }

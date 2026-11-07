@@ -42,10 +42,9 @@ func TestStopBudgetFencesWithoutFinalizingOrReplacingFailure(t *testing.T) {
 	ctx := context.Background()
 	id := admission.Attempt.ID
 	e.control.Lock()
-	e.activeID = id
-	e.activeCancel = func() {}
+	e.activeWorkers[id] = func() {}
 	e.control.Unlock()
-	t.Cleanup(func() { e.control.Lock(); e.activeID = ""; e.activeCancel = nil; e.control.Unlock() })
+	t.Cleanup(func() { e.control.Lock(); delete(e.activeWorkers, id); e.control.Unlock() })
 	if _, err := e.db.ClaimAttempt(ctx, id, e.config.OwnerInstanceID); err != nil {
 		t.Fatal(err)
 	}

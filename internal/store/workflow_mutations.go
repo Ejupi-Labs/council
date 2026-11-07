@@ -24,6 +24,9 @@ func (s *Store) StartAttemptWithWorkflow(ctx context.Context, ownerID, taskID st
 		return s.StartAttemptWithRouting(ctx, ownerID, taskID, in, f.Routing)
 	}
 	return s.mutate(ctx, in.RequestID, "tasks.attempts.start", fp, func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false, in.TaskVersion); e != nil {
+			return 0, nil, e
+		}
 		t, e := s.task(ctx, tx, taskID)
 		if e != nil {
 			return 0, nil, e
@@ -80,6 +83,9 @@ func (s *Store) RecheckWorkflow(ctx context.Context, ownerID, taskID string, in 
 }
 func (s *Store) workflowExplicitStage(ctx context.Context, ownerID, taskID string, in domain.WorkflowAdvanceInput, f domain.WorkflowStepAdmissionFacts, op, fp string) domain.Result {
 	return s.mutate(ctx, in.RequestID, op, fp, func(tx *sql.Tx) (int, any, error) {
+		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false); e != nil {
+			return 0, nil, e
+		}
 		t, e := s.task(ctx, tx, taskID)
 		if e != nil {
 			return 0, nil, e

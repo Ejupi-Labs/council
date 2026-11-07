@@ -126,10 +126,14 @@ journeys, including lost acknowledgements and dirty original state.
    delivery applies once, preserving unrelated edits/index. Unassembled multiple outputs remain
    precise review-only results rather than an allegedly integrated deliverable.
 
-5. **Given** an accepted file branch and a response-only final summary, **When** the summary is
-   accepted, **Then** a review-only graph can retain both as complete separate results, while a
-   graph requesting local file delivery remains blocked until the cumulative files are qualified.
-   A pure-response graph can complete without a file candidate.
+5. **Given** an accepted file branch and a retained response-only final summary, **When** the user
+   reviews the exact summary and requests acknowledgement, **Then** a review-only graph can accept
+   the summary and retain both as complete separate results. A graph requesting local file delivery
+   refuses that acknowledgement explicitly while required cumulative file qualification/delivery is
+   absent; it retains the response/file evidence and leaves the final node and group unaccepted.
+   Rechecking files alone does not automatically resume an incompatible response-only final; any
+   new subject or scope follows the existing explicit boundaries. A pure-response graph can complete
+   without a file candidate.
 6. **Given** an intermediate node declaring an external publisher, **When** the graph is submitted,
    **Then** validation rejects that contradictory delivery before any worker or publisher starts.
 7. **Given** a running node, an independent running sibling and a waiting descendant,
