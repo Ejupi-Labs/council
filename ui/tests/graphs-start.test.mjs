@@ -181,8 +181,21 @@ test('a lost real graph Start acknowledgement retries the captured body while pr
   assert.match(await page.locator('#graph-pending').textContent(), new RegExp(capture.requests[0].body.requestId));
   assert.equal(await page.locator('#graph-title').inputValue(), newerTitle);
   assert.equal(await page.locator('#graph-start-status').textContent(), newerStatus, 'late request failure cannot paint over newer editor feedback');
-  await retry.click({ timeout: 5000 });
-  await page.waitForFunction(() => !document.getElementById('graph-pending')?.textContent.includes('Retry exact group start'), undefined, { timeout: 10000 });
+  // A busy label appears before the replay is acknowledged. Join the exact
+  // response and removal of its pending row within the original deadline.
+  const replayDeadline = Date.now() + 10000;
+  const [acknowledged] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/v1/graphs'
+      && response.request().postDataJSON().requestId === capture.requests[0].body.requestId, { timeout: 10000 }),
+    retry.click({ timeout: 5000 }),
+  ]);
+  assert.equal(acknowledged.status(), 201);
+  assert.deepEqual(await acknowledged.json(), capture.replies[0]);
+  const remaining = replayDeadline - Date.now();
+  assert.ok(remaining > 0, 'the exact group start replay exceeded its original ten-second bound');
+  await page.waitForFunction(requestId => ![...document.querySelectorAll('#graph-pending > li')]
+    .some(row => row.textContent.includes(requestId)), capture.requests[0].body.requestId, { timeout: remaining });
   assert.equal(capture.requests.length, 2);
   assert.equal(capture.requests[0].raw, capture.requests[1].raw, 'retry must preserve the exact original request serialization and request ID');
   assert.equal(capture.forwarded[0], capture.forwarded[1], 'the offline fixture transform must remain identical on replay');

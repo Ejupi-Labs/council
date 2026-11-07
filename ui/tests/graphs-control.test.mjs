@@ -36,12 +36,12 @@ test('graph controls retain exact Stop and grant intent across lost replies, new
   assert.equal(await page.locator('#graph-start').isDisabled(), true, 'the general activation gate must remain off');
   const node = a.nodes.find(node => node.key === 'one');
   const nodePath = '/api/v1/graphs/' + a.graph.id + '/nodes/one/stop';
-  const nodeRequests = []; let changedVersion = false;
+  const nodeRequests = []; let changedVersion = false, savedNodeReply;
   await page.route('**' + nodePath, async route => {
     nodeRequests.push(route.request().postDataJSON());
     const response = await route.fetch(), envelope = await response.json();
     assert.ok(envelope.data.node, 'the real node Stop receipt must identify its actual target');
-    if (!changedVersion) { changedVersion = true; envelope.data.node.taskVersion = (BigInt(envelope.data.node.taskVersion) + 1n).toString(); }
+    if (!changedVersion) { savedNodeReply = structuredClone(envelope); changedVersion = true; envelope.data.node.taskVersion = (BigInt(envelope.data.node.taskVersion) + 1n).toString(); }
     await route.fulfill({ response, json: envelope });
   });
   const nodeSent = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/graphs/' + a.graph.id + '/nodes/one/stop');
@@ -52,18 +52,30 @@ test('graph controls retain exact Stop and grant intent across lost replies, new
   const retryNode = page.locator('#graph-control-pending').getByRole('button', { name: 'Retry exact Stop node one', exact: true });
   await retryNode.waitFor({ timeout: 5000 });
   assert.match(await page.locator('#graph-control-pending').textContent(), new RegExp(nodeBody.requestId));
-  await retryNode.click({ timeout: 5000 });
-  await page.waitForFunction(() => !document.getElementById('graph-control-pending')?.textContent.includes('Retry exact Stop node one'), undefined, { timeout: 5000 });
+  // A busy label is not an acknowledgement. Join the exact replay and row
+  // removal within the existing five-second observation bound.
+  const nodeDeadline = Date.now() + 5000;
+  const [nodeAck] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === nodePath
+      && response.request().postDataJSON().requestId === nodeBody.requestId, { timeout: 5000 }),
+    retryNode.click({ timeout: 5000 }),
+  ]);
+  assert.equal(nodeAck.status(), 202);
+  assert.deepEqual(await nodeAck.json(), savedNodeReply);
+  const nodeRemaining = nodeDeadline - Date.now();
+  assert.ok(nodeRemaining > 0, 'the exact node Stop replay exceeded its original bound');
+  await page.waitForFunction(requestId => ![...document.querySelectorAll('#graph-control-pending > li')]
+    .some(row => row.dataset.graphControlRequestId === requestId), nodeBody.requestId, { timeout: nodeRemaining });
   assert.equal(nodeRequests.length, 2); assert.deepEqual(nodeRequests[0], nodeRequests[1], 'a changed-version acknowledgement must retain the exact original Stop request');
   const stoppedNode = await pollOwner(owner, '/graphs/' + a.graph.id, data => data.nodes.find(item => item.id === node.id)?.stop !== null);
   assert.notEqual(stoppedNode.nodes.find(item => item.key === 'two').state, 'cancelled');
 
   const stopPath = '/api/v1/graphs/' + a.graph.id + '/stop';
-  const stops = []; let lostStop = false;
+  const stops = []; let lostStop = false, savedStopReply;
   await page.route('**' + stopPath, async route => {
     stops.push(route.request().postDataJSON());
-    const response = await route.fetch();
-    if (!lostStop) { lostStop = true; await stopReply.hold(); await route.abort('failed'); }
+    const response = await route.fetch(), envelope = await response.json();
+    if (!lostStop) { savedStopReply = envelope; lostStop = true; await stopReply.hold(); await route.abort('failed'); }
     else await route.fulfill({ response });
   });
   await page.locator('#graph-stop-group').click({ timeout: 5000 });
@@ -74,8 +86,18 @@ test('graph controls retain exact Stop and grant intent across lost replies, new
   const retryStop = page.locator('#graph-control-pending').getByRole('button', { name: /Retry exact Stop group/ });
   await retryStop.waitFor({ timeout: 5000 });
   assert.equal(await page.locator('#graph-control-status').textContent(), bStatus, 'late A feedback must not overwrite B');
-  await retryStop.click({ timeout: 5000 });
-  await page.waitForFunction(() => !document.getElementById('graph-control-pending')?.textContent.includes('Retry exact Stop group'), undefined, { timeout: 5000 });
+  const stopDeadline = Date.now() + 5000;
+  const [stopAck] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === stopPath
+      && response.request().postDataJSON().requestId === stops[0].requestId, { timeout: 5000 }),
+    retryStop.click({ timeout: 5000 }),
+  ]);
+  assert.equal(stopAck.status(), 202);
+  assert.deepEqual(await stopAck.json(), savedStopReply);
+  const stopRemaining = stopDeadline - Date.now();
+  assert.ok(stopRemaining > 0, 'the exact group Stop replay exceeded its original bound');
+  await page.waitForFunction(requestId => ![...document.querySelectorAll('#graph-control-pending > li')]
+    .some(row => row.dataset.graphControlRequestId === requestId), stops[0].requestId, { timeout: stopRemaining });
   assert.equal(stops.length, 2); assert.deepEqual(stops[0], stops[1]);
   assert.deepEqual(Object.keys(stops[0]).sort(), ['expectedGraphControlRevision', 'requestId']);
   assert.ok((await page.locator('#graph-facts').textContent()).includes(b.graph.id));
@@ -91,8 +113,17 @@ test('graph controls retain exact Stop and grant intent across lost replies, new
   await arrival(grantReply);
   await page.locator('#graph-grant-admissions').fill('2');
   const newerStatus = await page.locator('#graph-control-status').textContent();
+  const grantDeadline = Date.now() + 5000;
+  const grantResponse = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === grantPath
+    && response.request().postDataJSON().requestId === grantBody.requestId, { timeout: 5000 });
   grantReply.release();
-  await page.waitForFunction(() => !document.getElementById('graph-control-pending')?.textContent.includes('Retry exact Grant'), undefined, { timeout: 5000 });
+  const grantAck = await grantResponse;
+  assert.equal(grantAck.status(), 200);
+  assert.equal((await grantAck.json()).receipt.requestId, grantBody.requestId);
+  const grantRemaining = grantDeadline - Date.now();
+  assert.ok(grantRemaining > 0, 'the exact Grant acknowledgement exceeded its original bound');
+  await page.waitForFunction(requestId => ![...document.querySelectorAll('#graph-control-pending > li')]
+    .some(row => row.dataset.graphControlRequestId === requestId), grantBody.requestId, { timeout: grantRemaining });
   assert.equal(await page.locator('#graph-grant-admissions').inputValue(), '2');
   assert.equal(await page.locator('#graph-control-status').textContent(), newerStatus, 'old grant success cannot claim newer draft was saved');
   assert.equal(grantBody.additionalAdmissions, '1');
