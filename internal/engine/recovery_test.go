@@ -29,18 +29,29 @@ func TestRestartInterruptsRetainedQueueWithoutAutomaticDispatch(t *testing.T) {
 		t.Fatal(a, err)
 	}
 	revision := a.Revision
+	// This fixture intentionally abandons the old engine without a clean
+	// epoch close. The queued attempt is known not to have launched, but that
+	// alone does not establish that the lost owner had no other effects.
 	gate, err := next.db.Gate(ctx)
-	if err != nil || gate.State != "open" || gate.ActiveAttemptID != nil {
-		t.Fatal(gate, err)
+	if err != nil || gate.State != "fenced" || gate.IncidentID == nil || gate.ActiveAttemptID != nil {
+		t.Fatal("lost owner did not retain its durable uncertainty fence", gate, err)
+	}
+	incident, err := next.db.Incident(ctx, *gate.IncidentID)
+	if err != nil || incident.Code != "owner_epoch_uncertain" {
+		t.Fatal("lost owner epoch was not visible", incident, err)
 	}
 	next.signal()
-	fresh := admit(t, next, project, "response")
-	if completed := settled(t, next, fresh.Attempt.ID); completed.Outcome == nil || *completed.Outcome != "succeeded" {
-		t.Fatal(completed)
+	fresh := next.StartTask(ctx, domain.StartTaskInput{RequestID: domain.NewID(), ProjectID: project, OriginalText: "Explicit work must respect the unknown owner.", ExecutionMode: "fake", FakeScenario: "response"})
+	if fresh.Envelope.Error == nil || fresh.Envelope.Error.Code != "dispatch_fenced" {
+		t.Fatal("new admission bypassed the uncertain owner", fresh)
 	}
 	a, err = next.db.Attempt(ctx, a.ID)
-	if err != nil || a.Revision != revision || a.StartedAt != nil {
-		t.Fatal("New explicit work replayed the old queue", a, err)
+	if err != nil || a.Revision != revision || a.StartedAt != nil || a.LaunchIntent || a.Outcome == nil || *a.Outcome != "interrupted" {
+		t.Fatal("refused work replayed the old queue", a, err)
+	}
+	history, err := next.db.Attempts(ctx, a.TaskID, 100, "")
+	if err != nil || len(history.Items) != 1 || history.Items[0].ID != a.ID {
+		t.Fatal("restart or refused admission added old-task work", history, err)
 	}
 	events, err := next.db.Events(ctx, a.ID, 100, "")
 	if err != nil {
