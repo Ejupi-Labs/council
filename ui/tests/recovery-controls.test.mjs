@@ -4,6 +4,19 @@ import path from 'node:path';
 import test from 'node:test';
 import { fixture, fixtureRequestId, openWorkspace, ownerAPI, pollOwner, reportFixture, responseBarrier } from './helpers.mjs';
 
+async function verifyNarrowKeyboardFocus(page, control, name) {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await control.scrollIntoViewIfNeeded();
+  await control.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+  const observed = await control.evaluate(button => {
+    const style = getComputedStyle(button), rect = button.getBoundingClientRect();
+    return { focused: document.activeElement === button, visibleFocus: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0, width: rect.width, viewport: innerWidth, pageWidth: document.documentElement.scrollWidth };
+  });
+  assert.equal(observed.focused, true, name + ' must be reachable by keyboard');
+  assert.equal(observed.visibleFocus, true, name + ' must have visible keyboard focus');
+  assert.ok(observed.width <= observed.viewport && observed.pageWidth <= observed.viewport + 1, name + ' and page must fit the narrow viewport');
+}
+
 test('group pause retries the exact saved request after selection changes and resumes a verified checkpoint', { timeout: 120000 }, async t => {
   const barrier = responseBarrier(), f = await fixture();
   t.after(async () => { barrier.release(); await f.close(); });
@@ -27,23 +40,19 @@ test('group pause retries the exact saved request after selection changes and re
     await page.waitForFunction(id => document.getElementById('graph-facts')?.textContent.includes(id), graph.graph.id);
   };
   await select(a);
-  await page.setViewportSize({ width: 360, height: 800 });
   const pauseButton = page.getByRole('button', { name: 'Pause group', exact: true });
-  await pauseButton.scrollIntoViewIfNeeded();
-  await pauseButton.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
-  const focusAndLayout = await pauseButton.evaluate(button => {
-    const style = getComputedStyle(button), rect = button.getBoundingClientRect();
-    return { focused: document.activeElement === button, visibleFocus: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0, width: rect.width, viewport: innerWidth, pageWidth: document.documentElement.scrollWidth };
-  });
-  assert.equal(focusAndLayout.focused, true, 'keyboard navigation returns to the named pause control');
-  assert.equal(focusAndLayout.visibleFocus, true, 'keyboard focus must be visible');
-  assert.ok(focusAndLayout.width <= focusAndLayout.viewport && focusAndLayout.pageWidth <= focusAndLayout.viewport + 1, 'recovery controls and page must fit the narrow viewport');
-  const path = '/api/v1/graphs/' + a.graph.id + '/pause', sent = []; let first = true, saved;
-  await page.route('**' + path, async route => {
+  await verifyNarrowKeyboardFocus(page, pauseButton, 'Pause group');
+  const pausePath = '/api/v1/graphs/' + a.graph.id + '/pause', sent = []; let first = true, saved;
+  await page.route('**' + pausePath, async route => {
     sent.push(route.request().postDataJSON());
     const response = await route.fetch(), envelope = await response.json();
     if (first) { first = false; saved = structuredClone(envelope); await barrier.hold(); await route.abort('failed'); }
-    else await route.fulfill({ response });
+    else {
+      // The saved receipt is real. Reorder only object properties on its actual
+      // replay to exercise semantically identical JSON produced by map encoding.
+      envelope.data.checkpoint.scope.nodeAuthorities = envelope.data.checkpoint.scope.nodeAuthorities.map(item => ({ nodeControlRevision: item.nodeControlRevision, taskVersion: item.taskVersion, nodeId: item.nodeId }));
+      await route.fulfill({ response, json: envelope });
+    }
   });
   await page.getByRole('button', { name: 'Pause group', exact: true }).click();
   let timer;
@@ -58,24 +67,42 @@ test('group pause retries the exact saved request after selection changes and re
   const pending = page.locator('#group-recovery li').filter({ hasText: sent[0].requestId });
   await pending.getByRole('button', { name: 'Retry exact graphs.pause request' }).waitFor();
   assert.equal(await page.locator('#group-recovery [role=status]').textContent(), statusB, 'late A result must not replace B status');
-  const replay = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === path && response.request().postDataJSON().requestId === sent[0].requestId);
+  const replay = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === pausePath && response.request().postDataJSON().requestId === sent[0].requestId);
   await pending.getByRole('button', { name: 'Retry exact graphs.pause request' }).click();
-  assert.deepEqual(await (await replay).json(), saved);
+  const replayed = await (await replay).json();
+  assert.deepEqual(replayed, saved);
+  assert.notEqual(JSON.stringify(replayed.data.checkpoint.scope.nodeAuthorities), JSON.stringify(saved.data.checkpoint.scope.nodeAuthorities), 'the replay must exercise equivalent object properties in a different order');
   assert.deepEqual(sent[1], sent[0], 'retry must keep the complete authority vector');
   try { await pending.waitFor({ state: 'detached' }); }
   catch (error) {
     const diagnostic = await page.evaluate(() => {
       let pending = [];
-      try { pending = JSON.parse(sessionStorage.getItem('council.foundation.recoveryPendingControls') || '[]').map(({ requestId, op, target, unresolved }) => ({ requestId, op, target, unresolved })); } catch { /* Report an unreadable session as an empty diagnostic list. */ }
+      try { pending = JSON.parse(sessionStorage.getItem('council.foundation.recoveryPendingControls') || '[]').map(({ requestId, op, target, unresolved, body }) => ({ requestId, op, target, unresolved, graphVersion: body?.graphVersion, graphControlRevision: body?.expectedGraphControlRevision, budgetEpoch: body?.expectedBudgetAuthorityEpoch, windowNumber: body?.expectedWindowNumber, nodeAuthorities: body?.nodeAuthorities })); } catch { /* Report an unreadable session as an empty diagnostic list. */ }
       return { status: document.querySelector('#group-recovery [role=status]')?.textContent, pending };
     });
     throw new Error('The exact saved pause acknowledgement did not clear its pending row: ' + JSON.stringify(diagnostic), { cause: error });
   }
   await select(a);
   const paused = await pollOwner(owner, '/checkpoints/' + saved.data.checkpoint.id, data => data.state === 'paused');
+  const beforeCLI = (await ownerAPI(owner, '/graphs/' + a.graph.id)).envelope.data;
+  const authoritiesFile = path.join(f.home, 'controlled-pause-authorities.json');
+  await writeFile(authoritiesFile, JSON.stringify(sent[0].nodeAuthorities));
+  const exactCLI = f.cli(['graphs', 'pause', a.graph.id, '--graph-version', sent[0].graphVersion, '--graph-control-revision', sent[0].expectedGraphControlRevision,
+    '--budget-authority-epoch', sent[0].expectedBudgetAuthorityEpoch, '--window-number', sent[0].expectedWindowNumber,
+    '--node-authorities-file', authoritiesFile, '--request-id', sent[0].requestId]);
+  assert.equal(exactCLI.status, 0, JSON.stringify(exactCLI.envelope.error));
+  assert.deepEqual(exactCLI.envelope, saved, 'CLI must replay the same UI pause receipt and captured checkpoint');
+  const cliCheckpoint = f.cli(['checkpoints', 'get', paused.id]);
+  assert.equal(cliCheckpoint.status, 0, JSON.stringify(cliCheckpoint.envelope.error));
+  assert.equal(cliCheckpoint.envelope.data.id, paused.id);
+  assert.equal(cliCheckpoint.envelope.data.revision, paused.revision);
+  const afterCLI = (await ownerAPI(owner, '/graphs/' + a.graph.id)).envelope.data;
+  assert.equal(afterCLI.budget.budget.consumedAdmissions, beforeCLI.budget.budget.consumedAdmissions, 'CLI replay and observation must not admit model work');
+  assert.deepEqual(afterCLI.nodes.map(node => node.latestAttemptId), beforeCLI.nodes.map(node => node.latestAttemptId));
   await page.locator('#graph-refresh').click();
   const resume = page.getByRole('button', { name: 'Resume checkpoint ' + paused.id.slice(0, 8), exact: true });
   await resume.waitFor();
+  await verifyNarrowKeyboardFocus(page, resume, 'Resume checkpoint');
   const response = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/checkpoints/' + paused.id + '/resume');
   await resume.click();
   const resumed = await response;
@@ -123,6 +150,7 @@ test('a real retained cleanup incident is inspected and reconciled only with own
   assert.ok(incident.data.revision, 'the owner must supply the incident revision');
   const reconcile = page.getByRole('button', { name: 'Reconcile incident ' + incident.data.incident.id.slice(0, 8), exact: true });
   await reconcile.waitFor();
+  await verifyNarrowKeyboardFocus(page, reconcile, 'Reconcile incident');
   const resultResponse = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/incidents/' + incident.data.incident.id + '/reconciliations');
   await reconcile.click();
   const response = await resultResponse, result = await response.json();

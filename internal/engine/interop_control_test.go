@@ -255,12 +255,28 @@ func TestInteropClaudeQueuedDeadlineAndRestartDoNotDispatch(t *testing.T) {
 	if err != nil || a.Outcome == nil || *a.Outcome != "interrupted" || a.ConnectionID != "claude-native" || a.LaunchIntent || a.StartedAt != nil || a.Cleanup.State != "verified" {
 		t.Fatal("restart replayed or reinterpreted queued Claude", a, err)
 	}
-	revision := a.Revision
-	fresh := admitClaude(t, next, project, "response")
-	if a := settled(t, next, fresh.Attempt.ID); a.Outcome == nil || *a.Outcome != "succeeded" {
-		t.Fatal(a)
+	// Closing handles without closing the Engine deliberately simulates an
+	// abrupt owner loss. The interrupted queue item is known not to have
+	// launched, but the owner epoch as a whole remains unproven; an unrelated
+	// new admission cannot silently clear that global fence.
+	gate, err := next.db.Gate(ctx)
+	if err != nil || gate.State != "fenced" || gate.IncidentID == nil {
+		t.Fatal("abrupt owner loss did not retain an uncertainty fence", gate, err)
 	}
-	if retained, err := next.db.Attempt(ctx, a.ID); err != nil || retained.Revision != revision || retained.StartedAt != nil {
-		t.Fatal("explicit new work replayed old attempt", retained, err)
+	incident, err := next.db.Incident(ctx, *gate.IncidentID)
+	if err != nil || incident.Code != "owner_epoch_uncertain" {
+		t.Fatal("the uncertain owner epoch was not visible", incident, err)
+	}
+	revision := a.Revision
+	fresh := next.StartTask(ctx, claudeFixtureInput(project, "response"))
+	if fresh.Envelope.Error == nil || fresh.Envelope.Error.Code != "dispatch_fenced" {
+		t.Fatal("new work bypassed the unproven owner epoch", fresh)
+	}
+	if retained, err := next.db.Attempt(ctx, a.ID); err != nil || retained.Revision != revision || retained.StartedAt != nil || retained.LaunchIntent || retained.Outcome == nil || *retained.Outcome != "interrupted" {
+		t.Fatal("refused new work replayed or rewrote the old attempt", retained, err)
+	}
+	history, err := next.db.Attempts(ctx, a.TaskID, 100, "")
+	if err != nil || len(history.Items) != 1 || history.Items[0].ID != a.ID {
+		t.Fatal("restart or refused admission added an old-task attempt", history, err)
 	}
 }

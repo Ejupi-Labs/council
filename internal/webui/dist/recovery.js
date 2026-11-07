@@ -3,6 +3,19 @@ const validId = (x) => typeof x === 'string' && /^[a-f0-9]{32}$/.test(x);
 const revision = (x) => typeof x === 'string' && /^[1-9][0-9]{0,18}$/.test(x) && BigInt(x) <= 9223372036854775807n;
 const el = (tag, text = '') => { const x = document.createElement(tag); x.textContent = text; return x; };
 const key = 'recoveryPendingControls';
+function sameNodeAuthorities(actual, expected) {
+    if (!Array.isArray(actual) || !Array.isArray(expected) || actual.length < 1 || actual.length > 16 || actual.length !== expected.length)
+        return false;
+    const fields = ['nodeId', 'taskVersion', 'nodeControlRevision'];
+    return actual.every((value, index) => {
+        const captured = expected[index];
+        if (!value || typeof value !== 'object' || Array.isArray(value) || !captured || typeof captured !== 'object' || Array.isArray(captured))
+            return false;
+        const item = value, original = captured;
+        return Object.keys(item).length === fields.length && fields.every(field => Object.hasOwn(item, field) && item[field] === original[field])
+            && validId(item['nodeId']) && revision(item['taskVersion']) && revision(item['nodeControlRevision']);
+    });
+}
 function pendingList() {
     const v = readSession(key);
     return Array.isArray(v) ? v.filter(p => {
@@ -43,6 +56,7 @@ export class RecoveryView {
     incident = null;
     selectedIncident = null;
     globalIncident = null;
+    rendered = '';
     constructor(host, label, refresh) {
         this.label = label;
         this.refresh = refresh;
@@ -111,10 +125,24 @@ export class RecoveryView {
     }
     currentTarget() { return this.task?.task.id ?? this.graph?.graph.id ?? this.globalIncident; }
     render() {
+        const retained = pendingList(), task = this.task?.task, graph = this.graph?.graph;
+        // Long-poll updates often change unrelated graph state. Keep the actual
+        // focused controls mounted when their recovery authority has not changed.
+        const fingerprint = JSON.stringify({
+            available: this.available, globalIncident: this.globalIncident, selectedIncident: this.selectedIncident,
+            task: task ? [task.id, task.currentVersion, task.revision, task.graphRef?.kind, this.task?.latestAttempt?.incident?.id, this.task?.latestAttempt?.cleanup.incidentId] : null,
+            graph: graph && this.graph ? [graph.id, graph.graphVersion, graph.controlRevision, graph.budgetAuthorityEpoch, this.graph.budget.budget.currentWindow.number,
+                this.graph.nodes.map(n => [n.id, n.key, n.taskId, n.taskVersion, n.taskRevision, n.controlRevision])] : null,
+            checkpoints: this.task?.checkpoints ?? this.graph?.checkpoints ?? [], incident: this.incident,
+            pending: retained.map(p => [p.requestId, p.op, p.target, p.unresolved]), busy: [...this.busy].sort(),
+        });
+        if (fingerprint === this.rendered)
+            return;
+        this.rendered = fingerprint;
         const active = document.activeElement instanceof HTMLElement && this.section.contains(document.activeElement) ? document.activeElement.dataset.recoveryFocus : undefined;
         this.content.replaceChildren();
         this.pending.replaceChildren();
-        const target = this.currentTarget(), retained = pendingList();
+        const target = this.currentTarget();
         this.section.hidden = !target && (this.label !== 'global' || retained.length === 0);
         if (!target && this.label !== 'global')
             return;
@@ -302,7 +330,7 @@ export class RecoveryView {
                 throw new ApiError('invalid_response', 'The acknowledgement does not match the exact retained request.', p.requestId, undefined, true);
             const cp = result.data?.checkpoint;
             if (p.op === 'tasks.pause' && (!cp?.scope || !validId(cp.id) || !revision(cp.revision) || !['task', 'member'].includes(cp.scope.kind) || cp.scope.taskId !== p.target || cp.scope.taskVersion !== p.body['taskVersion'] || cp.scope.expectedTaskRevision !== p.body['expectedTaskRevision'])
-                || p.op === 'graphs.pause' && (!cp?.scope || !validId(cp.id) || !revision(cp.revision) || cp.scope.kind !== 'graph' || cp.scope.graphId !== p.target || cp.scope.graphVersion !== p.body['graphVersion'] || cp.scope.expectedGraphControlRevision !== p.body['expectedGraphControlRevision'] || cp.scope.expectedBudgetAuthorityEpoch !== p.body['expectedBudgetAuthorityEpoch'] || cp.scope.expectedWindowNumber !== p.body['expectedWindowNumber'] || JSON.stringify(cp.scope.nodeAuthorities) !== JSON.stringify(p.body['nodeAuthorities']))
+                || p.op === 'graphs.pause' && (!cp?.scope || !validId(cp.id) || !revision(cp.revision) || cp.scope.kind !== 'graph' || cp.scope.graphId !== p.target || cp.scope.graphVersion !== p.body['graphVersion'] || cp.scope.expectedGraphControlRevision !== p.body['expectedGraphControlRevision'] || cp.scope.expectedBudgetAuthorityEpoch !== p.body['expectedBudgetAuthorityEpoch'] || cp.scope.expectedWindowNumber !== p.body['expectedWindowNumber'] || !sameNodeAuthorities(cp.scope.nodeAuthorities, p.body['nodeAuthorities']))
                 || p.op === 'checkpoints.resume' && (!cp || cp.id !== p.checkpointId || cp.state !== 'resumed' || !revision(cp.revision))
                 || p.op === 'incidents.reconcile' && (result.data?.incident?.incident?.id !== p.target || !revision(result.data?.incident?.revision) || !Array.isArray(result.data?.incident?.blockers) || typeof result.data?.incident?.nextAction !== 'string' || result.data?.decision?.incidentId !== p.target || result.data?.decision?.requestId !== p.requestId))
                 throw new ApiError('invalid_response', 'The acknowledgement target does not match the retained request.', p.requestId, undefined, true);

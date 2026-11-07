@@ -59,9 +59,10 @@ before it acknowledges pause. Every later creation of an attempt, graph input, n
 workflow step under that scope must check the fence in the same transaction as that creation; a
 previously captured controller fact or in-memory callback is insufficient. This includes automatic
 routing replacements, graph input and local-operation preparation, graph continuation and new
-delivery-effect authorization. Work already admitted at the boundary may drain; recording its
-actual completion and evidence is not a new admission. A new delivery effect that has not already
-been authorized before the boundary cannot acquire authorization while its scope is paused. Current owner, control,
+delivery stages and broader delivery authority. Work already admitted at the boundary may drain;
+recording its actual completion and evidence is not a new admission. A delivery stage admitted before
+the boundary may obtain its required per-effect permits only under its original exact captured
+authority; pause does not authorize a new stage or broaden that scope. Current owner, control,
 instruction, dependency and budget guards remain in force. Completion and human acknowledgement may
 retain their actual results while paused, but their callbacks cannot admit subsequent work. Reads,
 status refresh, grants and owner restart cannot clear the fence.
