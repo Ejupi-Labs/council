@@ -48,11 +48,58 @@ When a write, publication, removal or acknowledgement has an unknown outcome, th
 operation remains uncertain, relevant conflicts stay fenced and no automatic replay
 occurs. Status, blockers and a supported owner-mediated reconciliation action record
 its own request, available observations and decision. An unsupported or insufficient
-proof leaves the incident unresolved and fence intact. A supported positive case must
-prove that the durable effect permit was never issued, all eligible controller operations
-are drained, and the relevant owner epoch is clean; it may record no effect and release
-only that operation’s own fence. It must not infer this from elapsed time or missing files. Neither a user assertion, a
-reused PID, an unverified path nor mere elapsed time proves an effect safe.
+proof leaves the incident unresolved and fence intact. Neither a user assertion, a
+reused PID, an unverified path nor elapsed time proves an effect safe.
+
+### Bounded positive no-effect reconciliation
+
+A current owner may record a **no Council-authorized effect** decision for one exact
+retention operation only if all of these prerequisites are implemented and established
+by controller evidence. This is a proposed design gate, not a claim that the current
+runtime already provides retention permits or such a proof:
+
+1. Every operation-owned filesystem effect, including setup, private staging,
+   publication, quarantine, removal and every subeffect, requires its own exact
+   operation ID, owner generation and effect ID. The only route to an OS effect is a
+   positively acknowledged durable permit committed to a complete append-only journal.
+   An uncertain permit commit cannot authorize entering the OS. Journal history and
+   its identity cannot be deleted, truncated, silently replaced or treated as complete
+   if corrupt. Private staging is not exempt from this requirement.
+2. Under the serialized owner transaction, freeze the exact operation and revision so
+   no actor or stale callback can acquire any future permit for it. Bind the incident,
+   selected scope and reconciliation request to that freeze. Validate the complete
+   journal and verify that no permit exists for **any** effect stage of that operation.
+   Absence of a row is meaningful only under the enforced complete-permit invariant;
+   an absent file, expired lease or clean but unrelated owner epoch is not proof.
+3. Hold a controller admission barrier and establish that all previously admitted
+   retention actors, background workers and effect-capable handles for that operation
+   have returned or are otherwise proved terminated. The existing engine lifecycle,
+   worker and watchdog drains do not automatically establish this for future retention
+   work: retention must explicitly register every actor and resource with the actual
+   lifecycle and clean-close checks. A timeout, untracked actor, unverified handle,
+   unrecorded fence cause or uncertain journal keeps the incident unresolved.
+4. For a same-owner decision, verify the exact current owner, generation and held lock
+   while the admission barrier and freeze remain effective. A running owner epoch is
+   normally dirty, so it must not be required to be simultaneously clean. For a
+   cross-owner decision, verify an unbroken durable begin/clean history covering the
+   exact earlier effect-capable owner generation and every intervening owner; each
+   clean transition must include the retention-specific actor, permit and uncertainty
+   checks. A dirty, missing, mismatched or untracked generation is insufficient. Do
+   not infer a clean handoff merely from process absence or lack of pending attempts.
+5. Before releasing the barrier, a final serialized transaction rechecks the same
+   freeze, complete journal, owner and generation, exact request and revision, receipt,
+   and all other claims, incidents and effect blockers. It appends the auditable
+   no-effect decision and releases only this operation's independently safe fence;
+   other blockers continue to fence their applicable scope. Receipt replay returns the
+   recorded decision, never reissues the frozen effect. A later desired action requires
+   a new preview and fresh authority.
+
+This decision proves only that Council did not perform an authorized effect for that
+operation under the enforced protocol. It does not prove a destination is absent or
+unchanged, establish what an unrelated process did, or authorize an operation on a
+credential-bearing or otherwise ineligible object. If any prerequisite is missing, the
+case remains unresolved; no runtime implementation may infer this positive decision
+from the older generic owner-epoch or lifecycle checks alone.
 
 ## Payload eligibility and privacy gate
 
@@ -187,3 +234,22 @@ archives, pre-effect rejection, interrupted/ambiguous effects, lost acknowledgem
 explicit reconciliation, zero model calls/replay and actual UI/CLI parity. The plan must
 provide a concrete credential-safe way to qualify and exercise production data, and a
 real owner inspection path; until then these are blocking design and delivery gates.
+
+For no-effect reconciliation, controlled acceptance must additionally cover:
+
+- Freeze versus first permit in both transactional orderings and a simultaneous race;
+  after freeze, delayed callbacks and identical retries cannot acquire a new permit.
+- Every effect type, including private staging and each quarantine/removal subeffect;
+  an effect cannot reach the OS without its exact positively acknowledged permit.
+- Permit failure before commit, acknowledgement loss after commit, crash after permit
+  and after OS invocation, and partial multi-effect operations. A possibly issued permit
+  is never reported as no-effect solely because its outcome or file is missing.
+- An admitted actor held across shutdown, drain timeout, actor/handle registration
+  failures and an unrecorded fence cause; no clean marker or reconciliation is
+  accepted without complete retention-specific lifecycle proof.
+- Same-owner active dirty epoch, a complete exact clean cross-owner generation chain,
+  and dirty, absent, mismatched or broken chains; unrelated clean epochs do not qualify.
+- Missing, corrupt, truncated or inconsistent journal history; foreign claims and
+  independent incidents; exact decision/receipt replay and changed-request conflict.
+  A safe decision releases only its own blocker and does not open a gate still blocked
+  by another cause or authorize work in an unrelated scope.
