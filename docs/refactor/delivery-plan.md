@@ -1,6 +1,6 @@
 # Council rebuild delivery plan
 
-Status: features001–005 are implemented, independently reviewed and accepted. Feature 001 has
+Status: features001–006 are implemented, independently reviewed and accepted. Feature 001 has
 six-platform native qualification; features 002–003 also have Linux race qualification.
 Feature 003 qualified at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
@@ -9,9 +9,9 @@ Its38-row evidence matrix and independent review are closed. Feature005 design w
 at `24b0cf1`; accepted dev.5/005-v1 source `794f08032b96434d1217f8bb3797c6803263f39c`
 passes all seven jobs in run42224386878. Its35-row matrix,22 independent corrections and local
 visual review are closed; the first failed hosted run remains documented. Feature006 dev.6/006-v1
-is implemented and under qualification in specs/006-task-graphs. Its bounded offline runtime
-checks and foreign corrections are recorded, while complete visual/client/package checks, final
-local commands and all seven matching-source native/race jobs remain open. Features007–012 remain
+is accepted for its specified offline scope at `48484fe82e3e62df906bcb999693e4e1f0e94e2c`; all
+seven native/race jobs passed in run42402811511 and final local build/test/check passed.
+The documentation-only acceptance commit remains required before 007. Features007–012 remain
 planned. The parent rebuild is incomplete. Date: 7 November 2026.
 See each active feature's acceptance/review records for observed evidence.
 
@@ -81,7 +81,7 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Features001–005 are accepted;006 is implemented and under qualification;007–012 are planned.
+Features001–006 are accepted in their specified scope;007–012 are planned.
 The exit descriptions define each slice's acceptance boundary and are not
 pass claims. The order is sequential; later slices build on accepted earlier ones and must
 preserve their working journeys.
@@ -218,9 +218,9 @@ required settlement; a retained applied effect cannot erase a failed/cancelled t
 
 ### 006 — Dependent and parallel task graphs with scoped handoffs
 
-Active context: `specs/006-task-graphs/`; dev.6/006-v1 implementation under qualification.
-The [draft matrix](../../specs/006-task-graphs/evidence-matrix.md) separates observed bounded
-checks from remaining acceptance gates.
+Accepted context: `specs/006-task-graphs/`; dev.6/006-v1 qualified offline at `48484fe82e3e62df906bcb999693e4e1f0e94e2c`.
+The [evidence matrix](../../specs/006-task-graphs/evidence-matrix.md) records bounded scenarios,
+independent review, local commands, hosted jobs and retained limitations.
 
 Optional groups contain up to16 required nodes and64 acyclic file/context dependencies in one
 project, with a complete2MiB declaration bound. Default managed capacity is at most two eligible
@@ -255,7 +255,7 @@ context and missing/oversize access blocks; exact controls/rebind/history/restar
 qualification/application and response-only/publication boundaries. Complete actual UI/CLI and
 1440px/360px keyboard/focus/reduced-motion/asset review, extracted Git-only native journeys,
 independent review/corrections, final build/test/check and all seven exact-source native/race jobs
-must close before007. Existing focused evidence is not feature acceptance.
+closed for the accepted offline scope; the documentation-only acceptance commit is required before 007. Live provider qualification remains unperformed.
 
 ### 007 — Recovery, checkpoints, backup and reviewed cleanup
 

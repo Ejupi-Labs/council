@@ -1,14 +1,15 @@
 # Council rebuild requirements traceability
 
-Status: features 001–005 are accepted. Foundation qualified on all six native targets at `93c8c25`;
+Status: features 001–006 are accepted in their specified scope. Foundation qualified on all six native targets at `93c8c25`;
 managed Codex execution qualified on six targets plus Linux AMD64 race at `f5edd96` in run 42140818152.
 Claude interoperability qualified on all seven jobs at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
 Feature004 qualified at `3f4a18e` in run42172669381. Feature005 dev.5/005-v1 qualifies at
 `794f08032b96434d1217f8bb3797c6803263f39c` in run42224386878 on six native targets plus race.
 Its acceptance/review records retain the first failed run and corrected-source closure. Other parent requirements
-remain partial or not implemented as marked. Feature006 dev.6/006-v1 implementation is under
-qualification; it has no accepted matching-source local/native release gate. Date: 7 November 2026.
+remain partial or not implemented as marked. Feature006 dev.6/006-v1 qualifies offline at
+`48484fe82e3e62df906bcb999693e4e1f0e94e2c` with local build/test/check and seven hosted jobs
+in run42402811511. A documentation-only acceptance follow-up commit is required before 007. Date: 7 November 2026.
 
 This matrix maps [functional requirements](functional-requirements.md) to the ordered slices in
 [the delivery plan](delivery-plan.md). It does not credit the legacy runtime at
@@ -32,10 +33,10 @@ Feature005 design was committed at `24b0cf1` before implementation. Its
 close the specified workflow scope at794f080, including all six native jobs and Linux race.
 Future graph, recovery, host and remaining adapter scopes are not implied by that acceptance.
 Feature006 specification/design/tasks were committed before implementation under specs/006-task-graphs.
-Its [active review](../../specs/006-task-graphs/review.md) and
-[draft evidence matrix](../../specs/006-task-graphs/evidence-matrix.md) record bounded actual offline
-checks, independent findings and corrections. Complete visual/client/package qualification, final
-local checks and all seven matching-source native/race jobs remain acceptance gates. Features007–012
+Its [review](../../specs/006-task-graphs/review.md) and
+[evidence matrix](../../specs/006-task-graphs/evidence-matrix.md) record bounded actual offline
+checks, independent findings and corrections, visual/client/package checks, local commands and
+seven matching-source native/race jobs. Features007–012
 and their evidence paths remain planned. A path or a focused pass alone is not feature acceptance.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
@@ -77,12 +78,12 @@ single status cannot hide an unmet claim.
 | FR-022 | Review the actual candidate and accessible evidence; retain unperformed review/check gaps | 005 | 006, 009–012 | `specs/005-verified-delivery/acceptance.md#independent-review-evidence` | IMPLEMENTED — fresh exact-subject review/evidence and named gaps accepted at794f080; live model inspection remains unperformed |
 | FR-023 | Link blocking findings to corrections and affected rechecks without replaying unrelated work | 005 | 006, 007, 012 | `specs/005-verified-delivery/acceptance.md#correction-lineage-and-recheck` | IMPLEMENTED — bounded linked correction/recheck and immutable findings accepted at794f080; no implicit budget refill |
 | FR-024 | Bind observed deterministic check receipts to the exact checked change/source | 005 | 002, 006, 012 | `specs/005-verified-delivery/acceptance.md#verifier-receipts-and-staleness` | IMPLEMENTED — actual builtin/owned-command receipts, exact applicability and mutating-check invalidation accepted at794f080 |
-| FR-025 | Run independent tasks concurrently within capacity and honor dependencies | 006 | 002, 004, 007, 012 | `specs/006-task-graphs/evidence-matrix.md` | PARTIAL — dev.6 real offline two-context overlap, narrower capacity and one root allowance are implemented; complete006 local/client/package/native acceptance remains open |
-| FR-026 | Give followers the accepted predecessor change/base within their actual access | 006 | 005, 009–012 | `specs/006-task-graphs/evidence-matrix.md` | PARTIAL — retained exact file/index inputs, actual fan-in/diamond receiving workspaces and cumulative final delivery are implemented with bounded checks;006 release acceptance remains open |
-| FR-027 | Retrieve focused context while preserving every applicable original constraint | 006 | 002, 005, 012 | `specs/006-task-graphs/evidence-matrix.md` | PARTIAL — exact receiver/shared/contributed conditions and complete-original access are implemented; actual controlled reads and bounded limit checks exist, with final006 gates open |
-| FR-028 | Label derived summaries, retain provenance/originals and handle context capacity explicitly | 006 | 002, 004, 012 | `specs/006-task-graphs/evidence-matrix.md` | PARTIAL — deterministic labelled digests/provenance and complete-original/ref/prompt/access blockers are implemented; final006 client/native qualification remains open, and provider token capacity stays unknown |
+| FR-025 | Run independent tasks concurrently within capacity and honor dependencies | 006 | 002, 004, 007, 012 | `specs/006-task-graphs/evidence-matrix.md` | IMPLEMENTED — feature 006 specified offline scope accepted at 48484fe with local and seven hosted jobs; live-provider qualification remains separate |
+| FR-026 | Give followers the accepted predecessor change/base within their actual access | 006 | 005, 009–012 | `specs/006-task-graphs/evidence-matrix.md` | IMPLEMENTED — feature 006 specified offline scope accepted at 48484fe with local and seven hosted jobs; live-provider qualification remains separate |
+| FR-027 | Retrieve focused context while preserving every applicable original constraint | 006 | 002, 005, 012 | `specs/006-task-graphs/evidence-matrix.md` | IMPLEMENTED — feature 006 specified offline scope accepted at 48484fe with local and seven hosted jobs; live-provider qualification remains separate |
+| FR-028 | Label derived summaries, retain provenance/originals and handle context capacity explicitly | 006 | 002, 004, 012 | `specs/006-task-graphs/evidence-matrix.md` | IMPLEMENTED — feature 006 specified offline scope accepted at 48484fe with local and seven hosted jobs; live-provider qualification remains separate |
 | FR-029 | Retain complete linked task, attempt, review, verifier and change evidence | 002 | 005, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — accepted task/attempt/source/candidate and005 review/check/delivery evidence with bounded complete reads; future graph extensions remain separate |
-| FR-030 | Propagate only relevant authorized context; peer content creates no new authority | 006 | 002, 004, 005, 009–012 | `specs/006-task-graphs/evidence-matrix.md` | PARTIAL — scoped peer data and explicit receiver/final authority boundaries are implemented with bounded checks; final006 review/client/native acceptance remains open |
+| FR-030 | Propagate only relevant authorized context; peer content creates no new authority | 006 | 002, 004, 005, 009–012 | `specs/006-task-graphs/evidence-matrix.md` | IMPLEMENTED — feature 006 specified offline scope accepted at 48484fe with local and seven hosted jobs; live-provider qualification remains separate |
 | FR-031 | Observe progress/history/evidence without model calls using bounded metadata and explicit full reads | 002 | 006, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-032 | Preserve distinct lifecycle meanings; timeouts, responses and partial results do not imply acceptance | 002 | 005, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#evidence-cancellation-and-recovery` | IMPLEMENTED — feature002 native authoring scope accepted on six targets at f5edd96; later extensions retain separate gates |
 | FR-033 | Pause admission/checkpoint/resume unfinished work and cancel admitted work with honest cleanup | 007 | 002, 006, 008, 012 | `specs/007-recovery-and-retention/acceptance.md#pause-resume-and-cancel` | NOT IMPLEMENTED |
@@ -100,7 +101,7 @@ single status cannot hide an unmet claim.
 | FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#entrypoint-semantic-parity` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing accepted at3f4a18e; MCP remains planned |
 | FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — task/draft/control/acceptance replay and stale clients accepted on six targets at f5edd96 |
 | FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation and native Codex fake journeys accepted on six targets; complete multi-adapter release remains planned |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL —001–005 Specify/design/implementation/review/fix/native acceptance gates closed;006 implementation under qualification;007–012 planned |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL —001–006 Specify/design/implementation/review/fix/native acceptance gates closed; acceptance documentation commit required before 007;007–012 planned |
 
 ## Per-feature review and fix gates
 
@@ -116,7 +117,7 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 | 003 | `specs/003-claude-interoperability/` | `specs/003-claude-interoperability/review.md` | ACCEPTED — six native targets plus race at ce8aaa7; all six implementation findings closed |
 | 004 | `specs/004-economical-routing/` | `specs/004-economical-routing/review.md` | ACCEPTED — six native targets plus race at3f4a18e, run42172669381; all independent corrections closed |
 | 005 | `specs/005-verified-delivery/` | `specs/005-verified-delivery/review.md` | ACCEPTED — dev.5/005-v1 at794f080, run42224386878, six native targets plus race; all22 findings and35 matrix rows closed |
-| 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | IMPLEMENTATION UNDER QUALIFICATION — dev.6/006-v1; bounded offline evidence exists, final local/visual/package/seven-job native acceptance open |
+| 006 | `specs/006-task-graphs/` | `specs/006-task-graphs/review.md` | ACCEPTED — dev.6/006-v1 specified offline scope at 48484fe; documentation-only acceptance commit required before 007 |
 | 007 | `specs/007-recovery-and-retention/` | `specs/007-recovery-and-retention/review.md` | NOT IMPLEMENTED; gate open |
 | 008 | `specs/008-host-integration/` | `specs/008-host-integration/review.md` | NOT IMPLEMENTED; gate open |
 | 009 | `specs/009-acp-deepseek/` | `specs/009-acp-deepseek/review.md` | NOT IMPLEMENTED; gate open |

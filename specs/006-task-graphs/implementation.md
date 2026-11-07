@@ -2200,3 +2200,42 @@ two-slot product pool. Independent review found no blocker. The focused case pas
 `006-final-current-check.log`. E54 remains a failed full command; this focused pass does
 not establish a matching complete suite. Revision, seven native/race jobs and acceptance
 remain open.
+
+## E56–E57: local full run and hosted job allowance
+
+The ninth local `npm test` command exited 0 in `006-final-npm-test-ninth.log` (session
+91083): all non-Engine packages and all 23 Engine batches passed, UI passed 81/81 in
+600541.5472ms and scripts passed 3/3 in 76888.1106ms. Store took 45.883s and Workspace
+344.169s. This run began at HEAD `ee7128d`; graph-rebind/start/control browser tests
+changed before its UI phase, and a macOS-specific Go test changed after its Engine case.
+It is a successful mixed-source command, not qualification of an exact commit or of that
+later macOS edit. The current canonical-executable focused case separately passed on this
+host in 28.251s (`006-canonical-executable-focused.log`), not as a macOS platform run.
+Earlier failures and their stated uncertainties retain their actual outcomes.
+
+The Linux AMD64 race job 128480915091 in Actions run 42398483639 was cancelled after
+about 20 minutes under its then 20-minute job limit; its log says the operation was
+cancelled, not that race checks passed. Earlier native failures also remain historical.
+Commit `267309e` adjusts only outer job allowances: native 30→60 minutes and race 20→90
+minutes. Individual test/product deadlines, assertions, selectors and coverage are not
+changed. The run for that commit (42402338856) was queued at the observed checkpoint;
+all six native jobs and the Linux AMD64 race job must finish successfully for the same
+source before the native gate closes. Checked revision and feature acceptance stay open.
+
+## E58: scoped client journey reconciliation
+
+The ninth mixed-source command (E56) passed the actual named browser, CLI and extracted
+package cases. UI inspection checks complete originals, provenance and exact receiving
+materialization while issuing zero browser writes. The actual CLI checks two native
+dispatches before and after its input/member reads; the extracted package verifies
+materialization and provenance digests and retains six consumed admissions before and
+after its inspections. These are the assertions actually made, not a claim that every
+individual UI read separately samples a native counter.
+
+The browser control/guidance/rebind cases exercise exact group/node Stop, grant, held or
+lost responses, newer selection/text and preserved history. The extracted package exercises
+final delivery. E48 also records the actual 15-second common-window expiry scene after
+the deadline with one retained attempt. This is browser/owner evidence; no direct CLI
+expiry journey is claimed. T038 and T049 are checked for these scoped client journeys.
+E56 remains mixed-source, and comprehensive review, exact revision, seven hosted
+native/race jobs and overall feature acceptance remain open.

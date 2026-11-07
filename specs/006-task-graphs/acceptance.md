@@ -1,6 +1,6 @@
 # Task graph acceptance record
 
-Status: **under qualification; not accepted**. There is no accepted006 source revision yet.
+Status: **accepted** for the specified offline 006 scope at implementation revision `48484fe82e3e62df906bcb999693e4e1f0e94e2c`. E60–E61 record hosted and local qualification. Commit this documentation-only follow-up before work on 007.
 All implementation changes remain on physical `refactor`; main remains unchanged. Completing
 this slice does not complete the twelve-feature rebuild goal.
 
@@ -13,13 +13,13 @@ before006 runtime implementation. The prerequisite005 source is
 | Gate | Current authoritative evidence | Status |
 | --- | --- | --- |
 | Specification, design, tasks and independent pre-code analysis | Immutable gate above; spec.md, plan.md, design-review.md and analysis.md | Closed |
-| Implementation and independent corrections | E41/E42 retain earlier recovery/focus closures; E45 adds terminal projection, E46 exact Start acknowledgement, and E47 definition observation RED/reviewed fix/actual focused pass | Active; bounded corrections do not complete comprehensive current-source qualification |
-| Final matching build, npm test and npm run check | E52 retains seventh full failure after all Go passed and UI passed 80/81. E53 records reviewed test-only exact-ack observer correction, focused 1/1 in 16002.4024ms and current check exit 0. Eighth full npm session 30177 failed in Engine batch 15 (E54) | Open; complete current full suite and checked-source identity remain pending |
-| Client and extracted runtime | Seventh UI 80/81 failure remains. E53 addresses its source-identified early observer race and passes the complete corrected focused case; the failed early observation established no product outcome. Older package/script/affected successes retain separate scopes | Open; complete current client/global/source/native acceptance remains unqualified |
-| Actual paired UI capture and independent image inspection | E48 records current fourteenth capture/integrity and both 44-image reviews after E45/E46/E47, with explicit tall-image/hidden-state/runtime limits; meaningful expanded/ack/focus/definition behavior has separate actual checks | T052 scoped capture/image requirement passed at this checkpoint; full/current-revision/CI/acceptance remains open |
-| Checked revision and compiled browser assets | Current implementation is uncommitted; native binaries/private data remain ignored | Open |
-| Six native platform jobs and Linux AMD64 race | No006 checked-source seven-job run has completed | Open |
-| All24 GRA and ten SC acceptance rows | Draft evidence-matrix.md maps current evidence and remaining gates | Open |
+| Implementation and independent corrections | E01–E59 record independent source/failure-path/interface reviews and bounded corrective reruns; E59 independently closes IR006-26 in the actual Store/admission scope and records conditional historical-risk dispositions | Closed for T053; specified offline scope accepted under E61 |
+| Final matching build, npm test and npm run check | E61: serialized exact-product-source build, full npm test and check exited 0; 23/23 Engine batches, UI 81/81 and scripts 3/3 | Closed for T054 |
+| Client and extracted runtime | E58 scoped UI/CLI journeys and E61 full UI and extracted runtime checks; E60 six hosted native jobs independently ran browser/packaging/extracted checks | Closed in stated offline scope |
+| Actual paired UI capture and independent image inspection | E48 records current fourteenth capture/integrity and both 44-image reviews after E45/E46/E47, with explicit tall-image/hidden-state/runtime limits; meaningful expanded/ack/focus/definition behavior has separate actual checks | T052 scoped capture/image requirement passed; E60–E61 record later hosted and local qualification |
+| Checked revision and compiled browser assets | E60: reviewed implementation and committed embedded assets at 48484fe82e3e62df906bcb999693e4e1f0e94e2c were pushed to refactor; all six hosted native jobs rebuilt and confirmed the committed browser output | Closed for T055 at the identified implementation revision; E61 records later local qualification |
+| Six native platform jobs and Linux AMD64 race | E60: GitHub Actions run 42402811511 completed successfully for all six actual native targets and Linux AMD64 race at 48484fe82e3e62df906bcb999693e4e1f0e94e2c | Closed for T056; E61 records later local qualification and offline acceptance |
+| All24 GRA and ten SC acceptance rows | E01–E61 map scenario evidence, independent review, checked local commands and hosted qualification. Historical risks and explicit limits remain recorded. | Accepted in specified offline scope; documentation-only acceptance commit required before 007 |
 
 The thirteenth E43 record remains valid historical capture/image evidence. E45/E46/E47 changed
 source after it; E48 now satisfies T052's bounded capture/image requirement at the current
@@ -32,7 +32,7 @@ E36 records the earlier complete local checkpoint: 006-final-npm-test-fourth.log
 The post-fix build and check also exited 0 (006-after-stop-fixes-build.log and
 006-after-stop-fixes-check.log). These are actual successful commands against the recorded
 pre-wrap working checkpoint. Later CSS/test observer changes have focused evidence
-without a new full command result. These passes do not accept an uncommitted source revision, substitute for the
+without a new full command result. These historical passes do not accept a later source revision, substitute for the
 remaining matching visual qualification, qualify hosted native targets or resolve the
 historical IR006-59 failures. Remaining feature-wide acceptance gates stay open.
 
@@ -123,7 +123,7 @@ case failed in the shared final prerequisite before its injected fault was insta
 separate measurement-only milestone diagnostic completed its seven prerequisites in 14.690s
 after Create, below the unchanged 25s observer (case 16.18s/Engine 16.259s). It stops before
 final-reviewer/local-check admission and does not qualify that command, justify more time,
-identify a cause or fix, or exonerate the failed runs. IR006-59 remains open.
+identify a cause or fix, or exonerate the failed runs. IR006-59 historical attribution remains open; its conditional non-blocking review disposition is recorded in E59.
 
 The third full npm-test attempt was deliberately stopped after new source-review findings
 (006-final-npm-test-third.log; session 42625). Its exit 1 was due to that termination during
@@ -504,3 +504,106 @@ two-slot product pool. Independent review found no blocker. The focused case pas
 `006-final-current-check.log`. E54 remains a failed full command; this focused pass does
 not establish a matching complete suite. Revision, seven native/race jobs and acceptance
 remain open.
+
+## E56–E57: local full run and hosted job allowance
+
+The ninth local `npm test` command exited 0 in `006-final-npm-test-ninth.log` (session
+91083): all non-Engine packages and all 23 Engine batches passed, UI passed 81/81 in
+600541.5472ms and scripts passed 3/3 in 76888.1106ms. Store took 45.883s and Workspace
+344.169s. This run began at HEAD `ee7128d`; graph-rebind/start/control browser tests
+changed before its UI phase, and a macOS-specific Go test changed after its Engine case.
+It is a successful mixed-source command, not qualification of an exact commit or of that
+later macOS edit. The current canonical-executable focused case separately passed on this
+host in 28.251s (`006-canonical-executable-focused.log`), not as a macOS platform run.
+Earlier failures and their stated uncertainties retain their actual outcomes.
+
+The Linux AMD64 race job 128480915091 in Actions run 42398483639 was cancelled after
+about 20 minutes under its then 20-minute job limit; its log says the operation was
+cancelled, not that race checks passed. Earlier native failures also remain historical.
+Commit `267309e` adjusts only outer job allowances: native 30→60 minutes and race 20→90
+minutes. Individual test/product deadlines, assertions, selectors and coverage are not
+changed. The run for that commit (42402338856) was queued at the observed checkpoint;
+all six native jobs and the Linux AMD64 race job must finish successfully for the same
+source before the native gate closes. Checked revision and feature acceptance stay open.
+
+## E58: scoped client journey reconciliation
+
+The ninth mixed-source command (E56) passed the actual named browser, CLI and extracted
+package cases. UI inspection checks complete originals, provenance and exact receiving
+materialization while issuing zero browser writes. The actual CLI checks two native
+dispatches before and after its input/member reads; the extracted package verifies
+materialization and provenance digests and retains six consumed admissions before and
+after its inspections. These are the assertions actually made, not a claim that every
+individual UI read separately samples a native counter.
+
+The browser control/guidance/rebind cases exercise exact group/node Stop, grant, held or
+lost responses, newer selection/text and preserved history. The extracted package exercises
+final delivery. E48 also records the actual 15-second common-window expiry scene after
+the deadline with one retained attempt. This is browser/owner evidence; no direct CLI
+expiry journey is claimed. T038 and T049 are checked for these scoped client journeys.
+E56 remains mixed-source, and comprehensive review, exact revision, seven hosted
+native/race jobs and overall feature acceptance remain open.
+
+
+## E59: routing guidance and historical timing disposition
+
+The acceptance reviewer independently inspected the graph guidance, routing-basis and admission
+paths. Guidance stores the selected policy in the new immutable node version; admission reads that
+basis, captures fresh suitability against it and does not replay the saved use-current-policy action.
+`TestGraphGuidanceFreezesRoutingPolicyUntilFreshInputAdmission` exercises the actual Store
+guidance transaction, a subsequent global policy change, explicit Advance and fresh-input
+admission, then checks the original policy revision and root-ledger consumption. It passed 0.07s
+in `006-final-npm-test-ninth.log`; that suite has the mixed-source limitations stated in E56. This
+closes IR006-26 in the reviewed Store/admission scope only; it does not prove a native launch.
+
+IR006-59 and IR006-56 remain historical unexplained timing/intermittence risks. Existing repeated
+checks and reviewed diagnostics have not demonstrated a current invariant violation. Their causes
+are not established or fixed, and the passing runs do not exonerate the failures or exclude
+intermittence. The reviewed evidence supports treating their historical attribution as non-blocking
+for the source-review gate, conditional on completion of the full hosted qualification without a
+recurrence; a recurring failure must be investigated and recorded. No exact-revision local suite,
+seven-job hosted qualification or feature acceptance is inferred. T054–T057 remain open.
+
+
+## E60: checked implementation and hosted qualification
+
+GitHub Actions [run 42402811511](https://github.com/Ejupi-Labs/council/actions/runs/42402811511)
+completed successfully on `refactor` at implementation commit
+`48484fe82e3e62df906bcb999693e4e1f0e94e2c`. Independent `gh run view` verification confirmed
+seven completed successful jobs:
+
+| Job | GitHub job ID |
+| --- | --- |
+| Linux AMD64 native race checks | 128494064465 |
+| Native Linux ARM64 | 128494064558 |
+| Native Linux AMD64 | 128494064654 |
+| Native Windows ARM64 | 128494064672 |
+| Native macOS AMD64 | 128494064694 |
+| Native Windows AMD64 | 128494064715 |
+| Native macOS ARM64 | 128494064740 |
+
+Each native job successfully built the embedded UI and native binary, ran the configured offline
+native/browser/packaging/extracted checks, checked source and TypeScript, and confirmed the
+committed browser output. The race job successfully ran the supported bounded native race cases.
+This establishes T055/T056 for the named implementation revision, not a later documentation-only
+commit. IR006-56 and IR006-59 retain their unexplained historical timing risks; these successes do
+not attribute or exonerate those failures. T054's serialized local run remains in progress, and
+T057/feature acceptance remain open. No live provider or real subscription is qualified.
+
+
+## E61: final local qualification and acceptance
+
+The serialized final local build, full `npm test` and `npm run check` completed with exit 0 on
+implementation source `48484fe82e3e62df906bcb999693e4e1f0e94e2c`. The retained logs are
+`.council/refactor/006-exact-source-build.log`, `006-final-npm-test-tenth.log` and
+`006-exact-source-final-check.log`. The full test passed all 23 Engine batches, UI 81/81
+(467241.2343ms), and script tests 3/3 (60862.1258ms). The first check invocation failed to
+start due to tool ResourceUnavailable and produced no usable result; the subsequent actual check
+exited 0. E60 records all six hosted native targets and Linux AMD64 race passing the same code
+revision, including committed browser output checks. No live provider or real subscription was used.
+
+The specified offline feature 006 scope is accepted. IR006-56 and IR006-59 remain historical
+unexplained timing risks; later successful runs do not establish a cause, fix, exoneration or absence
+of intermittence. E48 visual and E58 client scopes retain their explicit limitations. This record
+is a documentation-only follow-up to the qualified implementation commit and must itself be
+committed before beginning feature 007. Features 007–012 and full product release remain planned.
