@@ -12,6 +12,7 @@ import (
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/evidence"
 	"github.com/Ejupi-Labs/council/v2/internal/fixture"
+	"github.com/Ejupi-Labs/council/v2/internal/localpath"
 )
 
 // The declared publisher is this owned test binary's fixed, read-only descriptor
@@ -19,6 +20,10 @@ import (
 func TestGraphExternalFinalExecutesOnlyCapturedCommandWithExactCumulativeContext(t *testing.T) {
 	t.Setenv("COUNCIL_TEST_FINAL_CHECK_SENTINEL", "preserved")
 	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedExecutable, err := localpath.Resolve(executable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +77,7 @@ func TestGraphExternalFinalExecutesOnlyCapturedCommandWithExactCumulativeContext
 	}
 	observed := deliveries.Items[0].External
 	if observed.AttemptID != actual.ID || observed.Outcome != "command_succeeded" || !reflect.DeepEqual(observed.Action, action) || observed.StdoutArtifactID == nil ||
-		observed.Command.Executable != executable || !reflect.DeepEqual(observed.Command.Arguments, action.Command.Arguments) {
+		observed.Command.Executable != resolvedExecutable || !reflect.DeepEqual(observed.Command.Arguments, action.Command.Arguments) {
 		t.Fatal("The retained publisher changed its captured command or asserted remote attestation", observed)
 	}
 	var output bytes.Buffer
