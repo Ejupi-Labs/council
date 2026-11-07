@@ -90,7 +90,7 @@ func (s *Store) RecoverOwner(ctx context.Context, newOwnerID string) error {
 			}
 		}
 		var incidents, claims int
-		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM execution_incidents").Scan(&incidents); e != nil {
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM execution_incidents i WHERE NOT EXISTS (SELECT 1 FROM recovery_decisions d WHERE d.incident_id=i.id AND json_extract(d.data,'$.outcome')='reconciled')").Scan(&incidents); e != nil {
 			return storageError()
 		}
 		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM capacity_claims").Scan(&claims); e != nil {
@@ -100,9 +100,23 @@ func (s *Store) RecoverOwner(ctx context.Context, newOwnerID string) error {
 		if incidents > 0 || claims > 0 || g.State == "fenced" {
 			state = "fenced"
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE execution_control SET owner_instance_id=?,state=? WHERE singleton=1", newOwnerID, state); e != nil {
+		// The recovery loop may have appended attempt-specific incidents after
+		// BeginOwnerEpoch recorded an unknown prior epoch. Keep that global
+		// uncertainty discoverable through the gate without erasing any of the
+		// attempt incidents or releasing their claims.
+		var epochIncident sql.NullString
+		e = tx.QueryRowContext(ctx, `SELECT i.id FROM execution_incidents i
+			WHERE json_extract(i.data,'$.code')='owner_epoch_uncertain'
+			AND NOT EXISTS (SELECT 1 FROM recovery_decisions d WHERE d.incident_id=i.id AND json_extract(d.data,'$.outcome')='reconciled')
+			ORDER BY i.rowid DESC LIMIT 1`).Scan(&epochIncident)
+		if e != nil && e != sql.ErrNoRows {
 			return storageError()
 		}
+		if _, e = tx.ExecContext(ctx, "UPDATE execution_control SET owner_instance_id=?,state=?,incident_id=coalesce(?,incident_id) WHERE singleton=1", newOwnerID, state, epochIncident); e != nil {
+			return storageError()
+		}
+		// Restart never opens a previously fenced gate. Only a current-owner
+		// receipted reconciliation may recheck an already reconciled incident.
 		return nil
 	})
 }
@@ -145,4 +159,48 @@ func (s *Store) Incident(ctx context.Context, id string) (domain.ExecutionIncide
 		return domain.ExecutionIncident{}, notFound()
 	}
 	return decode[domain.ExecutionIncident](raw)
+}
+
+// recoveryReleaseResolvedFence is called only by an explicit owner-mediated
+// reconciliation transaction. Unknown fence provenance never authorizes reopening.
+func (s *Store) recoveryReleaseResolvedFence(ctx context.Context, tx *sql.Tx) error {
+	var state string
+	var incidentID sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT state,incident_id FROM execution_control WHERE singleton=1").Scan(&state, &incidentID); err != nil {
+		return storageError()
+	}
+	if state != "fenced" || !incidentID.Valid {
+		return nil
+	}
+	var resolved, unresolved, claims, effects, inputs int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM recovery_decisions WHERE incident_id=? AND json_extract(data,'$.outcome')='reconciled'", incidentID.String).Scan(&resolved); err != nil {
+		return storageError()
+	}
+	if resolved != 1 {
+		return nil
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM execution_incidents i WHERE NOT EXISTS (SELECT 1 FROM recovery_decisions d WHERE d.incident_id=i.id AND json_extract(d.data,'$.outcome')='reconciled')").Scan(&unresolved); err != nil {
+		return storageError()
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM capacity_claims").Scan(&claims); err != nil {
+		return storageError()
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM delivery_operations WHERE active_effect_id IS NOT NULL OR status IN ('preparing','applying','uncertain')").Scan(&effects); err != nil {
+		return storageError()
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM graph_inputs WHERE state IN ('preparing','uncertain')").Scan(&inputs); err != nil {
+		return storageError()
+	}
+	if unresolved != 0 || claims != 0 || effects != 0 || inputs != 0 {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE execution_control SET state='open',incident_id=NULL WHERE singleton=1 AND state='fenced' AND incident_id=?", incidentID.String)
+	if err != nil {
+		return storageError()
+	}
+	n, err := result.RowsAffected()
+	if err != nil || n != 1 {
+		return storageError()
+	}
+	return nil
 }

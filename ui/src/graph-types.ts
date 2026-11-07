@@ -110,6 +110,7 @@ export interface GraphAdmission {
 export interface GraphDetail {
   graph: GraphSummary; definition: GraphDefinitionRef; nodes: GraphNodeSummary[]; budget: GraphBudgetView;
   activeClaims: GraphClaimView[]; dispatchAuthority: GraphDispatchAuthorityView | null; blockers: GraphBlockerSummary[];
+  checkpoints?: import('./recovery.js').RecoveryCheckpoint[];
 }
 export interface GraphWaitView { graph: GraphDetail; changed: boolean; timedOut: boolean }
 export interface GraphReboundNode {

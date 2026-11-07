@@ -211,7 +211,7 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 				return e
 			}
 			out = w
-			return nil
+			return s.refreshRecoveryCheckpointsForAttempt(ctx, tx, attemptID)
 		}
 		w.State = "blocked"
 		w.NextAction = "inspect_retained_stage"
@@ -342,7 +342,7 @@ func (s *Store) SettleWorkflowStep(ctx context.Context, attemptID string, f doma
 			return e
 		}
 		out = w
-		return nil
+		return s.refreshRecoveryCheckpointsForAttempt(ctx, tx, attemptID)
 	})
 	return out, err
 }

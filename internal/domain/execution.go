@@ -114,10 +114,11 @@ type TaskSummary struct {
 	NextAction      string    `json:"nextAction"`
 }
 type TaskDetail struct {
-	Task          Task                `json:"task"`
-	Version       TaskVersion         `json:"version"`
-	LatestAttempt *Attempt            `json:"latestAttempt"`
-	Acceptance    *ResponseAcceptance `json:"acceptance"`
+	Task          Task                 `json:"task"`
+	Version       TaskVersion          `json:"version"`
+	LatestAttempt *Attempt             `json:"latestAttempt"`
+	Acceptance    *ResponseAcceptance  `json:"acceptance"`
+	Checkpoints   []RecoveryCheckpoint `json:"checkpoints,omitempty"`
 }
 type TaskVersionDetail struct {
 	TaskID       string      `json:"taskId"`

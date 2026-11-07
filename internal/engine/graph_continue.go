@@ -28,6 +28,10 @@ func (e *Engine) continueGraphAdmissions(sourceAttemptID string) {
 			return
 		}
 	}
+	// A scoped resume has its own node authority; its exact input completion
+	// must not depend on or replace the shared sibling registration.
+	e.continueRecoveryGraphAdmission(ctx, source.ID)
+	e.continueRecoveryGraphReleases(ctx, source.ID)
 	cursor := ""
 	for ctx.Err() == nil {
 		page, err := e.db.LiveGraphRegistrations(ctx, e.config.OwnerInstanceID, 32, cursor)

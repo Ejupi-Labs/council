@@ -17,6 +17,10 @@ import (
 func decodeChunk(s string) ([]byte, error) { return base64.StdEncoding.Strict().DecodeString(s) }
 
 func (e *Engine) Meta(ctx context.Context) (map[string]any, error) {
+	if !e.beginOwnerOperation() {
+		return nil, ownerClosing()
+	}
+	defer e.endOwnerOperation()
 	g, err := e.db.Gate(ctx)
 	if err != nil {
 		return nil, err
@@ -39,7 +43,7 @@ func (e *Engine) Meta(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs"}, "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": managedCapacity(claims)}, nil
+	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs", "safe_recovery"}, "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "recoveryContract": "007-v1", "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": managedCapacity(claims)}, nil
 }
 
 func managedCapacity(claims []domain.GraphClaimView) map[string]any {
@@ -68,6 +72,10 @@ func capabilities() map[string]any {
 }
 
 func (e *Engine) Read(ctx context.Context, op, id string, q map[string]string) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(domain.NewID(), ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	if strings.HasPrefix(op, "graphs.") {
 		return e.readGraph(ctx, op, id, q)
 	}
@@ -117,6 +125,10 @@ func (e *Engine) Read(ctx context.Context, op, id string, q map[string]string) d
 	switch op {
 	case "execution.capabilities":
 		data = capabilities()
+	case "checkpoints.get":
+		data, err = e.db.Checkpoint(ctx, id)
+	case "incidents.get":
+		data, err = e.db.RecoveryIncident(ctx, id)
 	case "tasks.list":
 		if q["projectId"] != "" && !domain.ValidID(q["projectId"]) {
 			return fail(domain.Invalid("project identity"))
@@ -125,6 +137,9 @@ func (e *Engine) Read(ctx context.Context, op, id string, q map[string]string) d
 	case "tasks.get":
 		detail, readErr := e.db.Task(ctx, id)
 		err = readErr
+		if err == nil {
+			detail.Checkpoints, err = e.db.ActiveRecoveryCheckpoints(ctx, id, "")
+		}
 		if err == nil && detail.LatestAttempt != nil {
 			enriched, enrichErr := e.inspectAttempt(ctx, *detail.LatestAttempt)
 			err = enrichErr

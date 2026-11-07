@@ -49,9 +49,17 @@ func (e *Engine) graphWorkflowStageFacts(ctx context.Context, progress workflowP
 	if err != nil {
 		return nil, err
 	}
-	if d.GraphID != member.GraphID || d.NodeID != *member.NodeID || d.TaskID != w.TaskID || d.TaskVersion != w.TaskVersion || d.WorkflowID != w.ID || d.StepID != step.ID || d.AttemptID != a.ID ||
-		view.Graph.Stop != nil || view.DispatchAuthority == nil || !resuming && view.DispatchAuthority.OwnerInstanceID != e.config.OwnerInstanceID {
+	if d.GraphID != member.GraphID || d.NodeID != *member.NodeID || d.TaskID != w.TaskID || d.TaskVersion != w.TaskVersion || d.WorkflowID != w.ID || d.StepID != step.ID || d.AttemptID != a.ID || view.Graph.Stop != nil || view.DispatchAuthority == nil {
 		return nil, domain.Fail("graph_input_stale", "The selected graph workflow no longer has live current-owner execution intent.")
+	}
+	if !resuming && view.DispatchAuthority.OwnerInstanceID != e.config.OwnerInstanceID {
+		scoped, scopeErr := e.db.RecoveryScopedPredecessor(ctx, e.config.OwnerInstanceID, a.ID)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
+		if !scoped {
+			return nil, domain.Fail("graph_input_stale", "The selected graph workflow has no current scoped owner authority.")
+		}
 	}
 	var node *domain.GraphNodeSummary
 	for i := range view.Nodes {

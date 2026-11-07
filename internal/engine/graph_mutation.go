@@ -13,6 +13,10 @@ import (
 // are constructed by the current owner and can never arrive in this body.
 func (e *Engine) MutateGraph(ctx context.Context, op, target string, body []byte) domain.Result {
 	requestID := domain.MutationIdentity(body)
+	if !e.beginOwnerOperation() {
+		return e.failure(requestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	var input any
 	switch op {
 	case "graphs.start":

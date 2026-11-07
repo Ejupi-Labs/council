@@ -7,6 +7,7 @@ import { checkGraphTask, rememberGraphTask } from './graph-membership.js';
 import type { Draft, Meta, Page, Policy } from './types.js';
 import type { Admission, Artifact, ArtifactChunk, Attempt, AttemptEvent, ExecutionCapabilities, ExecutionPins, TaskDetail, TaskSummary } from './execution-types.js';
 import { appendConnectionFacts, factLabel, harnessName, renderNativeModels, usageLabel } from './native-observations.js';
+import { RecoveryView } from './recovery.js';
 
 interface PendingStart { intent: ExecutionIntent; body: Record<string, unknown>; unresolved?: boolean }
 interface PendingMutation { taskId?: string; path: string; method: string; body: Record<string, unknown>; unresolved?: boolean; guidanceSnapshot?: Record<string, string | boolean> }
@@ -33,6 +34,7 @@ export class TasksView {
   private projectId: string | null = null;
   private policy: Policy | null = null;
   private available = false;
+  private recoveryAvailable = false;
   private admission = 'open';
   private capabilities: ExecutionCapabilities | null = null;
   private busy = false;
@@ -63,8 +65,12 @@ export class TasksView {
   private guidanceEdited = false;
   private guidanceEditors = readSession<Record<string, string>>('taskGuidanceEditors') ?? {};
   private guidanceHarnessEditors = readSession<Record<string, string>>('taskGuidanceHarnessEditors') ?? {};
+  private readonly recovery: RecoveryView;
+  private readonly globalRecovery: RecoveryView;
 
   constructor(private readonly drafts: DraftsView, private readonly routing?: RoutingView, private readonly workflow?: WorkflowView) {
+    this.recovery = new RecoveryView(element('task-detail'), 'task', () => { if (this.selectedTaskId) void this.openTask(this.selectedTaskId, true); });
+    this.globalRecovery = new RecoveryView(element('execution-status').parentElement!, 'global', () => {});
     const responseArea = element('response-area');
     const readButtonRow = element('read-response').parentElement!;
     for (const node of [readButtonRow, element('artifact-status'), element('artifact-output'), element('response-acceptance')]) responseArea.append(node);
@@ -116,16 +122,18 @@ export class TasksView {
   setOwner(meta: Meta): void {
     this.admission = meta.admission?.state ?? 'open';
     this.available = supportsManagedExecution(meta);
-    if (meta.admission && meta.admission.state !== 'open') feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
+    this.recoveryAvailable = this.available && meta.recoveryContract === '007-v1';
+    this.globalRecovery.setGlobalIncident(meta.admission?.incidentId ?? null, this.recoveryAvailable);
+    if (meta.admission && meta.admission.state !== 'open') feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Inspect the incident before reconciliation.' : ''), 'error');
     if (!this.available) feedback('execution-status', 'This owner does not advertise the required 006-v1 execution contracts. Reopen with a compatible Council owner.', 'error');
-    this.controls(); if (this.available && this.projectId) void this.refreshTasks();
+    this.recovery.setTask(this.detail, this.recoveryAvailable); this.controls(); if (this.available && this.projectId) void this.refreshTasks();
   }
-  disconnect(): void { this.available = false; this.attemptGeneration++; this.detailGeneration++; this.listGeneration++; this.controls(); }
+  disconnect(): void { this.available = false; this.recoveryAvailable = false; this.attemptGeneration++; this.detailGeneration++; this.listGeneration++; this.recovery.setTask(this.detail, false); this.globalRecovery.setGlobalIncident(null, false); this.controls(); }
   setPolicy(policy: Policy): void { this.policy = policy; this.controls(); }
   setProject(id: string): void {
     if (id === this.projectId) return;
     this.projectId = id; this.projectGeneration++; this.detailGeneration++; this.attemptGeneration++; this.clearArtifact();
-    this.selectedTaskId = null; this.detail = null; this.attempt = null; this.tasks = []; this.taskCursor = null; this.routing?.clearTask(); this.workflow?.clearTask(); this.explicitAttempt = null;
+    this.selectedTaskId = null; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); this.attempt = null; this.tasks = []; this.taskCursor = null; this.routing?.clearTask(); this.workflow?.clearTask(); this.explicitAttempt = null;
     element('task-detail').hidden = true; element('execution-link').hidden = true; element('task-list').replaceChildren(); this.controls();
     if (this.available) void this.refreshTasks();
   }
@@ -264,7 +272,7 @@ export class TasksView {
     const changed = id !== this.selectedTaskId;
     if (!keepAttempt || changed) this.explicitAttempt = null;
     const selection = this.attemptSelection;
-    if (changed) { this.routing?.clearTask(); this.workflow?.clearTask(); this.selectedTaskId = id; this.attemptGeneration++; this.clearArtifact(); this.guidanceEdited = false; this.detail = null; this.attempt = null; this.attempts = []; element('attempt-list').replaceChildren(); element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
+    if (changed) { this.routing?.clearTask(); this.workflow?.clearTask(); this.selectedTaskId = id; this.attemptGeneration++; this.clearArtifact(); this.guidanceEdited = false; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); this.attempt = null; this.attempts = []; element('attempt-list').replaceChildren(); element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
     try {
       const { data } = await api<TaskDetail>('/tasks/' + id);
       if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId) return;
@@ -289,6 +297,7 @@ export class TasksView {
   }
 
   private renderTaskFacts(data: TaskDetail): void {
+    this.recovery.setTask(data, this.recoveryAvailable);
     element('task-detail-heading').textContent = 'Task ' + data.task.id.slice(0, 8) + ' · version ' + data.task.currentVersion;
     const facts = element('task-facts'); facts.replaceChildren();
     addFact(facts, 'Task identity', data.task.id); addFact(facts, 'Captured requested preference', policyName(data.version.requestedPolicy.mode) + ' · revision ' + data.version.requestedPolicy.revision);
@@ -339,6 +348,7 @@ export class TasksView {
   }
 
   private renderAttempt(): void {
+    this.recovery.setIncident(this.attempt?.incident?.id ?? this.attempt?.cleanup.incidentId ?? null);
     const a = this.attempt; if (!a) return; const usage = a.targetObservations.usage;
     const local = !!a.executorKind && a.executorKind !== 'native';
     const reportedUsage = local ? 'Not applicable to managed native-model counters · local executor' : usageLabel(usage);
@@ -380,7 +390,7 @@ export class TasksView {
       addFact(facts, 'Candidate changes at creation', a.candidate.hasDelta ? 'Authored changes retained.' + (a.candidate.hasIndexDelta ? ' Staged index changes are included.' : '') : 'No authored source or staging changes.');
       addFact(facts, 'Candidate status at creation', 'Verification ' + a.candidate.verification.replaceAll('_', ' ') + ' · integration ' + a.candidate.integration.replaceAll('_', ' ') + '. Immutable creation facts.' + (a.workflowId ? ' Current task qualification and delivery are shown in Verified workflow above.' : ' Later qualification and delivery require separate evidence.'));
     }
-    if (a.incident) addFact(facts, 'Retained incident', a.incident.code + ': ' + a.incident.message + ' Preserve this workspace and evidence. Inspect the incident before an explicit recovery; this preview does not repair uncertain ownership or replay work.');
+    if (a.incident) addFact(facts, 'Retained incident', a.incident.code + ': ' + a.incident.message + ' Preserve this workspace and evidence. Inspect the incident before reconciliation; uncertain ownership does not authorize replay.');
     const permissions = a.targetObservations.permissions;
     addFact(facts, 'Permissions', 'Requested ' + permissions.requestedMode + ' · configured ' + (permissions.configuredMode ?? 'unknown') + ' · native reported ' + (permissions.nativeReportedMode ?? 'unknown'));
     if (permissions.limitations.length) addFact(facts, 'Permission scope', permissions.limitations.join(' '));

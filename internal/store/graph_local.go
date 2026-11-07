@@ -89,10 +89,17 @@ func (s *Store) graphLocalControls(ctx context.Context, q queryer, ownerID strin
 		return e
 	}
 	c := op.Control
+	scoped := false
+	if c.NodeID != nil {
+		scoped, e = s.recoveryGraphScopedTrigger(ctx, q, h, ownerID, op.InputRecord.Trigger, *c.NodeID)
+		if e != nil {
+			return e
+		}
+	}
 	// A claimed operation owns its persisted exact scope. Later registrations
 	// govern new admissions; their generation/suspension does not revoke this
 	// independent I/O. Current controls, owner/claim, clock and inputs still do.
-	if h.Summary.Stop != nil || h.Summary.State == "cancelled" || h.Summary.State == "cancelling" || h.Summary.State == "completed" || h.Summary.GraphVersion != c.GraphVersion || h.Summary.ControlRevision != c.GraphControlRevision || h.Summary.BudgetAuthorityEpoch != c.BudgetAuthorityEpoch || h.DispatchAuthority == nil || h.DispatchAuthority.OwnerInstanceID != ownerID {
+	if h.Summary.Stop != nil || h.Summary.State == "cancelled" || h.Summary.State == "cancelling" || h.Summary.State == "completed" || h.Summary.GraphVersion != c.GraphVersion || h.Summary.ControlRevision != c.GraphControlRevision || h.Summary.BudgetAuthorityEpoch != c.BudgetAuthorityEpoch || h.DispatchAuthority == nil || !scoped && h.DispatchAuthority.OwnerInstanceID != ownerID {
 		return domain.Fail("graph_control_conflict", "Current graph authority no longer permits this local operation.")
 	}
 	b, e := s.rawTaskBudget(ctx, q, op.RootTaskID)
@@ -499,6 +506,9 @@ func (s *Store) completeGraphInput(ctx context.Context, ownerID, attemptID strin
 				h.DispatchAuthority.State = "suspended"
 			}
 		}
-		return saveGraphHeader(ctx, tx, h)
+		if e = saveGraphHeader(ctx, tx, h); e != nil {
+			return e
+		}
+		return s.refreshRecoveryCheckpointsForAttempt(ctx, tx, attemptID)
 	})
 }

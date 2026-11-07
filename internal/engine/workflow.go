@@ -9,6 +9,10 @@ import (
 
 func (e *Engine) MutateWorkflow(ctx context.Context, op, id string, body []byte) domain.Result {
 	requestID := domain.MutationIdentity(body)
+	if !e.beginOwnerOperation() {
+		return e.failure(requestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	var input any
 	switch op {
 	case "workflow.preferences.update":

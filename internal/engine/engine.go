@@ -37,6 +37,14 @@ func New(db *store.Store, lock *localstate.Lock, config Config) (*Engine, error)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{db: db, lock: lock, config: config, evidence: artifacts, workspace: workspaces, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), shutdown: make(chan struct{}), watchEnd: make(chan struct{}), activeWorkers: make(map[string]context.CancelFunc)}
+	// The owner epoch becomes durably dirty before recovery returns or any
+	// listener, scheduler or worker can admit work.
+	if err = db.BeginOwnerEpoch(ctx, config.OwnerInstanceID); err != nil {
+		cancel()
+		artifacts.Close()
+		workspaces.Close()
+		return nil, err
+	}
 	if err = db.RecoverOwner(ctx, config.OwnerInstanceID); err != nil {
 		cancel()
 		artifacts.Close()
@@ -58,7 +66,48 @@ func (e *Engine) failure(id string, err error) domain.Result {
 	return domain.Failure(id, domain.SafeError(err))
 }
 
+// beginOwnerOperation admits work atomically with the closing boundary.
+func (e *Engine) beginOwnerOperation() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.lifecycleClosing {
+		return false
+	}
+	e.lifecycleActive++
+	return true
+}
+
+func (e *Engine) endOwnerOperation() {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	e.lifecycleActive--
+	if e.lifecycleClosing && e.lifecycleActive == 0 {
+		close(e.lifecycleDrained)
+	}
+}
+
+func (e *Engine) closeOwnerAdmission() <-chan struct{} {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if !e.lifecycleClosing {
+		e.lifecycleClosing = true
+		e.lifecycleDrained = make(chan struct{})
+		if e.lifecycleActive == 0 {
+			close(e.lifecycleDrained)
+		}
+	}
+	return e.lifecycleDrained
+}
+
+func ownerClosing() error {
+	return domain.Fail("owner_closing", "This owner is closing. Reconnect to the current owner before retrying.")
+}
+
 func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(in.RequestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	if err := domain.ValidateStartTask(in); err != nil {
 		return e.failure(in.RequestID, err)
 	}
@@ -91,6 +140,10 @@ func (e *Engine) StartTask(ctx context.Context, in domain.StartTaskInput) domain
 	return result
 }
 func (e *Engine) Guidance(ctx context.Context, id string, in domain.GuidanceInput) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(in.RequestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	if !domain.ValidID(id) {
 		return e.failure(in.RequestID, domain.Invalid("task identity"))
 	}
@@ -134,6 +187,10 @@ func (e *Engine) Guidance(ctx context.Context, id string, in domain.GuidanceInpu
 	return result
 }
 func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAttemptInput) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(in.RequestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	if !domain.ValidID(id) {
 		return e.failure(in.RequestID, domain.Invalid("task identity"))
 	}
@@ -186,6 +243,10 @@ func (e *Engine) StartAttempt(ctx context.Context, id string, in domain.StartAtt
 	return result
 }
 func (e *Engine) Stop(ctx context.Context, id, requestID string) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(requestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	e.control.Lock()
 	result := e.db.StopAttempt(ctx, id, requestID)
 	e.guardMutationLocked(result)
@@ -202,6 +263,14 @@ func (e *Engine) Stop(ctx context.Context, id, requestID string) domain.Result {
 	return result
 }
 func (e *Engine) Shutdown(ctx context.Context, ownerID, requestID string) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(requestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
+	return e.shutdownOwner(ctx, ownerID, requestID)
+}
+
+func (e *Engine) shutdownOwner(ctx context.Context, ownerID, requestID string) domain.Result {
 	if prior, err := e.db.Replay(ctx, requestID, "service.stop", store.ShutdownFingerprint(ownerID, requestID)); err != nil {
 		return e.failure(requestID, err)
 	} else if prior != nil {
@@ -225,16 +294,65 @@ func (e *Engine) Shutdown(ctx context.Context, ownerID, requestID string) domain
 
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
-		_ = e.Shutdown(context.Background(), e.config.OwnerInstanceID, domain.NewID())
+		drained := e.closeOwnerAdmission()
 		e.cancel()
+		// A timed out owner call may still touch evidence or record a fence.
+		// Leave both the handles and owner epoch untouched in that case.
+		timer := time.NewTimer(20 * time.Second)
+		select {
+		case <-drained:
+			timer.Stop()
+		case <-timer.C:
+			e.closeErr = errors.New("Owner operations did not drain; retain the dirty owner epoch and open handles.")
+			return
+		}
+		shutdown := e.shutdownOwner(context.Background(), e.config.OwnerInstanceID, domain.NewID())
 		<-e.done
 		e.workers.Wait()
+		var watchErr error
 		if e.watchEnd != nil {
+			// Closing under control prevents new watchdog registrations after
+			// the drain boundary. A still-running watchdog can create a fence.
+			e.control.Lock()
 			close(e.watchEnd)
+			e.control.Unlock()
+			watchErr = e.drainStopWatches()
 		}
-		e.closeErr = errors.Join(e.workspace.Close(), e.evidence.Close())
+		e.closeErr = errors.Join(watchErr, e.workspace.Close(), e.evidence.Close())
+		// A failed shutdown or in-memory unrecorded fence leaves the epoch
+		// dirty. Do not release the control lock while checking and committing
+		// the clean marker: no concurrent cause may cross this boundary.
+		e.control.Lock()
+		if e.closeErr == nil && shutdown.Envelope.Error == nil && !e.fenceUncertain {
+			_, err := e.db.CompleteOwnerEpoch(context.Background(), e.config.OwnerInstanceID)
+			e.closeErr = errors.Join(e.closeErr, err)
+		}
+		e.control.Unlock()
 	})
 	return e.closeErr
+}
+
+// drainStopWatches waits for every already-registered watchdog to observe
+// shutdown and finish its possible fence mutation. Timeout leaves the owner
+// epoch dirty; it is not proof that the watchdog or its effects stopped.
+func (e *Engine) drainStopWatches() error {
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		e.control.Lock()
+		pending := len(e.stopWatches)
+		e.control.Unlock()
+		if pending == 0 {
+			return nil
+		}
+		select {
+		case <-deadline.C:
+			return errors.New("Owned watchdog shutdown did not complete; retain the dirty owner epoch.")
+		case <-tick.C:
+		}
+	}
 }
 
 func (e *Engine) fence(id, code, message string) {
@@ -253,15 +371,17 @@ func (e *Engine) guardMutationLocked(result domain.Result) {
 
 // fenceLocked is also used at protocol write boundaries already ordered by control.
 func (e *Engine) fenceLocked(id, code, message string) {
-	if e.fenced {
-		return
-	}
+	// Every cause receives its own durable incident even when an earlier
+	// cause already holds the shared fence. A failed write cannot be treated
+	// as an observation of the previous incident.
 	e.fenced = true
 	var attempt *string
 	if id != "" {
 		attempt = &id
 	}
-	_ = e.db.Fence(context.Background(), domain.ExecutionIncident{ID: domain.NewID(), AttemptID: attempt, Code: code, Message: message, CreatedAt: domain.Now()})
+	if err := e.db.Fence(context.Background(), domain.ExecutionIncident{ID: domain.NewID(), AttemptID: attempt, Code: code, Message: message, CreatedAt: domain.Now()}); err != nil {
+		e.fenceUncertain = true
+	}
 	e.cancelWorkersLocked()
 }
 
@@ -297,6 +417,17 @@ func (e *Engine) schedule() {
 		case <-tick.C:
 		case <-e.wake:
 		}
+		// A previously known fence may have become safe after its last retained
+		// claim settled. Never infer safety when an in-memory cause was not
+		// durably recorded.
+		e.control.Lock()
+		if e.fenced && !e.fenceUncertain {
+			gate, gateErr := e.db.Gate(e.ctx)
+			if gateErr == nil && gate.State == "open" {
+				e.fenced = false
+			}
+		}
+		e.control.Unlock()
 		if _, err := e.db.SweepQueued(e.ctx, e.config.OwnerInstanceID); err != nil {
 			if e.ctx.Err() != nil && !persistenceFault(err) {
 				continue

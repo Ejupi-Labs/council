@@ -36,6 +36,8 @@ func graphRoute(p, verb string) (op, id, methods string, queries []string) {
 			return "graphs.advance", id, "POST", nil
 		case "stop":
 			return "graphs.stop", id, "POST", nil
+		case "pause":
+			return "graphs.pause", id, "POST", nil
 		case "budget":
 			return "graphs.budget.get", id, "GET", nil
 		case "budget-ledger":

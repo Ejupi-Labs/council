@@ -119,7 +119,7 @@ func (s *Store) graphWorkflowStageScope(ctx context.Context, tx *sql.Tx, ownerID
 		if h.DispatchAuthority == nil {
 			return nil, graphControlError()
 		}
-		if e = s.graphFreshTrigger(ctx, tx, h, ownerID, gf.Trigger); e != nil {
+		if e = s.graphFreshTrigger(ctx, tx, h, ownerID, gf.Trigger, n.ID); e != nil {
 			return nil, e
 		}
 	default:

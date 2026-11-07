@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/fixture"
@@ -123,14 +124,15 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			t.Cleanup(func() { _ = db.Close(); _ = lock.Close() })
 			// This is an owned synthetic downgrade from current APIs, not a frozen
 			// schema5 fixture. Never discard graph authority or a held claim.
+			recoveryTables := []string{"recovery_decisions", "recovery_observations", "recovery_graph_scopes", "recovery_checkpoints"}
 			graphTables := []string{"graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"}
 			assertEmptyCurrentGraphState := func(current *sql.DB) {
 				t.Helper()
 				var currentSchema int
-				if err := current.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 6 {
-					t.Fatal("controlled current fixture must have schema6", currentSchema, err)
+				if err := current.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 7 {
+					t.Fatal("controlled current fixture must have schema7", currentSchema, err)
 				}
-				for _, table := range append(append([]string{}, graphTables...), "capacity_claims") {
+				for _, table := range append(append(append([]string{}, recoveryTables...), graphTables...), "capacity_claims") {
 					var count int
 					if err := current.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 						t.Fatal("controlled downgrade/upgrade must not discard or invent graph authority or claims", table, count, err)
@@ -138,6 +140,10 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 				}
 			}
 			assertEmptyCurrentGraphState(db)
+			var initialEpoch string
+			if err := db.QueryRow("SELECT state FROM recovery_owner_epoch WHERE singleton=1").Scan(&initialEpoch); err != nil || initialEpoch != "clean" {
+				t.Fatal("controlled downgrade requires a clean owner epoch", initialEpoch, err)
+			}
 			wantAttempts := 0
 			if version == 2 {
 				wantAttempts = 1
@@ -159,7 +165,11 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			// Foreign keys remain ON. Retained history/receipt bytes are untouched;
 			// real frozen schema5 migration is independently covered by Store tests.
 			// Its graph/account/context foreign keys must not outlive those parents.
-			statements := []string{"DROP TABLE capacity_claims"}
+			statements := []string{"DROP TABLE recovery_owner_epoch_events", "DROP TABLE recovery_owner_epoch"}
+			for _, table := range recoveryTables {
+				statements = append(statements, "DROP TABLE "+table)
+			}
+			statements = append(statements, "DROP TABLE capacity_claims")
 			for _, table := range graphTables {
 				statements = append(statements, "DROP TABLE "+table)
 			}
@@ -219,6 +229,25 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			if !reflect.DeepEqual(retained, draft) {
 				t.Fatal("shared-service upgrade changed saved draft", retained, draft)
 			}
+			// Draft access migrated the old store without starting an owner. The
+			// historic schema cannot establish a clean owner-epoch handoff.
+			upgraded, err := sql.Open("sqlite", lock.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = upgraded.Close() })
+			assertEmptyCurrentGraphState(upgraded)
+			var migratedEpoch string
+			if err = upgraded.QueryRow("SELECT state FROM recovery_owner_epoch WHERE singleton=1").Scan(&migratedEpoch); err != nil || migratedEpoch != "untracked" {
+				t.Fatal("historical owner handoff must remain untracked", migratedEpoch, err)
+			}
+			var upgradedAttempts int
+			if err = upgraded.QueryRow("SELECT count(*) FROM attempts").Scan(&upgradedAttempts); err != nil || upgradedAttempts != priorAttempts {
+				t.Fatal("CLI upgrade created historical work", upgradedAttempts, priorAttempts, err)
+			}
+			if err = upgraded.Close(); err != nil {
+				t.Fatal(err)
+			}
 			if version == 2 {
 				if replay := f.run(args...); !reflect.DeepEqual(replay, first) {
 					t.Fatal("schema upgrade changed original receipt")
@@ -237,25 +266,28 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 					t.Fatal("upgraded old evidence changed", err)
 				}
 			}
-			// The CLI has now reopened and migrated the owned historical state.
-			// Before any explicit new work, no graph authority/claim/attempt appeared.
-			upgraded, err := sql.Open("sqlite", lock.DatabasePath())
+			// Starting the real owner must preserve the unknown handoff as a
+			// durable fence. A new task cannot turn old history into new work.
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			refused := concurrentCLICommand(ctx, f, 0, "tasks", "start", "--project", opened.Project.ID, "--task", "Explicit new Claude task after upgrade", "--harness", "claude-code", "--fake", "--request-id", domain.NewID())
+			var envelope domain.Envelope
+			if err = json.Unmarshal(refused.stdout, &envelope, json.RejectUnknownMembers(true)); err != nil || envelope.Error == nil || envelope.Error.Code != "dispatch_fenced" {
+				t.Fatal("unproven legacy owner handoff did not refuse new work", string(refused.stdout), string(refused.stderr), refused.err, err)
+			}
+			current, err := sql.Open("sqlite", lock.DatabasePath())
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = upgraded.Close() })
-			assertEmptyCurrentGraphState(upgraded)
-			var upgradedAttempts int
-			if err = upgraded.QueryRow("SELECT count(*) FROM attempts").Scan(&upgradedAttempts); err != nil || upgradedAttempts != priorAttempts {
-				t.Fatal("CLI upgrade/replay created historical work", upgradedAttempts, priorAttempts, err)
+			defer current.Close()
+			assertEmptyCurrentGraphState(current)
+			var ownerEpoch, gateState, incidentCode string
+			err = current.QueryRow("SELECT e.state,c.state,json_extract(i.data,'$.code') FROM recovery_owner_epoch e JOIN execution_control c ON c.singleton=1 JOIN execution_incidents i ON i.id=c.incident_id WHERE e.singleton=1").Scan(&ownerEpoch, &gateState, &incidentCode)
+			if err != nil || ownerEpoch != "dirty" || gateState != "fenced" || incidentCode != "owner_epoch_uncertain" {
+				t.Fatal("legacy owner uncertainty was not retained visibly", ownerEpoch, gateState, incidentCode, err)
 			}
-			if err = upgraded.Close(); err != nil {
-				t.Fatal(err)
-			}
-			var claude domain.Admission
-			decodeCLIData(t, f.run("tasks", "start", "--project", opened.Project.ID, "--task", "Explicit new Claude task after upgrade", "--harness", "claude-code", "--fake"), &claude)
-			if done := f.settled(claude.Attempt.ID); done.Outcome == nil || *done.Outcome != "succeeded" || done.ConnectionID != "claude-native" {
-				t.Fatal("explicit new target failed after upgrade", done)
+			if err = current.QueryRow("SELECT count(*) FROM attempts").Scan(&upgradedAttempts); err != nil || upgradedAttempts != priorAttempts {
+				t.Fatal("upgrade, receipt replay, or refused work created a new attempt", upgradedAttempts, priorAttempts, err)
 			}
 		})
 	}

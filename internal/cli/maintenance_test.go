@@ -20,6 +20,7 @@ func metadataFixture(ownerID string, old bool) map[string]any {
 		delete(m, "maintenanceContract")
 		delete(m, "workflowContract")
 		delete(m, "graphContract")
+		delete(m, "recoveryContract")
 		m["capabilities"] = []string{"workspace_foundation", "managed_execution"}
 		m["capacity"] = map[string]any{"connectionId": "codex-native", "limit": 1, "activeAttemptId": nil}
 	}

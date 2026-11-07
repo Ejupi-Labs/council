@@ -3,6 +3,9 @@ package httpapi
 import "strings"
 
 func executionRoute(p, verb string) (op, id, methods string, queries []string) {
+	if recoveryOp, recoveryID, recoveryMethods, recoveryQueries := recoveryRoute(p); recoveryOp != "" {
+		return recoveryOp, recoveryID, recoveryMethods, recoveryQueries
+	}
 	if graphOp, graphID, graphMethods, graphQueries := graphRoute(p, verb); graphOp != "" {
 		return graphOp, graphID, graphMethods, graphQueries
 	}

@@ -6,17 +6,17 @@
 
 ## Phase 1: Setup and foundation
 
-- [ ] T001 Verify feature context, requirements checklist, `.gitignore`, `go.mod`, `package.json` and branch `refactor`; preserve private state and user edits.
-- [ ] T002 Define typed checkpoint, pause-scope, proof and reconciliation records and strict validation in `internal/domain/recovery.go`.
-- [ ] T003 Add transactional schema-v7 migration, schema initializer and exact validation in `internal/store/store.go`, `internal/store/schema.go`, `internal/store/graph_migration.go` and `internal/store/recovery_migration.go`; retain accepted v1–v6 migrations.
-- [ ] T004 Test new and old database migrations, validation and no partial migration on error in `internal/store/recovery_migration_test.go`.
+- [X] T001 Verify feature context, requirements checklist, `.gitignore`, `go.mod`, `package.json` and branch `refactor`; preserve private state and user edits.
+- [X] T002 Define typed checkpoint, pause-scope, proof and reconciliation records and strict validation in `internal/domain/recovery.go`.
+- [X] T003 Add transactional schema-v7 migration, schema initializer and exact validation in `internal/store/store.go`, `internal/store/schema.go`, `internal/store/graph_migration.go` and `internal/store/recovery_migration.go`; retain accepted v1–v6 migrations.
+- [X] T004 Test new and old database migrations, validation and no partial migration on error in `internal/store/recovery_migration_test.go`.
 
 ## Phase 2: User Story 1 — Pause and resume
 
 **Goal**: Establish a durable scoped admission boundary and explicitly resume unfinished eligible work after drain/restart without repeating completed work.
 **Independent test**: Race controlled admissions and completions against task, member and group pause, restart, and resume; assert zero new admissions while paused, unchanged completed identities and exact receipt replay.
 
-- [ ] T005 [US1] Add checkpoint and pause transaction contract tests, including member/group overlap, stale authority, lost acknowledgement and drain in `internal/store/recovery_pause_test.go`.
+- [X] T005 [US1] Add checkpoint and pause transaction contract tests, including member/group overlap, stale authority, lost acknowledgement and drain in `internal/store/recovery_pause_test.go`.
 - [ ] T006 [US1] Implement request-receipted task, member and group pause/checkpoint records with scope/owner/control validation in `internal/store/recovery_pause.go`.
 - [ ] T007 [US1] Enforce the persisted scope fence inside all task/workflow/graph admission and continuation transactions in `internal/store/tasks.go`, `internal/store/workflow_mutations.go`, `internal/store/workflow_stage_admission.go`, `internal/store/graph_admission.go`, `internal/store/graph_advance.go`, `internal/store/routing_continuation.go`, `internal/store/graph_local.go`, `internal/store/graph_create.go`, `internal/store/graph_resume.go`, `internal/store/workflow_delivery.go` and `internal/store/graph_delivery.go`; prevent new stage admissions and newly granted authority; permit already-admitted stages to settle under their original exact authority and Stop/failure controls, without authorizing subsequent stages or stale permissions.
 - [ ] T008 [US1] Maintain checkpoint drain and outcome projection from committed settlements and retained claims in `internal/store/recovery_checkpoint.go` and relevant settlement paths.

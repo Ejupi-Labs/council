@@ -31,11 +31,31 @@ func graphMetadataFixture(ownerID string, occupied int) map[string]any {
 		"ownerInstanceId": ownerID, "apiVersion": 1, "appVersion": "2.0.0-dev.6",
 		"scope": "managed_execution", "managedExecution": "native_codex_claude",
 		"executionContract": "006-v1", "workflowContract": "006-v1", "graphContract": "006-v1",
+		"recoveryContract":    "007-v1",
 		"maintenanceContract": "owner-stop/1",
-		"capabilities":        []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs"},
+		"capabilities":        []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs", "safe_recovery"},
 		"admission":           map[string]any{"state": "open", "incidentId": nil},
 		"capacity": map[string]any{"resourceId": "managed-native", "limit": 2, "activeAttemptId": sole,
 			"occupiedSlots": []string{"0", "1", "2"}[occupied], "activeClaims": claims},
+	}
+}
+
+func TestRecoveryMetadataRequiresContractAndCapabilityForExecution(t *testing.T) {
+	checkGraphMetadata(t, graphMetadataFixture(domain.NewID(), 1), true, true)
+	for _, change := range []string{"missing_contract", "future_contract", "missing_capability"} {
+		t.Run(change, func(t *testing.T) {
+			m := graphMetadataFixture(domain.NewID(), 0)
+			switch change {
+			case "missing_contract":
+				delete(m, "recoveryContract")
+			case "future_contract":
+				m["recoveryContract"] = "008-v1"
+			case "missing_capability":
+				m["capabilities"] = []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs"}
+			}
+			// These remain recognized for the independently versioned maintenance Stop.
+			checkGraphMetadata(t, m, false, true)
+		})
 	}
 }
 
@@ -204,6 +224,7 @@ func TestGraphMetadataPreservesKnownOldOwnerStopWithoutExecution(t *testing.T) {
 			m := graphMetadataFixture(domain.NewID(), 0)
 			m["appVersion"], m["executionContract"] = "2.0.0-dev."+version, "00"+version+"-v1"
 			delete(m, "graphContract")
+			delete(m, "recoveryContract")
 			m["capabilities"] = []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery"}
 			m["capacity"] = map[string]any{"resourceId": "managed-native", "limit": 1, "activeAttemptId": nil}
 			if version != "5" {

@@ -22,6 +22,7 @@ type ownerMetadata struct {
 	ExecutionContract   string   `json:"executionContract,omitempty"`
 	WorkflowContract    string   `json:"workflowContract,omitempty"`
 	GraphContract       string   `json:"graphContract,omitempty"`
+	RecoveryContract    string   `json:"recoveryContract,omitempty"`
 	graphCapacityValid  bool
 	MaintenanceContract string `json:"maintenanceContract,omitempty"`
 	Admission           *struct {
@@ -80,6 +81,12 @@ func readMetadata(ctx context.Context, desc localstate.Descriptor, maintenance b
 }
 
 func executionMetadata(m ownerMetadata) bool {
+	return currentGraphMetadata(m) && m.RecoveryContract == "007-v1" && hasCapability(m, "safe_recovery")
+}
+
+// A pre-recovery 006 owner still has a recognized, separately versioned Stop
+// contract. It must not receive new execution or recovery mutations.
+func currentGraphMetadata(m ownerMetadata) bool {
 	return managedMetadata(m) && m.AppVersion == domain.AppVersion && m.ManagedExecution == "native_codex_claude" && m.ExecutionContract == domain.ExecutionContract && m.WorkflowContract == domain.WorkflowContract && m.GraphContract == domain.GraphContract && m.MaintenanceContract == "owner-stop/1" && hasCapability(m, "economical_routing") && hasCapability(m, "verified_delivery") && hasCapability(m, "task_graphs") && m.graphCapacityValid
 }
 
@@ -185,7 +192,7 @@ func managedMetadata(m ownerMetadata) bool {
 }
 
 func maintenanceMetadata(m ownerMetadata) bool {
-	if executionMetadata(m) {
+	if currentGraphMetadata(m) {
 		return true
 	}
 	// Known previous owners expose the single-worker shape and are Stop-only.

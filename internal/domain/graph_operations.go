@@ -219,6 +219,7 @@ type GraphDetail struct {
 	ActiveClaims      []GraphClaimView            `json:"activeClaims"`
 	DispatchAuthority *GraphDispatchAuthorityView `json:"dispatchAuthority"`
 	Blockers          []GraphBlockerSummary       `json:"blockers"`
+	Checkpoints       []RecoveryCheckpoint        `json:"checkpoints,omitempty"`
 }
 
 type GraphRebindProvenance struct {

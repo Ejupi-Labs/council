@@ -32,26 +32,33 @@ type Engine struct {
 	// and native Start. No external operation runs inside a SQL transaction.
 	// prepareGate orders eligibility/version mutations against scope creation.
 	// Always acquire it before control. Stop and Shutdown use control alone.
-	prepareGate  sync.Mutex
-	control      sync.Mutex
-	db           *store.Store
-	lock         *localstate.Lock
-	config       Config
-	evidence     *evidence.Store
-	workspace    *workspace.Manager
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wake         chan struct{}
-	done         chan struct{}
-	shutdown     chan struct{}
-	shutdownOnce sync.Once
-	closeOnce    sync.Once
-	closeErr     error
-	watchEnd     chan struct{}
+	lifecycleMu      sync.Mutex
+	lifecycleClosing bool
+	lifecycleActive  int
+	lifecycleDrained chan struct{}
+	prepareGate      sync.Mutex
+	control          sync.Mutex
+	db               *store.Store
+	lock             *localstate.Lock
+	config           Config
+	evidence         *evidence.Store
+	workspace        *workspace.Manager
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wake             chan struct{}
+	done             chan struct{}
+	shutdown         chan struct{}
+	shutdownOnce     sync.Once
+	closeOnce        sync.Once
+	closeErr         error
+	watchEnd         chan struct{}
 	// activeWorkers retains each cancellation handle until that exact worker exits.
 	// All access is ordered by control; cancellation alone never releases ownership.
 	activeWorkers map[string]context.CancelFunc
 	workers       sync.WaitGroup
 	fenced        bool
-	stopWatches   map[string]struct{}
+	// A fence that could not be durably attributed must not be cleared merely
+	// because the stored gate later appears open.
+	fenceUncertain bool
+	stopWatches    map[string]struct{}
 }

@@ -33,7 +33,7 @@ func TestRoutingMigrationPreservesAcceptedSchema3WithoutGrantingAuthority(t *tes
 	s.db.QueryRow("SELECT count(*) FROM task_budgets").Scan(&budgets)
 	s.db.QueryRow("SELECT count(*) FROM task_routing_versions").Scan(&authorities)
 	s.db.QueryRow("SELECT attempt_id FROM capacity_claims").Scan(&claim)
-	if version != 6 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
+	if version != 7 || budgets != 0 || authorities != 0 || claim != claimBefore || claim != ids.ActiveAttemptID {
 		t.Fatal("migration granted work or released ownership", version, budgets, authorities, claim)
 	}
 	assertGraphLegacyClaim(t, s, claimBefore)

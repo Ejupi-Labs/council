@@ -83,37 +83,41 @@ func (s *Store) RecheckWorkflow(ctx context.Context, ownerID, taskID string, in 
 }
 func (s *Store) workflowExplicitStage(ctx context.Context, ownerID, taskID string, in domain.WorkflowAdvanceInput, f domain.WorkflowStepAdmissionFacts, op, fp string) domain.Result {
 	return s.mutate(ctx, in.RequestID, op, fp, func(tx *sql.Tx) (int, any, error) {
-		if e := s.requireStandaloneAuthority(ctx, tx, taskID, false); e != nil {
-			return 0, nil, e
-		}
-		t, e := s.task(ctx, tx, taskID)
-		if e != nil {
-			return 0, nil, e
-		}
-		if t.CurrentVersion != in.TaskVersion {
-			return 0, nil, domain.Fail("task_version_conflict", "Only the current task version can admit workflow work.")
-		}
-		selected, e := s.selectedWorkflow(ctx, tx, taskID, domain.WorkflowSelector{})
-		if e != nil {
-			return 0, nil, e
-		}
-		if selected.Workflow == nil {
-			return 0, nil, workflowUnavailable()
-		}
-		w := *selected.Workflow
-		if f.ExpectedTaskRevision != in.ExpectedRevision || f.ExpectedWorkflowRevision != in.WorkflowRevision {
-			return 0, nil, domain.Fail("workflow_revision_conflict", "The prepared stage no longer matches this explicit request.")
-		}
-		b, e := s.taskBudget(ctx, tx, taskID)
-		if e != nil {
-			return 0, nil, e
-		}
-		admitted, e := s.admitWorkflowStage(ctx, tx, ownerID, &t, &w, b, f, in.RequestID, "")
-		if e != nil {
-			return 0, nil, e
-		}
-		return 201, admitted, nil
+		return s.workflowExplicitStageTx(ctx, tx, ownerID, taskID, in, f)
 	})
+}
+
+func (s *Store) workflowExplicitStageTx(ctx context.Context, tx *sql.Tx, ownerID, taskID string, in domain.WorkflowAdvanceInput, f domain.WorkflowStepAdmissionFacts) (int, any, error) {
+	if e := s.requireStandaloneAuthority(ctx, tx, taskID, false); e != nil {
+		return 0, nil, e
+	}
+	t, e := s.task(ctx, tx, taskID)
+	if e != nil {
+		return 0, nil, e
+	}
+	if t.CurrentVersion != in.TaskVersion {
+		return 0, nil, domain.Fail("task_version_conflict", "Only the current task version can admit workflow work.")
+	}
+	selected, e := s.selectedWorkflow(ctx, tx, taskID, domain.WorkflowSelector{})
+	if e != nil {
+		return 0, nil, e
+	}
+	if selected.Workflow == nil {
+		return 0, nil, workflowUnavailable()
+	}
+	w := *selected.Workflow
+	if f.ExpectedTaskRevision != in.ExpectedRevision || f.ExpectedWorkflowRevision != in.WorkflowRevision {
+		return 0, nil, domain.Fail("workflow_revision_conflict", "The prepared stage no longer matches this explicit request.")
+	}
+	b, e := s.taskBudget(ctx, tx, taskID)
+	if e != nil {
+		return 0, nil, e
+	}
+	admitted, e := s.admitWorkflowStage(ctx, tx, ownerID, &t, &w, b, f, in.RequestID, "")
+	if e != nil {
+		return 0, nil, e
+	}
+	return 201, admitted, nil
 }
 
 // asDomain preserves typed store faults for the public pre-transaction replay/read

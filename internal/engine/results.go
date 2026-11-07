@@ -574,6 +574,16 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	cleanupCtx, cleanupCancel := context.WithDeadline(context.Background(), settlementDeadline)
 	clean := owned.Cleanup(cleanupCtx)
 	cleanupCancel()
+	if a.ExecutionMode == "fake" && a.FakeScenario == "cleanup_unknown" {
+		clean.Verified = false
+		clean.Detail = "Explicit local fixture injected unresolved cleanup; no escaped process is simulated as owned."
+	}
+	if clean.Verified && clean.Root != nil && clean.Root.Known && clean.StdoutDrained && clean.StderrDrained && !clean.StdoutError && !clean.StderrError {
+		if _, proofErr := e.db.RecordRecoveryCleanup(settlementCtx, e.config.OwnerInstanceID, a.ID, clean); proofErr != nil {
+			e.fence(a.ID, "cleanup_proof_unavailable", "Verified cleanup could not be recorded before the ownership handle closed.")
+			e.recordFailure(a.ID, primary("storage_failed", "The exact owned cleanup observation could not be retained durably."))
+		}
+	}
 	ownedCloseErr := owned.Close()
 	if graphNative && ownedCloseErr != nil {
 		graphEffectsKnown = false
@@ -601,10 +611,6 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 	}
 	if nativeStarted && !inputDelivered {
 		e.recordFailure(a.ID, primary("input_delivery_failed", "The native process did not receive the complete original prompt through its input pipe."))
-	}
-	if a.ExecutionMode == "fake" && a.FakeScenario == "cleanup_unknown" {
-		clean.Verified = false
-		clean.Detail = "Explicit local fixture injected unresolved cleanup; no escaped process is simulated as owned."
 	}
 	protocolErr := parser.Finish()
 	r := parser.Result()
@@ -753,6 +759,18 @@ func (e *Engine) run(parent context.Context, a domain.Attempt) {
 			}
 		}
 	}
+	// Only a controller-verified complete standalone author workspace may
+	// receive a recovery seal. Normal work does not need this extra journal.
+	if !graphNative && a.Role == "author" && workflowFacts.CandidateBinding != nil && settlement.EvidenceStatus == "complete" && clean.Verified {
+		e.control.Lock()
+		recoveryFenced := e.fenced
+		e.control.Unlock()
+		if recoveryFenced {
+			if sealErr := e.db.RecordRecoveryStandaloneSeal(settlementCtx, e.config.OwnerInstanceID, a.ID, *workflowFacts.CandidateBinding, workflowFacts.VerifiedArtifacts); sealErr != nil && persistenceFault(sealErr) {
+				e.fence(a.ID, "recovery_seal_uncertain", "Standalone recovery evidence could not be retained durably; preserve the claim.")
+			}
+		}
+	}
 	if graphNative && len(graphEffectRefs()) != 0 {
 		proofs, proofErr := e.verifyGraphClosureAnchors(settlementCtx, graphEffectRefs(), graphEffectRefs())
 		if proofErr != nil {
@@ -882,6 +900,10 @@ func (e *Engine) settleUnlaunchedEffects(a domain.Attempt, f *domain.PrimaryFail
 }
 
 func (e *Engine) AcceptResponse(ctx context.Context, id string, in domain.ResponseAcceptanceInput) domain.Result {
+	if !e.beginOwnerOperation() {
+		return e.failure(in.RequestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	if previous, err := e.db.Replay(ctx, in.RequestID, "tasks.response.accept", store.ResponseAcceptanceFingerprint(id, in)); err != nil {
 		return e.failure(in.RequestID, err)
 	} else if previous != nil {

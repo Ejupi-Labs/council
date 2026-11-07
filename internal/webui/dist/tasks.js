@@ -1,6 +1,7 @@
 import { addFact, api, ApiError, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, writeSession } from './api.js';
 import { checkGraphTask, rememberGraphTask } from './graph-membership.js';
 import { appendConnectionFacts, factLabel, harnessName, renderNativeModels, usageLabel } from './native-observations.js';
+import { RecoveryView } from './recovery.js';
 const input = (id) => element(id).value;
 const checked = (id) => element(id).checked;
 function composerHarnessName(id) { return id ? harnessName(id) : 'Auto · economical routing'; }
@@ -36,6 +37,7 @@ export class TasksView {
     projectId = null;
     policy = null;
     available = false;
+    recoveryAvailable = false;
     admission = 'open';
     capabilities = null;
     busy = false;
@@ -66,10 +68,15 @@ export class TasksView {
     guidanceEdited = false;
     guidanceEditors = readSession('taskGuidanceEditors') ?? {};
     guidanceHarnessEditors = readSession('taskGuidanceHarnessEditors') ?? {};
+    recovery;
+    globalRecovery;
     constructor(drafts, routing, workflow) {
         this.drafts = drafts;
         this.routing = routing;
         this.workflow = workflow;
+        this.recovery = new RecoveryView(element('task-detail'), 'task', () => { if (this.selectedTaskId)
+            void this.openTask(this.selectedTaskId, true); });
+        this.globalRecovery = new RecoveryView(element('execution-status').parentElement, 'global', () => { });
         const responseArea = element('response-area');
         const readButtonRow = element('read-response').parentElement;
         for (const node of [readButtonRow, element('artifact-status'), element('artifact-output'), element('response-acceptance')])
@@ -140,15 +147,18 @@ export class TasksView {
     setOwner(meta) {
         this.admission = meta.admission?.state ?? 'open';
         this.available = supportsManagedExecution(meta);
+        this.recoveryAvailable = this.available && meta.recoveryContract === '007-v1';
+        this.globalRecovery.setGlobalIncident(meta.admission?.incidentId ?? null, this.recoveryAvailable);
         if (meta.admission && meta.admission.state !== 'open')
-            feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Incident recovery is unavailable in this preview.' : ''), 'error');
+            feedback('execution-status', 'Dispatch is ' + meta.admission.state + (meta.admission.incidentId ? ' · incident ' + meta.admission.incidentId : '') + '. Inspect retained work; no automatic replay occurs.' + (meta.admission.incident ? ' ' + meta.admission.incident.code + ': ' + meta.admission.incident.message + ' Preserve the workspace and evidence. Inspect the incident before reconciliation.' : ''), 'error');
         if (!this.available)
             feedback('execution-status', 'This owner does not advertise the required 006-v1 execution contracts. Reopen with a compatible Council owner.', 'error');
+        this.recovery.setTask(this.detail, this.recoveryAvailable);
         this.controls();
         if (this.available && this.projectId)
             void this.refreshTasks();
     }
-    disconnect() { this.available = false; this.attemptGeneration++; this.detailGeneration++; this.listGeneration++; this.controls(); }
+    disconnect() { this.available = false; this.recoveryAvailable = false; this.attemptGeneration++; this.detailGeneration++; this.listGeneration++; this.recovery.setTask(this.detail, false); this.globalRecovery.setGlobalIncident(null, false); this.controls(); }
     setPolicy(policy) { this.policy = policy; this.controls(); }
     setProject(id) {
         if (id === this.projectId)
@@ -160,6 +170,7 @@ export class TasksView {
         this.clearArtifact();
         this.selectedTaskId = null;
         this.detail = null;
+        this.recovery.setTask(null, this.recoveryAvailable);
         this.attempt = null;
         this.tasks = [];
         this.taskCursor = null;
@@ -377,6 +388,7 @@ export class TasksView {
             this.clearArtifact();
             this.guidanceEdited = false;
             this.detail = null;
+            this.recovery.setTask(null, this.recoveryAvailable);
             this.attempt = null;
             this.attempts = [];
             element('attempt-list').replaceChildren();
@@ -428,6 +440,7 @@ export class TasksView {
         }
     }
     renderTaskFacts(data) {
+        this.recovery.setTask(data, this.recoveryAvailable);
         element('task-detail-heading').textContent = 'Task ' + data.task.id.slice(0, 8) + ' · version ' + data.task.currentVersion;
         const facts = element('task-facts');
         facts.replaceChildren();
@@ -520,6 +533,7 @@ export class TasksView {
             void this.observe(attempt.id, generation);
     }
     renderAttempt() {
+        this.recovery.setIncident(this.attempt?.incident?.id ?? this.attempt?.cleanup.incidentId ?? null);
         const a = this.attempt;
         if (!a)
             return;
@@ -574,7 +588,7 @@ export class TasksView {
             addFact(facts, 'Candidate status at creation', 'Verification ' + a.candidate.verification.replaceAll('_', ' ') + ' · integration ' + a.candidate.integration.replaceAll('_', ' ') + '. Immutable creation facts.' + (a.workflowId ? ' Current task qualification and delivery are shown in Verified workflow above.' : ' Later qualification and delivery require separate evidence.'));
         }
         if (a.incident)
-            addFact(facts, 'Retained incident', a.incident.code + ': ' + a.incident.message + ' Preserve this workspace and evidence. Inspect the incident before an explicit recovery; this preview does not repair uncertain ownership or replay work.');
+            addFact(facts, 'Retained incident', a.incident.code + ': ' + a.incident.message + ' Preserve this workspace and evidence. Inspect the incident before reconciliation; uncertain ownership does not authorize replay.');
         const permissions = a.targetObservations.permissions;
         addFact(facts, 'Permissions', 'Requested ' + permissions.requestedMode + ' · configured ' + (permissions.configuredMode ?? 'unknown') + ' · native reported ' + (permissions.nativeReportedMode ?? 'unknown'));
         if (permissions.limitations.length)

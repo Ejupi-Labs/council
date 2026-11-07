@@ -57,7 +57,8 @@ func Open(path string) (*Store, error) {
 	if s.SQLiteVersion != "3.54.1" {
 		return fail()
 	}
-	if version == 0 && appID == 0 {
+	freshDatabase := version == 0 && appID == 0
+	if freshDatabase {
 		if err = db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").Scan(&tables); err != nil || tables != 0 {
 			return fail()
 		}
@@ -81,6 +82,8 @@ func Open(path string) (*Store, error) {
 		err = s.migrateWorkflow(context.Background())
 	} else if version == 5 && appID == applicationID {
 		err = s.migrateGraphs(context.Background())
+	} else if version == 6 && appID == applicationID {
+		err = s.migrateRecovery(context.Background())
 	} else if version != schemaVersion || appID != applicationID {
 		return fail()
 	}
@@ -103,6 +106,8 @@ func Open(path string) (*Store, error) {
 			err = s.migrateWorkflow(context.Background())
 		case 5:
 			err = s.migrateGraphs(context.Background())
+		case 6:
+			err = s.migrateRecovery(context.Background())
 		default:
 			return fail()
 		}
@@ -126,11 +131,17 @@ func Open(path string) (*Store, error) {
 		}
 		rows.Close()
 	}
-	if err = s.validateGraphSchema(context.Background()); err != nil {
+	if err = s.validateRecoverySchemaWith(context.Background(), db); err != nil {
 		return fail()
 	}
 	if err = configureDurableJournal(context.Background(), db); err != nil {
 		return fail()
+	}
+	if freshDatabase {
+		if err = s.initializeFreshRecoveryEpoch(context.Background()); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return s, nil
 }

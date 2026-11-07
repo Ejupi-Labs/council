@@ -36,7 +36,7 @@ const help = `Council — managed local workspace
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
 Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
-` + executionHelp + routingHelp + workflowHelp + graphHelp
+` + executionHelp + routingHelp + workflowHelp + graphHelp + recoveryHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
 	if handled, code := fixture.HandleWorkflowInternal(args); handled {
@@ -94,7 +94,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}
 		var result domain.Result
-		if strings.HasPrefix(c.op, "graphs.") && c.method == "POST" {
+		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op)) && c.method == "POST" {
 			result = forwardGraphIntent(ctx, root, desc, c)
 		} else {
 			result = forward(ctx, desc, c)
@@ -125,7 +125,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}
 		var result domain.Result
-		if strings.HasPrefix(c.op, "graphs.") && c.method == "POST" {
+		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op)) && c.method == "POST" {
 			result = forwardGraphIntent(ctx, root, desc, c)
 		} else {
 			result = forward(ctx, desc, c)

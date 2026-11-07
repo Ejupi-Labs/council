@@ -11,6 +11,10 @@ import (
 // launch guard. Public reports cannot bypass an uncertain owner/store fence.
 func (e *Engine) MutateRouting(ctx context.Context, op, id string, body []byte) domain.Result {
 	requestID := domain.MutationIdentity(body)
+	if !e.beginOwnerOperation() {
+		return e.failure(requestID, ownerClosing())
+	}
+	defer e.endOwnerOperation()
 	var input any
 	switch op {
 	case "routing.policy.update":

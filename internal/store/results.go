@@ -174,6 +174,17 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 	if (a.ExecutorKind == "local_application" || a.ExecutorKind == "local_graph") && !in.EffectsKnown || materializationUncertain || graphNodeUnknown {
 		retainEffectClaim = true
 	}
+	// A later verified cleanup does not itself reconcile a watchdog incident.
+	// Keep this attempt's exact claim until the proof-backed decision commits.
+	var unresolved int
+	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM execution_incidents i
+		WHERE i.attempt_id=? AND NOT EXISTS (
+			SELECT 1 FROM recovery_decisions d
+			WHERE d.incident_id=i.id AND json_extract(d.data,'$.outcome')='reconciled'
+		)`, a.ID).Scan(&unresolved); e != nil {
+		return a, storageError()
+	}
+	retainEffectClaim = retainEffectClaim || unresolved != 0
 	if a.Cleanup.State == "verified" && !retainEffectClaim {
 		if _, e := tx.ExecContext(ctx, "DELETE FROM capacity_claims WHERE attempt_id=?", a.ID); e != nil {
 			return a, storageError()
@@ -190,6 +201,9 @@ func (s *Store) settleCoreWithRecovery(ctx context.Context, tx *sql.Tx, a domain
 		Settlement domain.Settlement `json:"settlement"`
 	}{a, in})); e != nil {
 		return a, storageError()
+	}
+	if e := s.refreshRecoveryCheckpointsForAttempt(ctx, tx, a.ID); e != nil {
+		return a, e
 	}
 	return a, nil
 }

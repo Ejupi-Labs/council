@@ -7,6 +7,7 @@ import type { Meta, Page, Policy } from './types.js';
 import type { BudgetLedgerEntry, RoutingPolicy } from './routing-types.js';
 import type { DeliveryPreference } from './workflow-types.js';
 import type { TaskVersion } from './execution-types.js';
+import { RecoveryView } from './recovery.js';
 
 // Start and exact Start retries use the connected graph admission path. Other
 // graph mutations retain their own supported controls and authority checks.
@@ -110,12 +111,14 @@ function validAdmission(admission: GraphAdmission, input: GraphStartInput): bool
 }
 
 export class GraphsView {
+  private readonly recovery: RecoveryView;
   private readonly composer = new GraphComposer();
   private projectId: string | null = null;
   private policy: Policy | null = null;
   private routingPolicy: RoutingPolicy | null = null;
   private deliveryPreference: DeliveryPreference | null = null;
   private ready = false;
+  private recoveryReady = false;
   private projectGeneration = 0;
   private selectionGeneration = 0;
   private listGeneration = 0;
@@ -168,6 +171,7 @@ export class GraphsView {
   onTasksChanged = (_projectId: string): void => {};
 
   constructor() {
+    this.recovery = new RecoveryView(element('graph-overview'), 'group', () => { if (this.selectedId) void this.open(this.selectedId, false); });
     this.mountControls();
     const retainedControls = readSession<PendingControl[]>('graphPendingControls');
     if (Array.isArray(retainedControls) && retainedControls.length <= 32) for (const item of retainedControls) {
@@ -192,12 +196,15 @@ export class GraphsView {
 
   setOwner(meta: Meta): void {
     this.ready = supportsManagedExecution(meta) && meta.graphContract === '006-v1';
+    this.recoveryReady = this.ready && meta.recoveryContract === '007-v1';
+    this.recovery.setGraph(this.detail, this.recoveryReady);
     ++this.defaultsGeneration; ++this.observationGeneration;
     this.controls(); if (this.ready) { void this.loadDefaults(); if (this.projectId) void this.refresh(); }
     if (this.ready && this.detail && observedWork(this.detail.graph)) this.observe(this.detail.graph.id);
   }
   disconnect(): void {
-    this.ready = false; ++this.listGeneration; ++this.detailGeneration; ++this.definitionGeneration; ++this.defaultsGeneration; ++this.observationGeneration;
+    this.ready = false; this.recoveryReady = false; ++this.listGeneration; ++this.detailGeneration; ++this.definitionGeneration; ++this.defaultsGeneration; ++this.observationGeneration;
+    this.recovery.setGraph(this.detail, false);
     this.controls();
   }
   setPolicy(policy: Policy): void { this.policy = policy; this.defaults(); this.controls(); }
@@ -383,6 +390,7 @@ export class GraphsView {
     element('graph-more').hidden = !this.cursor;
   }
   private renderDetail(): void {
+    this.recovery.setGraph(this.detail, this.recoveryReady);
     const target = element('graph-overview'), detail = this.detail; target.hidden = !detail;
     const focusedNodeControl = element('graph-node-list').contains(document.activeElement) ? (document.activeElement as HTMLElement | null)?.id : '';
     this.inputs.setGraph(detail); this.renderGraphControls();

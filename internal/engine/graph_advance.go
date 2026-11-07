@@ -18,7 +18,34 @@ func (e *Engine) advanceGraph(ctx context.Context, graphID string, in domain.Gra
 	} else if prior != nil {
 		return *prior
 	}
-	facts, err := e.captureGraphAdvanceFacts(ctx, graphID, in)
+	view, err := e.db.Graph(ctx, graphID)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	pauses, err := e.db.ActiveRecoveryCheckpoints(ctx, "", graphID)
+	if err != nil {
+		return e.failure(in.RequestID, err)
+	}
+	selected := make(map[string]bool, len(view.Nodes))
+	for _, node := range view.Nodes {
+		selected[node.ID] = true
+	}
+	for _, pause := range pauses {
+		if pause.Scope.Kind == "graph" {
+			return e.failure(in.RequestID, domain.Fail("scope_paused", "Resume this group before advancing its work."))
+		}
+		if pause.Scope.Kind == "member" {
+			selected[pause.Scope.NodeID] = false
+			if in.RebindNodeIDs != nil {
+				for _, id := range *in.RebindNodeIDs {
+					if id == pause.Scope.NodeID {
+						return e.failure(in.RequestID, domain.Fail("scope_paused", "Resume the selected member before explicitly rebinding its input."))
+					}
+				}
+			}
+		}
+	}
+	facts, err := e.captureGraphAdvanceFacts(ctx, graphID, in, selected)
 	if err != nil {
 		if uncertainEvidence(err) {
 			e.fence("", "graph_advance_evidence_uncertain", "The exact retained graph inputs cannot be verified. Preserve their evidence before continuing.")
@@ -39,7 +66,7 @@ func (e *Engine) advanceGraph(ctx context.Context, graphID string, in domain.Gra
 	return result
 }
 
-func (e *Engine) captureGraphAdvanceFacts(ctx context.Context, graphID string, in domain.GraphAdvanceInput) (domain.GraphAdvanceFacts, error) {
+func (e *Engine) captureGraphAdvanceFacts(ctx context.Context, graphID string, in domain.GraphAdvanceInput, selected ...map[string]bool) (domain.GraphAdvanceFacts, error) {
 	facts := domain.GraphAdvanceFacts{}
 	view, err := e.db.Graph(ctx, graphID)
 	if err != nil {
@@ -95,6 +122,9 @@ func (e *Engine) captureGraphAdvanceFacts(ctx context.Context, graphID string, i
 		}
 	}
 	for _, node := range view.Nodes {
+		if len(selected) != 0 && !selected[0][node.ID] {
+			continue
+		}
 		if node.Stop != nil {
 			continue
 		}

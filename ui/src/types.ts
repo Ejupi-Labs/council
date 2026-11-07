@@ -57,6 +57,7 @@ export interface Meta {
   executionContract?: string;
   workflowContract?: string;
   graphContract?: string;
+  recoveryContract?: string;
   maintenanceContract?: string;
   capacity?: { resourceId?: string; connectionId?: string; limit: number; activeAttemptId: string | null; occupiedSlots?: '0' | '1' | '2'; activeClaims?: GraphClaimView[] };
   admission?: { state: string; incidentId: string | null; incident?: { code: string; message: string } };

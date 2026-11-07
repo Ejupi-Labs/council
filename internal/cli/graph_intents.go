@@ -87,6 +87,9 @@ func graphIntentInputHash(record graphIntentRecord) string {
 // authority under the same ID. The immutable body remains after acknowledgement.
 func forwardGraphIntent(ctx context.Context, root string, desc localstate.Descriptor, c command) domain.Result {
 	uncertain := func() domain.Result {
+		if recoveryMutation(c.op) {
+			return domain.Failure(c.requestID, domain.Fail("write_uncertain", "The retained recovery request is unresolved. Preserve its exact request identity and original input; no authority was refreshed."))
+		}
 		return domain.Failure(c.requestID, domain.Fail("write_uncertain", "The retained graph request is unresolved. Preserve its exact request identity and original input; no authority was refreshed."))
 	}
 	intent, err := localstate.OpenGraphIntent(ctx, root, c.requestID)
@@ -109,6 +112,9 @@ func forwardGraphIntent(ctx context.Context, root string, desc localstate.Descri
 			return uncertain()
 		}
 		if record.InputSHA256 != description.InputSHA256 {
+			if recoveryMutation(c.op) {
+				return domain.Failure(c.requestID, domain.Fail("request_conflict", "This request identity already names different recovery input. Retain the original intent or use a new identity for changed input."))
+			}
 			return domain.Failure(c.requestID, domain.Fail("request_conflict", "This request identity already names different graph input. Retain the original intent or use a new identity for changed input."))
 		}
 		c.params.Body = append([]byte{}, record.Body...)
@@ -290,12 +296,36 @@ func bindGraphIntent(c command, detail domain.GraphDetail) (command, *domain.Err
 }
 
 func validateFrozenGraphBody(c command) *domain.Error {
-	if !strings.HasPrefix(c.op, "graphs.") || c.method != "POST" || !domain.ValidID(c.requestID) {
+	if (!strings.HasPrefix(c.op, "graphs.") && !recoveryMutation(c.op)) || c.method != "POST" || !domain.ValidID(c.requestID) {
 		return domain.Invalid("graph mutation identity")
 	}
 	var id string
 	var invalid *domain.Error
 	switch c.op {
+	case "tasks.pause":
+		var in domain.PauseTaskInput
+		if e := domain.StrictDecode(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidatePauseTaskInput(in)
+	case "graphs.pause":
+		var in domain.PauseGraphInput
+		if e := domain.StrictDecode(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidatePauseGraphInput(in)
+	case "checkpoints.resume":
+		var in domain.ResumeCheckpointInput
+		if e := domain.StrictDecode(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidateResumeCheckpointInput(in)
+	case "incidents.reconcile":
+		var in domain.ReconciliationInput
+		if e := domain.StrictDecode(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidateReconciliationInput(in)
 	case "graphs.start":
 		in, e := domain.StrictDecodeGraphStart(c.params.Body)
 		if e != nil {

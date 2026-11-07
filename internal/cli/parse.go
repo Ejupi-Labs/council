@@ -43,6 +43,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	addRoutingFlags(values)
 	addWorkflowFlags(values)
 	addGraphFlags(values)
+	addRecoveryFlags(values)
 	bools["version"] = !taskVersionCommand
 	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
@@ -102,6 +103,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		return c, domain.Invalid("command")
 	}
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
+	if recoveryCommand(c.name) {
+		return parseRecovery(c, positionals, flags, stdin)
+	}
 	if graphCommand(c.name) {
 		return parseGraph(c, positionals, flags, repeated, stdin)
 	}

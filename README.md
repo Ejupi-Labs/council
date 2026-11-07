@@ -9,17 +9,17 @@ main remains unchanged.
 ## Current preview
 
 Preview **2.0.0-dev.6** implements bounded parallel and dependent task groups on the existing
-native Codex/Claude Code workflows. **Feature006 is under qualification, not accepted.**
-Auto connects authoring, proportionate checks, necessary independent review, bounded correction
-and captured delivery. The Ejupi Labs UI and CLI retain original instructions, literal pins,
-stage lineage, exact output, history, Stop and recovery incidents. **Features001–005 are accepted.**
-Verified-delivery source
-`794f080` passes all six native platform jobs and Linux AMD64 race checks in
-[run42224386878](https://github.com/Ejupi-Labs/council/actions/runs/42224386878).
-Its [acceptance record](specs/005-verified-delivery/acceptance.md) retains the first hosted
-failures, corrected-source evidence, independent review and separately unperformed live-provider scope.
-Features007–012 remain planned. Current006 evidence and remaining local, visual, package and
-native/race gates are tracked in its [draft matrix](specs/006-task-graphs/evidence-matrix.md).
+native Codex/Claude Code workflows. Features 001–006 are accepted for their documented offline
+scope; feature 006's exact-source native and race qualification is recorded in its
+[acceptance record](specs/006-task-graphs/acceptance.md). Auto connects authoring, proportionate
+checks, necessary independent review, bounded correction and captured delivery. The Ejupi Labs UI
+and CLI retain original instructions, literal pins, stage lineage, exact output and history.
+
+Feature 007, durable pause and safe recovery, is in development. Its
+[recovery guide](docs/refactor/recovery-guide.md) describes the current implementation and its
+limits; the feature is not yet accepted. Scoped retention and the remaining host, harness and
+release work follow in the [delivery plan](docs/refactor/delivery-plan.md). Native provider
+qualification requires a separate explicitly requested live task and remains unperformed.
 
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly

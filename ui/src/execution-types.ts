@@ -2,6 +2,7 @@ import type { Policy } from './types.js';
 import type { GraphBudgetRef, GraphRef } from './graph-types.js';
 import type { Workflow, WorkflowStep } from './workflow-types.js';
 import type { ResolvedTarget, RoutingDecision, RoutingOptions, TaskBudget } from './routing-types.js';
+import type { RecoveryCheckpoint } from './recovery.js';
 
 export interface TaskSummary {
   graphRef?: GraphRef;
@@ -58,7 +59,7 @@ export interface Attempt {
     usage: UsageObservation;
   };
 }
-export interface TaskDetail { task: Task; version: TaskVersion; latestAttempt: Attempt | null; acceptance: { responseArtifactId: string; acceptedAt: string } | null }
+export interface TaskDetail { task: Task; version: TaskVersion; latestAttempt: Attempt | null; acceptance: { responseArtifactId: string; acceptedAt: string } | null; checkpoints?: RecoveryCheckpoint[] }
 export interface Admission { task: TaskSummary; version: TaskVersion; attempt: Attempt; routingDecision?: RoutingDecision; budget?: TaskBudget | null; graphBudgetRef?: GraphBudgetRef; workflow?: Workflow; step?: WorkflowStep }
 export interface Artifact { id: string; attemptId: string; kind: string; byteLength: string; closed: boolean; completeness: string; sha256: string | null; createdAt: string }
 export interface ArtifactChunk { artifactId: string; offset: string; nextOffset: string; through: string; bytesBase64: string; eof: boolean; streamClosed: boolean; completeness: string; sha256: string | null }

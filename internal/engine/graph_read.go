@@ -78,7 +78,7 @@ func (e *Engine) readGraph(ctx context.Context, op, target string, q map[string]
 	case "graphs.list":
 		data, err = e.db.Graphs(ctx, q["projectId"], limit, q["cursor"])
 	case "graphs.get":
-		data, err = e.db.Graph(ctx, id)
+		data, err = e.graphWithCheckpoints(ctx, id)
 	case "graphs.definition.get":
 		data, err = e.db.GraphDefinition(ctx, id)
 	case "graphs.wait":
@@ -104,6 +104,14 @@ func (e *Engine) readGraph(ctx context.Context, op, target string, q map[string]
 	return domain.Success(200, requestID, data, nil)
 }
 
+func (e *Engine) graphWithCheckpoints(ctx context.Context, id string) (domain.GraphDetail, error) {
+	view, err := e.db.Graph(ctx, id)
+	if err == nil {
+		view.Checkpoints, err = e.db.ActiveRecoveryCheckpoints(ctx, "", id)
+	}
+	return view, err
+}
+
 func (e *Engine) waitGraph(ctx context.Context, id string, q map[string]string) (any, error) {
 	after := int64(0)
 	if text := q["afterRevision"]; text != "" {
@@ -126,7 +134,7 @@ func (e *Engine) waitGraph(ctx context.Context, id string, q map[string]string) 
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		view, err := e.db.Graph(ctx, id)
+		view, err := e.graphWithCheckpoints(ctx, id)
 		if err != nil {
 			return nil, err
 		}

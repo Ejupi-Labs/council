@@ -16,6 +16,14 @@ func (e *Engine) watchStop(attemptID, acceptedAt string) {
 }
 func (e *Engine) watchStopWithLimit(attemptID, acceptedAt string, limit time.Duration) {
 	e.control.Lock()
+	if e.watchEnd != nil {
+		select {
+		case <-e.watchEnd:
+			e.control.Unlock()
+			return
+		default:
+		}
+	}
 	if e.stopWatches == nil {
 		e.stopWatches = make(map[string]struct{})
 	}
@@ -84,6 +92,7 @@ func (e *Engine) expireStopBudget(attemptID string) {
 	if fenceErr := e.db.Fence(ctx, incident); fenceErr != nil {
 		// An uncertain acknowledgement can still have persisted the same incident.
 		if _, lookupErr := e.db.Incident(ctx, incidentID); lookupErr != nil {
+			e.fenceUncertain = true
 			return
 		}
 	}

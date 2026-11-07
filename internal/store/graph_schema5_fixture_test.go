@@ -74,7 +74,7 @@ func graphSchema5Database(t *testing.T, path string, populated bool) (*sql.DB, g
 // tables. Every accepted foundation/routing/workflow row is compared byte-exact.
 func graphSchema5Rows(t *testing.T, db *sql.DB) map[string][]string {
 	t.Helper()
-	rows, err := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' AND name!='capacity_claims' AND name NOT IN ('task_graphs','graph_versions','graph_nodes','graph_inputs','graph_dispatches','graph_admission_observations','graph_delivery_bindings') ORDER BY name")
+	rows, err := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' AND name!='capacity_claims' AND name NOT IN ('task_graphs','graph_versions','graph_nodes','graph_inputs','graph_dispatches','graph_admission_observations','graph_delivery_bindings','recovery_owner_epoch','recovery_owner_epoch_events','recovery_checkpoints','recovery_graph_scopes','recovery_observations','recovery_decisions') ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}

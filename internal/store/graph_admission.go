@@ -28,6 +28,9 @@ func graphEffectiveWorkflowConditions(node, graph string) string {
 }
 func (s *Store) graphAdmissionControl(ctx context.Context, q queryer, ownerID, graphID string, trigger domain.GraphFreshTrigger, f domain.GraphNodeAdmissionFacts) (graphHeader, []graphNodeRecord, int, domain.GraphInputRecord, error) {
 	var record domain.GraphInputRecord
+	if e := s.requireRecoveryAdmission(ctx, q, "", graphID, f.NodeID); e != nil {
+		return graphHeader{}, nil, 0, record, e
+	}
 	h, e := s.graphHeader(ctx, q, graphID)
 	if e != nil {
 		return h, nil, 0, record, e
@@ -40,11 +43,15 @@ func (s *Store) graphAdmissionControl(ctx context.Context, q queryer, ownerID, g
 		return h, nil, 0, record, e
 	}
 	c := f.Control
-	if !domain.ValidID(ownerID) || gate.OwnerInstanceID != ownerID || h.DispatchAuthority == nil || h.DispatchAuthority.OwnerInstanceID != ownerID || h.DispatchAuthority.State == "suspended" || h.Summary.Stop != nil ||
+	scoped, e := s.recoveryGraphScopedTrigger(ctx, q, h, ownerID, trigger, f.NodeID)
+	if e != nil {
+		return h, nil, 0, record, e
+	}
+	if !domain.ValidID(ownerID) || gate.OwnerInstanceID != ownerID || h.DispatchAuthority == nil || !scoped && (h.DispatchAuthority.OwnerInstanceID != ownerID || h.DispatchAuthority.State == "suspended") || h.Summary.Stop != nil ||
 		c.GraphID != graphID || c.GraphVersion != h.Summary.GraphVersion || c.RootTaskID != h.Summary.RootTaskID || c.OwnerInstanceID != ownerID || c.Generation != h.DispatchAuthority.Generation || c.GraphControlRevision != h.Summary.ControlRevision || c.BudgetAuthorityEpoch != h.Summary.BudgetAuthorityEpoch || c.NodeID == nil || *c.NodeID != f.NodeID || c.TaskID == nil || c.TaskVersion == nil || *c.TaskVersion != f.TaskVersion || c.NodeControlRevision == nil || c.InputID == nil || *c.InputID != f.InputBinding.ID {
 		return h, nil, 0, record, graphControlError()
 	}
-	if e = s.graphFreshTrigger(ctx, q, h, ownerID, trigger); e != nil {
+	if e = s.graphFreshTrigger(ctx, q, h, ownerID, trigger, f.NodeID); e != nil {
 		return h, nil, 0, record, e
 	}
 	b, e := s.taskBudget(ctx, q, h.Summary.RootTaskID)
@@ -69,11 +76,16 @@ func (s *Store) graphAdmissionControl(ctx context.Context, q queryer, ownerID, g
 		return h, nil, 0, record, notFound()
 	}
 	n := nodes[index].Summary
+	if n.NodeAdmissionID == nil {
+		if e := s.requireRecoveryAncestors(ctx, q, graphID, f.NodeID); e != nil {
+			return h, nil, 0, record, e
+		}
+	}
 	task, e := s.task(ctx, q, n.TaskID)
 	if e != nil {
 		return h, nil, 0, record, e
 	}
-	if task.ID != *c.TaskID || task.CurrentVersion != f.TaskVersion || n.TaskVersion != f.TaskVersion || n.ControlRevision != *c.NodeControlRevision || n.Stop != nil || !graphAuthorizedNode(h, n) || n.InputID == nil || *n.InputID != f.InputBinding.ID {
+	if task.ID != *c.TaskID || task.CurrentVersion != f.TaskVersion || n.TaskVersion != f.TaskVersion || n.ControlRevision != *c.NodeControlRevision || n.Stop != nil || !scoped && !graphAuthorizedNode(h, n) || n.InputID == nil || *n.InputID != f.InputBinding.ID {
 		return h, nil, 0, record, graphControlError()
 	}
 	record, e = s.graphInputRecord(ctx, q, graphID, f.InputBinding.ID)
@@ -161,7 +173,7 @@ func knownGraphAdmissionBlock(e error) *domain.Error {
 	}
 	return nil
 }
-func (s *Store) graphProjectAdmissionBlock(ctx context.Context, tx *sql.Tx, h graphHeader, nodes []graphNodeRecord, index int, inputID string, block *domain.Error) error {
+func (s *Store) graphProjectAdmissionBlock(ctx context.Context, tx *sql.Tx, h graphHeader, nodes []graphNodeRecord, index int, inputID string, block *domain.Error, scoped bool) error {
 	n := &nodes[index]
 	waiting := block.Code == "capacity_wait" || block.Code == "attempt_active"
 	n.Summary.State = "blocked"
@@ -184,12 +196,14 @@ func (s *Store) graphProjectAdmissionBlock(ctx context.Context, tx *sql.Tx, h gr
 	h.Summary.State = "blocked"
 	h.Summary.NextOwner = n.Summary.NextOwner
 	h.Summary.NextAction = n.Summary.NextAction
-	if waiting {
-		h.DispatchAuthority.State = "capacity_wait"
-	} else {
-		// The node's user-owned blocker prevents a later completion/configuration
-		// callback from silently rearming it. Other authorized siblings may proceed.
-		h.DispatchAuthority.State = "active"
+	if !scoped {
+		if waiting {
+			h.DispatchAuthority.State = "capacity_wait"
+		} else {
+			// The node's user-owned blocker prevents a later completion/configuration
+			// callback from silently rearming it. Other authorized siblings may proceed.
+			h.DispatchAuthority.State = "active"
+		}
 	}
 	h.Summary.StateRevision, e = increment(h.Summary.StateRevision)
 	if e != nil {
@@ -215,6 +229,10 @@ func (s *Store) admitGraphNode(ctx context.Context, ownerID, graphID string, tri
 
 func (s *Store) admitGraphNodeTx(ctx context.Context, tx *sql.Tx, ownerID, graphID string, trigger domain.GraphFreshTrigger, f domain.GraphNodeAdmissionFacts, out *domain.GraphDispatchView) error {
 	h, nodes, index, record, e := s.graphAdmissionControl(ctx, tx, ownerID, graphID, trigger, f)
+	if e != nil {
+		return e
+	}
+	scoped, e := s.recoveryGraphScopedTrigger(ctx, tx, h, ownerID, trigger, f.NodeID)
 	if e != nil {
 		return e
 	}
@@ -250,7 +268,7 @@ func (s *Store) admitGraphNodeTx(ctx context.Context, tx *sql.Tx, ownerID, graph
 		if e = storeGraphAdmissionObservation(ctx, tx, graphID, f, trigger, nil, f.PreparationFailure); e != nil {
 			return e
 		}
-		return s.graphProjectAdmissionBlock(ctx, tx, h, nodes, index, f.InputBinding.ID, f.PreparationFailure)
+		return s.graphProjectAdmissionBlock(ctx, tx, h, nodes, index, f.InputBinding.ID, f.PreparationFailure, scoped)
 	}
 	if _, e = tx.ExecContext(ctx, "SAVEPOINT graph_node_admission"); e != nil {
 		return storageError()
@@ -270,7 +288,7 @@ func (s *Store) admitGraphNodeTx(ctx context.Context, tx *sql.Tx, ownerID, graph
 		if e = storeGraphAdmissionObservation(ctx, tx, graphID, f, trigger, nil, block); e != nil {
 			return e
 		}
-		return s.graphProjectAdmissionBlock(ctx, tx, h, nodes, index, f.InputBinding.ID, block)
+		return s.graphProjectAdmissionBlock(ctx, tx, h, nodes, index, f.InputBinding.ID, block, scoped)
 	}
 	if _, e = tx.ExecContext(ctx, "RELEASE graph_node_admission"); e != nil {
 		return storageError()
@@ -450,7 +468,11 @@ func (s *Store) graphAdmitInitial(ctx context.Context, tx *sql.Tx, ownerID strin
 	h.Summary.State = "queued"
 	h.Summary.NextOwner = "council"
 	h.Summary.NextAction = "Observe admitted graph work."
-	h.DispatchAuthority.State = "active"
+	if scoped, err := s.recoveryGraphScopedTrigger(ctx, tx, h, ownerID, trigger, node.Summary.ID); err != nil {
+		return out, err
+	} else if !scoped {
+		h.DispatchAuthority.State = "active"
+	}
 	h.Summary.UpdatedAt = a.AdmittedAt
 	h.Summary.StateRevision, e = increment(h.Summary.StateRevision)
 	if e != nil {

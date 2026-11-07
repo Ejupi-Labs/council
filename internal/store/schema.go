@@ -1,6 +1,6 @@
 package store
 
-const schemaVersion = 6
+const schemaVersion = 7
 const applicationID = 1129202226
 const schema = `
 CREATE TABLE policy (

@@ -20,13 +20,22 @@ func graphAuthorizedNode(h graphHeader, n domain.GraphNodeSummary) bool {
 	}
 	return false
 }
-func (s *Store) graphFreshTrigger(ctx context.Context, q queryer, h graphHeader, ownerID string, trigger domain.GraphFreshTrigger) error {
+func (s *Store) graphFreshTrigger(ctx context.Context, q queryer, h graphHeader, ownerID string, trigger domain.GraphFreshTrigger, nodeID ...string) error {
 	if !domain.ValidID(trigger.ID) || trigger.OwnerGeneration != h.DispatchAuthority.Generation {
 		return graphControlError()
 	}
 	if trigger.Kind == "explicit" {
 		if trigger.ID != h.DispatchRequestID {
-			return graphControlError()
+			if len(nodeID) != 1 {
+				return graphControlError()
+			}
+			scoped, err := s.recoveryGraphScopedTrigger(ctx, q, h, ownerID, trigger, nodeID[0])
+			if err != nil {
+				return err
+			}
+			if !scoped {
+				return graphControlError()
+			}
 		}
 		return nil
 	}
@@ -100,6 +109,91 @@ func (s *Store) graphFreshTrigger(ctx context.Context, q queryer, h graphHeader,
 	}
 	return nil
 }
+
+// A member resume is its own exact persisted registration. It never changes
+// the shared graph registration used by independent siblings.
+func (s *Store) recoveryGraphScopedTrigger(ctx context.Context, q queryer, h graphHeader, owner string, trigger domain.GraphFreshTrigger, nodeID string) (bool, error) {
+	if trigger.Kind != "explicit" && trigger.Kind != "completion" && trigger.Kind != "claim_release" || !domain.ValidID(trigger.ID) || !domain.ValidID(nodeID) || h.DispatchAuthority == nil {
+		return false, nil
+	}
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM recovery_graph_scopes r
+		JOIN recovery_checkpoints c ON c.id=r.checkpoint_id
+		JOIN graph_nodes n ON n.id=r.node_id AND n.graph_id=r.graph_id AND n.task_id=r.task_id
+		JOIN tasks t ON t.id=r.task_id
+		WHERE ((?='explicit' AND r.request_id=?) OR (?='completion' AND EXISTS (SELECT 1 FROM graph_inputs i WHERE i.operation_attempt_id=? AND i.graph_id=r.graph_id AND i.node_id=r.node_id AND i.state='ready' AND json_extract(i.data,'$.Trigger.Kind')='explicit' AND json_extract(i.data,'$.Trigger.ID')=r.request_id)) OR (?='claim_release' AND json_type(r.data,'$.eventHighWater')='integer' AND EXISTS (SELECT 1 FROM attempt_events e WHERE e.attempt_id=? AND json_extract(e.data,'$.kind')='settled' AND e.sequence>json_extract(r.data,'$.eventHighWater'))))
+		AND r.owner_instance_id=? AND r.graph_id=? AND r.node_id=?
+		AND r.state='active' AND c.state='resumed' AND c.scope_kind='member'
+		AND c.graph_id=r.graph_id AND c.node_id=r.node_id AND c.task_id=r.task_id
+		AND r.graph_version=? AND r.graph_control_revision=? AND r.node_control_revision=n.control_revision
+		AND r.generation=? AND t.current_version=CAST(json_extract(n.data,'$.summary.taskVersion') AS INTEGER)`, trigger.Kind, trigger.ID, trigger.Kind, trigger.ID, trigger.Kind, trigger.ID, owner, h.Summary.ID, nodeID,
+		intRevision(h.Summary.GraphVersion), intRevision(h.Summary.ControlRevision), intRevision(trigger.OwnerGeneration)).Scan(&count)
+	if err != nil {
+		return false, storageError()
+	}
+	return count == 1, nil
+}
+
+// RecoveryScopedInput returns only a real completed member preparation whose
+// exact node-scoped resume authority is still current. It admits nothing.
+func (s *Store) RecoveryScopedInput(ctx context.Context, ownerID, attemptID string) (domain.GraphInputOperation, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var graphID, nodeID string
+	err := s.db.QueryRowContext(ctx, "SELECT graph_id,node_id FROM graph_inputs WHERE operation_attempt_id=? AND kind='node_input' AND state='ready'", attemptID).Scan(&graphID, &nodeID)
+	if err == sql.ErrNoRows {
+		return domain.GraphInputOperation{}, false, nil
+	}
+	if err != nil {
+		return domain.GraphInputOperation{}, false, storageError()
+	}
+	op, err := s.graphInputOperation(ctx, s.db, ownerID, attemptID)
+	if err != nil {
+		return domain.GraphInputOperation{}, false, err
+	}
+	if op.Attempt.Phase != "settled" || op.Attempt.Outcome == nil || *op.Attempt.Outcome != "succeeded" || op.Attempt.Cleanup.State != "verified" || op.Attempt.EvidenceStatus != "complete" {
+		return domain.GraphInputOperation{}, false, nil
+	}
+	h, err := s.graphHeader(ctx, s.db, graphID)
+	if err != nil {
+		return domain.GraphInputOperation{}, false, err
+	}
+	trigger := domain.GraphFreshTrigger{Kind: "completion", ID: attemptID, OwnerGeneration: op.Control.Generation}
+	scoped, err := s.recoveryGraphScopedTrigger(ctx, s.db, h, ownerID, trigger, nodeID)
+	return op, scoped, err
+}
+
+// RecoveryScopedPredecessor proves that a settled workflow stage belongs to
+// the exact current member registration, not merely to the same graph.
+func (s *Store) RecoveryScopedPredecessor(ctx context.Context, ownerID, attemptID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.attempt(ctx, s.db, attemptID)
+	if err != nil {
+		return false, err
+	}
+	if a.OwnerInstanceID != ownerID || a.Phase != "settled" || a.Cleanup.State != "verified" || a.EvidenceStatus != "complete" {
+		return false, nil
+	}
+	var count int
+	err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM recovery_graph_scopes r
+		JOIN recovery_checkpoints c ON c.id=r.checkpoint_id
+		JOIN receipts receipt ON receipt.request_id=r.request_id AND receipt.operation='checkpoints.resume'
+		JOIN graph_dispatches d ON d.graph_id=r.graph_id AND d.node_id=r.node_id AND d.task_id=r.task_id
+		JOIN task_graphs g ON g.id=r.graph_id
+		JOIN graph_nodes n ON n.id=r.node_id AND n.graph_id=r.graph_id
+		WHERE d.attempt_id=? AND d.owner_instance_id=? AND r.owner_instance_id=?
+		AND r.state='active' AND c.state='resumed' AND c.scope_kind='member'
+		AND c.graph_id=r.graph_id AND c.node_id=r.node_id AND c.task_id=r.task_id
+		AND d.graph_version=r.graph_version AND d.graph_control_revision=r.graph_control_revision
+		AND d.node_control_revision=r.node_control_revision AND g.graph_version=r.graph_version
+		AND g.control_revision=r.graph_control_revision AND n.control_revision=r.node_control_revision
+		AND NOT EXISTS (SELECT 1 FROM capacity_claims claim WHERE claim.attempt_id=d.attempt_id)`, attemptID, ownerID, ownerID).Scan(&count)
+	if err != nil {
+		return false, storageError()
+	}
+	return count == 1, nil
+}
 func (s *Store) beginGraphInput(ctx context.Context, ownerID, graphID, nodeID string, f domain.GraphInputPreparationFacts) (domain.GraphInputOperation, error) {
 	var out domain.GraphInputOperation
 	err := s.executionWrite(ctx, func(tx *sql.Tx) error {
@@ -111,6 +205,12 @@ func (s *Store) beginGraphInput(ctx context.Context, ownerID, graphID, nodeID st
 func (s *Store) beginGraphInputTx(ctx context.Context, tx *sql.Tx, ownerID, graphID, nodeID string, f domain.GraphInputPreparationFacts, out *domain.GraphInputOperation) error {
 	if !domain.ValidID(graphID) || !domain.ValidID(nodeID) || !domain.ValidID(ownerID) {
 		return domain.Invalid("exact graph input operation membership")
+	}
+	if e := s.requireRecoveryAdmission(ctx, tx, "", graphID, nodeID); e != nil {
+		return e
+	}
+	if e := s.requireRecoveryAncestors(ctx, tx, graphID, nodeID); e != nil {
+		return e
 	}
 	h, e := s.graphHeader(ctx, tx, graphID)
 	if e != nil {
@@ -124,10 +224,14 @@ func (s *Store) beginGraphInputTx(ctx context.Context, tx *sql.Tx, ownerID, grap
 		return e
 	}
 	c := f.Control
-	if g.OwnerInstanceID != ownerID || h.DispatchAuthority == nil || h.DispatchAuthority.OwnerInstanceID != ownerID || h.DispatchAuthority.State == "suspended" || h.Summary.Stop != nil || c.GraphID != graphID || c.RootTaskID != h.Summary.RootTaskID || c.OwnerInstanceID != ownerID || c.GraphVersion != h.Summary.GraphVersion || c.Generation != h.DispatchAuthority.Generation || c.GraphControlRevision != h.Summary.ControlRevision || c.BudgetAuthorityEpoch != h.Summary.BudgetAuthorityEpoch || c.NodeID == nil || *c.NodeID != nodeID || c.TaskID == nil || c.TaskVersion == nil || c.NodeControlRevision == nil || c.InputID != nil {
+	scoped, e := s.recoveryGraphScopedTrigger(ctx, tx, h, ownerID, f.Trigger, nodeID)
+	if e != nil {
+		return e
+	}
+	if g.OwnerInstanceID != ownerID || h.DispatchAuthority == nil || !scoped && (h.DispatchAuthority.OwnerInstanceID != ownerID || h.DispatchAuthority.State == "suspended") || h.Summary.Stop != nil || c.GraphID != graphID || c.RootTaskID != h.Summary.RootTaskID || c.OwnerInstanceID != ownerID || c.GraphVersion != h.Summary.GraphVersion || c.Generation != h.DispatchAuthority.Generation || c.GraphControlRevision != h.Summary.ControlRevision || c.BudgetAuthorityEpoch != h.Summary.BudgetAuthorityEpoch || c.NodeID == nil || *c.NodeID != nodeID || c.TaskID == nil || c.TaskVersion == nil || c.NodeControlRevision == nil || c.InputID != nil {
 		return graphControlError()
 	}
-	if e = s.graphFreshTrigger(ctx, tx, h, ownerID, f.Trigger); e != nil {
+	if e = s.graphFreshTrigger(ctx, tx, h, ownerID, f.Trigger, nodeID); e != nil {
 		return e
 	}
 	triggerAttempt := f.Trigger.ID
@@ -166,7 +270,7 @@ func (s *Store) beginGraphInputTx(ctx context.Context, tx *sql.Tx, ownerID, grap
 	if e != nil {
 		return e
 	}
-	if *c.TaskID != task.ID || *c.TaskVersion != task.CurrentVersion || *c.NodeControlRevision != n.ControlRevision || n.Stop != nil || !graphAuthorizedNode(h, n) {
+	if *c.TaskID != task.ID || *c.TaskVersion != task.CurrentVersion || *c.NodeControlRevision != n.ControlRevision || n.Stop != nil || !scoped && !graphAuthorizedNode(h, n) {
 		return graphControlError()
 	}
 	if !reflect.DeepEqual(c.ContributorVector, f.ContributorVector) {

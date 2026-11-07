@@ -32,10 +32,21 @@ func (s *Store) graphDispatchOwnerAuthorization(ctx context.Context, q queryer, 
 		return evidenceUnavailable()
 	}
 	envelope, err := decode[domain.Envelope](raw)
-	if err != nil || operation != "graphs.advance" || status != 200 || envelope.RequestID != request || envelope.Receipt == nil || envelope.Receipt.RequestID != request || envelope.Receipt.Operation != operation {
+	if err != nil || operation != "graphs.advance" && operation != "checkpoints.resume" || status != 200 || envelope.RequestID != request || envelope.Receipt == nil || envelope.Receipt.RequestID != request || envelope.Receipt.Operation != operation {
 		return evidenceUnavailable()
 	}
-	result, err := decode[domain.GraphAdvanceResult](encode(envelope.Data))
+	var result domain.GraphAdvanceResult
+	if operation == "checkpoints.resume" {
+		value, decodeErr := decode[struct {
+			Graph *domain.GraphAdvanceResult `json:"graph"`
+		}](encode(envelope.Data))
+		if decodeErr != nil || value.Graph == nil {
+			return evidenceUnavailable()
+		}
+		result = *value.Graph
+	} else {
+		result, err = decode[domain.GraphAdvanceResult](encode(envelope.Data))
+	}
 	if err != nil || result.Graph.ID != target.GraphID || len(result.Dispatches) > domain.MaxGraphNodes {
 		return evidenceUnavailable()
 	}
