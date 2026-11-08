@@ -6,6 +6,12 @@
 **Status**: Reviewed for implementation
 **Input**: Give programmers a useful, project-scoped view and local export of Council-generated structured history while excluding opaque content and preserving unrelated work.
 
+**Sequencing amendment (2026-11-08):** The original feature ordered full retention
+before 008. To continue independent work while the payload privacy clarification is
+pending, host integration 008 may precede the remaining retention slices. Complete
+evidence export, backup/verified restore and reviewed cleanup remain mandatory before
+release; this changes scheduling only, not 007a's accepted scope or evidence.
+
 ## Scope and meaning
 
 This slice provides a local, observational snapshot of a selected project's eligible

@@ -2,8 +2,12 @@
 
 Status: features 001–007 are implemented, independently reviewed and accepted for their
 documented offline scopes. Feature 007 qualified at `0a963e819ac684d03f5970e118f696eb39d0f497`
-in seven native and race jobs in run 42422741975. The required scoped-retention follow-up
-is split into consecutive slices before feature 008: metadata-only history first, then complete backup/restore and reviewed cleanup. Features 008–012 remain planned. The rebuild is incomplete.
+in seven native and race jobs in run 42422741975. Metadata-only history 007a is accepted
+for its explicitly incomplete scope at `1af4ea1`, with seven passing jobs in run 42434896240.
+Full scoped evidence export, useful production backup/restore and reviewed cleanup remain
+mandatory before release. Feature 008 is active while the payload privacy boundary for full
+backup awaits clarification; this reorders independent work without accepting or dropping
+retention requirements. Features 009–012 remain planned. The rebuild is incomplete.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -265,7 +269,11 @@ provide matching controls and evidence, with independent review and offline acce
 
 ### 007 follow-up — Scoped retention, backup and reviewed cleanup
 
-Active context: `specs/007a-metadata-history/`. The retention draft in `specs/007-scoped-retention/` remains the broader unfinished scope. First deliver an independently specified and accepted incomplete, read-only metadata history export and local inspection; it does not count as backup, restore, complete evidence, cleanup or completion of FR-042. After that slice, and before feature 008, specify and implement full scoped evidence export,
+Accepted context: `specs/007a-metadata-history/`; its incomplete read-only metadata history
+does not count as complete evidence export, backup, restore, cleanup or completion of FR-042.
+The broader `specs/007-scoped-retention/` remains unfinished. Its user-content privacy
+boundary is awaiting clarification; to continue independent work, feature 008 is scheduled
+next. Before release, complete full scoped evidence export,
 project-state backup/restore and artifact cleanup. This follow-up is required, not deferred from
 the release. Its design must provide an actually useful production recovery path while honoring the
 credential exclusion, not claim that fixture-only provenance solves real backup. Restoring a
@@ -276,7 +284,7 @@ unrelated and subsequently modified artifacts.
 
 ### 008 — MCP and host integration with interface parity
 
-Planned context: `specs/008-host-integration/`.
+Active context: `specs/008-host-integration/`.
 
 Expose the accepted project/task, routing, execution, waiting, full evidence and control semantics
 through MCP and documented host setup. All entrypoints use the same records and lifecycle; no

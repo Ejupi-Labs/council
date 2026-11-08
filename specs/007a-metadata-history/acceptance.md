@@ -136,3 +136,11 @@ not qualify that unexecuted mount scenario or live provider behavior.
 The separately required evidence export, useful production backup and verified
 restore, and reviewed cleanup remain mandatory consecutive work. No live
 provider qualification or first-release completion is claimed here.
+
+## Sequencing amendment
+
+After this slice was accepted, independent feature 008 was scheduled before the
+remaining retention work while the user-content privacy boundary awaits clarification.
+Full evidence export, useful backup/verified restore and reviewed cleanup remain
+mandatory release gates. This scheduling amendment changes neither the accepted
+007a scope nor the recorded evidence.

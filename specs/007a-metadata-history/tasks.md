@@ -2,7 +2,7 @@
 
 **Feature context**: `specs/007a-metadata-history/`; physical Git branch: `refactor`.
 **Input**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/operations.md` and `quickstart.md` in this directory.
-**Scope**: Project-scoped, incomplete, non-authoritative Council-generated metadata snapshot, local inspection and explicit private-root export. No archive intake, opaque evidence, backup/restore, reviewed cleanup, model calls or live-provider qualification. Full retention remains mandatory before feature 008.
+**Scope**: Project-scoped, incomplete, non-authoritative Council-generated metadata snapshot, local inspection and explicit private-root export. No archive intake, opaque evidence, backup/restore, reviewed cleanup, model calls or live-provider qualification. Full retention remains mandatory before release; the sequencing amendment allows independent 008 first.
 
 ## Phase 1: Setup and design gates
 
@@ -70,7 +70,7 @@
 - [X] T035 Obtain independent review of source and `specs/007a-metadata-history/` against MH-001–015/SC-001–006, specifically field provenance, project isolation, native root/create safety, lifecycle, journal/no-effect proof, UI/CLI and credential boundary; correct and rerun all blocking findings in their owned files.
 - [X] T036 Run `npm run build`, complete `npm test` and `npm run check`, plus appropriate focused owner/Store/native and actual rendered UI tests; commit generated `internal/webui/dist/` with authored sources and record commands/results in `specs/007a-metadata-history/acceptance.md`.
 - [X] T037 Record requirements-to-test traceability, actual platform limitations, independent-review disposition, user-data/credential boundaries, historical failures and unperformed live-provider scope in `specs/007a-metadata-history/acceptance.md`; do not claim full evidence backup, restore, cleanup or release completion.
-- [X] T038 Commit and push the reviewed exact product/test source on `refactor`, obtain actual passing six native plus Linux race hosted results, then commit and push the documentation-only acceptance follow-up in `specs/007a-metadata-history/acceptance.md` before activating the next mandatory retention slice.
+- [X] T038 Commit and push the reviewed exact product/test source on `refactor`, obtain actual passing six native plus Linux race hosted results, then commit and push the documentation-only acceptance follow-up in `specs/007a-metadata-history/acceptance.md` before activating the next independent feature (sequencing amendment: 008 may precede the remaining mandatory retention slices).
 
 ## Dependencies and explicit file ownership
 
