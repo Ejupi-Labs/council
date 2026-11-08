@@ -62,11 +62,15 @@ func TestHistoryPublisherUnsupportedSyncNeverClaimsDurability(t *testing.T) {
 		}
 		return nil
 	}
-	result, err := root.Publish(context.Background(), preview, []byte("captured"), func(context.Context) error { return nil })
-	if !errors.Is(err, ErrUnsupported) || !result.PermitAccepted || !result.Created || !result.FileFlushed || !result.NameVerified || result.DirectorySync != "unknown" {
+	permits := 0
+	result, err := root.Publish(context.Background(), preview, []byte("captured"), func(context.Context) error { permits++; return nil })
+	if !errors.Is(err, ErrUnsupported) || permits != 1 || !result.PermitAccepted || !result.CreateAttempted || !result.Created || result.BytesWritten != len("captured") || !result.FileFlushed || result.FileIdentity == "" || result.DirectorySync != "unknown" {
 		t.Fatalf("unsupported sync was reported as complete: %+v %v", result, err)
 	}
 	if got, err := os.ReadFile(filepath.Join(path, preview.Name)); err != nil || string(got) != "captured" {
 		t.Fatalf("uncertain file not retained: %q %v", got, err)
+	}
+	if _, err = root.Preview(preview.Name); !errors.Is(err, ErrConflict) {
+		t.Fatalf("uncertain target became replaceable: %v", err)
 	}
 }
