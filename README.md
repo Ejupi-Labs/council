@@ -22,10 +22,11 @@ and the remaining host, harness and release work follow in the
 [delivery plan](docs/refactor/delivery-plan.md). Native provider qualification requires a separate
 explicitly requested live task and remains unperformed.
 
-The development preview also includes project-scoped metadata history capture, inspection and
-local export. It is **incomplete observational history**, not a backup, evidence export, restore
-or proof of acceptance. It excludes task content, files, provider output and vendor authentication.
-See the [metadata history guide](docs/refactor/metadata-history-guide.md) for CLI commands, private
+Feature 007a, project-scoped metadata history capture, inspection and local export, is accepted for
+its documented offline scope at product revision `1af4ea1`. It is **incomplete observational
+history**, not a backup, evidence export, restore or proof of acceptance. It excludes task content,
+files, provider output and vendor authentication. The [acceptance record](specs/007a-metadata-history/acceptance.md)
+and [metadata history guide](docs/refactor/metadata-history-guide.md) describe the evidence, private
 output location, exact retry and interrupted-publication limits. Full evidence export, backup,
 verified restore and reviewed cleanup remain separate required work.
 
