@@ -209,7 +209,9 @@ claim of evidence backup, restore or cleanup is authorized.
 | `council_history_operation_get` | `history.operations.get` | GET `/history/operations/:operationId` | `operationId` |
 | `council_history_reconcile` | `history.operations.reconcile` | POST `/history/operations/:operationId/reconciliations` | `operationId`, `input ReconcileHistoryOperationInput` |
 
-## Audit and implementation blockers
+## Design-time audit and implementation blockers
+
+At design time these checks were still required; the later implementation and acceptance evidence is recorded in acceptance.md.
 
 - This draft enumerates all current fixed application routes in the source
   files named above. The SDK catalog and exact schemas are not implemented or

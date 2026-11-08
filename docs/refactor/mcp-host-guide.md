@@ -1,8 +1,8 @@
 # Connect an MCP host
 
-Feature 008 is under development and has not completed its acceptance gate.
-The commands below describe the current local interface; consult its acceptance
-record before relying on it for production work.
+Feature 008 is accepted for its documented offline scope. The
+[acceptance record](../../specs/008-host-integration/acceptance.md) lists
+qualification limits, including the unresolved CI metadata discrepancy.
 
 Council exposes a local stdio MCP server using the same persistent owner as the
 UI and CLI. Run the native executable directly with the single argument `mcp`.
@@ -32,7 +32,7 @@ any particular editor or provider host has been qualified.
 
 | Host or protocol | Current evidence |
 | --- | --- |
-| MCP stdio `2025-06-18`, `2025-11-25` | Offline SDK and raw-protocol fixtures; full feature acceptance is pending. |
+| MCP stdio `2025-06-18`, `2025-11-25` | Accepted offline SDK and raw-protocol fixture scope; live host qualification remains separate. |
 | Default Go MCP SDK 1.8.0 client | Offline fallback and stdio setup tested. |
 | Specific editor/provider host | Not yet qualified; check that host's own setup documentation. |
 

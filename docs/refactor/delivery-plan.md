@@ -5,9 +5,9 @@ documented offline scopes. Feature 007 qualified at `0a963e819ac684d03f5970e118f
 in seven native and race jobs in run 42422741975. Metadata-only history 007a is accepted
 for its explicitly incomplete scope at `1af4ea1`, with seven passing jobs in run 42434896240.
 Full scoped evidence export, useful production backup/restore and reviewed cleanup remain
-mandatory before release. Feature 008 is active while the payload privacy boundary for full
+mandatory before release. Feature 008 is accepted in its documented offline scope while the payload privacy boundary for full
 backup awaits clarification; this reorders independent work without accepting or dropping
-retention requirements. Features 009–012 remain planned. The rebuild is incomplete.
+retention requirements. Its Darwin AMD64 job metadata discrepancy and the prior unexplained Linux ARM64 fixture failure remain recorded for release qualification. Features 009–012 remain planned. The rebuild is incomplete.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -284,7 +284,7 @@ unrelated and subsequently modified artifacts.
 
 ### 008 — MCP and host integration with interface parity
 
-Active context: `specs/008-host-integration/`.
+Accepted offline context: `specs/008-host-integration/`; see its acceptance record for exact-source evidence and limits.
 
 Expose the accepted project/task, routing, execution, waiting, full evidence and control semantics
 through MCP and documented host setup. All entrypoints use the same records and lifecycle; no

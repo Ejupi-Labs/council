@@ -49,3 +49,8 @@ Explicit ownership is assigned in tasks; shared entrypoint and owner/CLI files a
 ## Acceptance and Release Gate
 
 Independent review must trace every exposed tool to a real accepted operation, exact request/response/limit and negative tests, including older-owner Stop, authorization, protocol version mismatch, malformed/duplicate requests, owner startup, transport loss, multiple clients, byte reconstruction, exact replay, cancellation versus Stop, graph/recovery and current incomplete-history limits. The full local developer commands and exact-source native/race CI must pass; skipped platforms or limitations are recorded, not inferred. The separate full-retention and remaining harness work remain mandatory before release or replacement of `main`.
+
+
+### Observed CI metadata exception
+
+The original gate expected each hosted job to expose an individual completed successful conclusion. Exact-source run 42454538785 reports completed/success overall, and Darwin AMD64 exposes 15 completed successful steps and a corroborating complete log, but its individual job/check conclusion is absent and its status remains in_progress. Independent review accepted this narrow combination as equivalent evidence that the native checks executed successfully, while recording the metadata discrepancy without claiming an individual job conclusion. Feature 012 must recheck that metadata as part of final release qualification. All other job conclusions are individually successful; the Linux namespace test skip and the unexplained prior shared-account fixture failure remain explicit limitations.

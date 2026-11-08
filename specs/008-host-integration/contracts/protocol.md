@@ -1,7 +1,7 @@
 # MCP Stdio Protocol Contract
 
-**Status: design contract for feature 008; implementation and qualification are
-pending.** This contract describes the protocol boundary for `council mcp`; the
+**Status: design contract for feature 008; its specified offline implementation
+is accepted with the limits in the acceptance record.** This contract describes the protocol boundary for `council mcp`; the
 companion catalog contract must enumerate each concrete tool, owner operation,
 complete argument schema and result mapping. It introduces no separate engine,
 direct database access, public MCP listener, remote tenancy or new authority.

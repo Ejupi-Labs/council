@@ -1,6 +1,6 @@
 # Council rebuild requirements traceability
 
-Status: features 001–007 and metadata-history slice 007a are accepted in their specified offline scopes; feature 008 is in progress. Foundation qualified on all six native targets at `93c8c25`;
+Status: features 001–007 and metadata-history slice 007a are accepted in their specified offline scopes; feature 008 is accepted in its documented offline scope. Foundation qualified on all six native targets at `93c8c25`;
 managed Codex execution qualified on six targets plus Linux AMD64 race at `f5edd96` in run 42140818152.
 Claude interoperability qualified on all seven jobs at `ce8aaa7` in
 [run 42153455521](https://github.com/Ejupi-Labs/council/actions/runs/42153455521).
@@ -36,7 +36,7 @@ Feature006 specification/design/tasks were committed before implementation under
 Its [review](../../specs/006-task-graphs/review.md) and
 [evidence matrix](../../specs/006-task-graphs/evidence-matrix.md) record bounded actual offline
 checks, independent findings and corrections, visual/client/package checks, local commands and
-seven matching-source native/race jobs. The [007 acceptance record](../../specs/007-recovery-and-retention/acceptance.md) covers offline pause, checkpoint, explicit resume and reconciliation. The [007a acceptance record](../../specs/007a-metadata-history/acceptance.md) covers incomplete metadata-only history; it is not complete evidence export, backup, restore or cleanup. Full scoped retention remains required before release. Feature 008 is in progress and 009–012 remain planned. A path or a focused pass alone is not feature acceptance.
+seven matching-source native/race jobs. The [007 acceptance record](../../specs/007-recovery-and-retention/acceptance.md) covers offline pause, checkpoint, explicit resume and reconciliation. The [007a acceptance record](../../specs/007a-metadata-history/acceptance.md) covers incomplete metadata-only history; it is not complete evidence export, backup, restore or cleanup. Full scoped retention remains required before release. Feature 008 is accepted for its documented offline scope, subject to the recorded CI metadata exception; 009–012 remain planned. A path or a focused pass alone is not feature acceptance.
 The feature's `spec.md`, `plan.md` and `tasks.md` must trace the same FRs before implementation.
 Its `review.md` must record independent inspection, blocking findings, corrections and affected
 rechecks. Only the active feature receives those detailed artifacts. No future feature directory,
@@ -97,10 +97,10 @@ single status cannot hide an unmet claim.
 | FR-042 | Export evidence, back up/restore state and clean reviewed artifacts with explicit scope | 007 follow-up | 001, 002, 007a, 012 | `specs/007a-metadata-history/acceptance.md#requirement-to-evidence-map`; `specs/007-scoped-retention/` | PARTIAL — 007a provides incomplete metadata-only history and explicit local export; full scoped evidence export, useful production backup/verified restore and reviewed cleanup remain mandatory and unaccepted |
 | FR-043 | Prioritize composer/Auto and use exact approved Ejupi Labs assets and icons in rendered UI | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — foundation through005 composer/workflow/evidence views and approved assets accepted; future feature views remain planned |
 | FR-044 | Write concise actionable English UI/docs/guidance and verify actual accessible interface states | 001 | 002–012 | `specs/001-workspace-foundation/acceptance.md#brand-and-accessible-flow` | PARTIAL — foundation through005 English/keyboard/errors/360px/render scope accepted, including44 inspected005 captures; future feature views remain planned |
-| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#requirement-evidence-and-bounds` | PARTIAL — UI/CLI execution, waits, controls and evidence accepted; routing accepted at3f4a18e; MCP implementation and its acceptance are in progress |
+| FR-045 | Share project/task/routing/execution/wait/evidence/control semantics across UI, CLI and MCP | 008 | 001–007, 009–012 | `specs/008-host-integration/acceptance.md#requirement-evidence-and-bounds` | IMPLEMENTED — offline shared MCP/CLI/UI scope accepted at 8d1bc3a with the documented CI metadata exception and unqualified live hosts |
 | FR-046 | Handle stale reads, lost acknowledgements and repeats without duplicate work or erased UI state | 002 | 001, 006, 007, 008, 012 | `specs/002-managed-execution/acceptance.md#original-instructions-and-guidance` | IMPLEMENTED — task/draft/control/acceptance replay and stale clients accepted on six targets at f5edd96 |
 | FR-047 | Qualify full offline journeys/platforms and report actual authorized live adapter evidence separately | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#end-to-end-release-journey` | PARTIAL — foundation and native Codex fake journeys accepted on six targets; complete multi-adapter release remains planned |
-| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — 001–007 and 007a Specify/design/implementation/review/fix/offline acceptance gates closed for their documented scopes; full retention remains open, 008 is in progress and 009–012 remain planned |
+| FR-048 | Trace each Specify feature through design/tasks/implementation/independent review/fix/acceptance | 012 | 001–011 | `specs/012-release-qualification/acceptance.md#feature-delivery-gates` | PARTIAL — 001–007 and 007a Specify/design/implementation/review/fix/offline acceptance gates closed for their documented scopes; 008 is accepted with its documented metadata exception; full retention remains open and 009–012 remain planned |
 
 ## Per-feature review and fix gates
 
@@ -120,7 +120,7 @@ review policy. Slice 012 audits earlier gates; it cannot retroactively excuse a 
 | 007 | `specs/007-recovery-and-retention/` | `specs/007-recovery-and-retention/review.md` | ACCEPTED — specified offline recovery scope at 0a963e8, run 42422741975; full scoped retention remains open |
 | 007a | `specs/007a-metadata-history/` | `specs/007a-metadata-history/review.md` | ACCEPTED — incomplete metadata history only at 1af4ea1, run 42434896240; Linux isolated mount-replacement scenario skipped |
 | 007 follow-up | `specs/007-scoped-retention/` | `specs/007-scoped-retention/review.md` | OPEN — production payload eligibility unresolved; complete evidence export, backup/verified restore and reviewed cleanup required before release |
-| 008 | `specs/008-host-integration/` | `specs/008-host-integration/review.md` | IN PROGRESS — final local verification and exact-source hosted qualification remain open |
+| 008 | `specs/008-host-integration/` | `specs/008-host-integration/review.md` | ACCEPTED — specified offline scope at 8d1bc3a, run 42454538785; Darwin AMD64 job conclusion metadata remains inconsistent and must be rechecked in 012 |
 | 009 | `specs/009-acp-deepseek/` | `specs/009-acp-deepseek/review.md` | NOT IMPLEMENTED; gate open |
 | 010 | `specs/010-junie-adapter/` | `specs/010-junie-adapter/review.md` | NOT IMPLEMENTED; gate open |
 | 011 | `specs/011-antigravity-adapter/` | `specs/011-antigravity-adapter/review.md` | NOT IMPLEMENTED; gate open |

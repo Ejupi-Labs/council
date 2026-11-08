@@ -10,8 +10,8 @@ history does not satisfy them.
 
 **Decision:** use the official [MCP Go SDK v1.8.0](https://github.com/modelcontextprotocol/go-sdk/tree/v1.8.0)
 as the protocol implementation for Council's native binary and serve local MCP
-over stdio. The module is pinned; the host implementation and its acceptance
-are still pending. Stdio requires newline-delimited UTF-8 JSON-RPC on stdin and
+over stdio. The module is pinned; the implemented host is accepted for the
+offline scope and limitations recorded in acceptance.md. Stdio requires newline-delimited UTF-8 JSON-RPC on stdin and
 stdout. Reserve stdout exclusively for protocol messages and send bounded,
 non-sensitive diagnostics to stderr. The client-launched host process is a
 connection to the continuing Council owner, not another owner or scheduler.
@@ -136,9 +136,9 @@ and [SDK cancellation](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.
 `internal/app/Service.Execute` already dispatches shared workspace, execution,
 routing, workflow, graph, recovery and history operations. `internal/owner.Ensure`
 and the private loopback owner in `internal/cli/owner.go` enforce one persistent
-owner. Current CLI-specific forwarding, descriptor/version checks and exact
-intent retention live in `internal/cli/cli.go`, `metadata.go` and
-`graph_intents.go`; they are not yet a host client API. Introduce a narrow,
+owner. At design time, CLI-specific forwarding, descriptor/version checks and exact
+intent retention lived in `internal/cli/cli.go`, `metadata.go` and
+`graph_intents.go`; they were not yet a host client API. The plan introduced a narrow,
 shared internal owner-client seam rather than opening a second Store/Engine,
 calling UI endpoints from a new scheduler, or spawning a CLI process per tool.
 It must preserve authenticated loopback, exact owner capability checks, stale
