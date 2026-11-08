@@ -1,0 +1,11 @@
+# Quickstart and Acceptance: Project Metadata History
+
+These are acceptance journeys, not commands that already exist. Use disposable Council-owned test state and fake agents; do not open user state or vendor credentials.
+
+1. Create ordinary task and attempt metadata in two isolated projects. Capture only project A under the trusted local owner. Inspect the same immutable snapshot through UI and CLI. Assert the selected IDs and relationships occur once, project B and all excluded content are absent, outcome and graph dependencies are not invented, and the view says **incomplete history**.
+2. Confirm the scoped SQL selects only documented eligible columns, with sentinel excluded values never accessed by application code. Exercise empty projects, invalid references, exact 64-bit values, row/byte limits and coherent capture under concurrent mutations.
+3. Select a fresh supported filename in the displayed Council-private history-export directory. Preview its exact scope and immutable snapshot, publish, and compare its bounded versioned payload and integrity to the captured metadata. It is private data and not a backup, restore or evidence export.
+4. Confirm an existing name, unsafe filename/link, changed or unavailable root and invalid identity are refused without overwriting unrelated content. Keep every partially written object and report its operation incomplete or uncertain; never auto-remove it.
+5. Lose acknowledgements and interrupt before/after the durable publication permit and effect. Verify exact replay never creates a second output; an unpermitted frozen operation with the closed-world proof can be reconciled as no publication, while permit ambiguity, dirty-owner incidents and uncontrolled actors remain unresolved and fenced.
+6. Use the actual UI and CLI with the same owner; preserve newer selections and drafts on late replies. Check keyboard focus and readable controls at 360px. Count zero model invocations during snapshot, inspection, preview, export and retry.
+7. Run independent review and corrections, `npm run build`, `npm test`, `npm run check`, and six native plus race CI on the exact source. Commit built UI assets and record fake versus live scope. Full backup, restore and cleanup remain outstanding.

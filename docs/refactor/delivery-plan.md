@@ -3,7 +3,7 @@
 Status: features 001–007 are implemented, independently reviewed and accepted for their
 documented offline scopes. Feature 007 qualified at `0a963e819ac684d03f5970e118f696eb39d0f497`
 in seven native and race jobs in run 42422741975. The required scoped-retention follow-up
-is active before feature 008; features 008–012 remain planned. The rebuild is incomplete.
+is split into consecutive slices before feature 008: metadata-only history first, then complete backup/restore and reviewed cleanup. Features 008–012 remain planned. The rebuild is incomplete.
 See each active feature's acceptance/review records for observed evidence.
 
 ## Release boundary
@@ -265,7 +265,7 @@ provide matching controls and evidence, with independent review and offline acce
 
 ### 007 follow-up — Scoped retention, backup and reviewed cleanup
 
-Active context: `specs/007-scoped-retention/`. Before feature 008, specify and implement scoped evidence export,
+Active context: `specs/007a-metadata-history/`. The retention draft in `specs/007-scoped-retention/` remains the broader unfinished scope. First deliver an independently specified and accepted incomplete, read-only metadata history export and local inspection; it does not count as backup, restore, complete evidence, cleanup or completion of FR-042. After that slice, and before feature 008, specify and implement full scoped evidence export,
 project-state backup/restore and artifact cleanup. This follow-up is required, not deferred from
 the release. Its design must provide an actually useful production recovery path while honoring the
 credential exclusion, not claim that fixture-only provenance solves real backup. Restoring a
