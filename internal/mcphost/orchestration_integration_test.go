@@ -451,6 +451,7 @@ func TestMCPWorkflowAndDependentGraphAcrossCLI(t *testing.T) {
 	var first, second domain.Attempt
 	var firstNode, waitingNode domain.GraphNodeSummary
 	var workspaceIDs []string
+	var firstReadyAt time.Time
 	released := map[string]bool{}
 	t.Cleanup(func() {
 		for _, id := range workspaceIDs {
@@ -508,6 +509,7 @@ func TestMCPWorkflowAndDependentGraphAcrossCLI(t *testing.T) {
 				call("council_attempts_get", map[string]any{"id": *firstNode.LatestAttemptID}, &first)
 				if ready(first) {
 					workspaceIDs = append(workspaceIDs, *first.SourceSnapshotID)
+					firstReadyAt = time.Now()
 					break
 				}
 			}
@@ -520,9 +522,91 @@ func TestMCPWorkflowAndDependentGraphAcrossCLI(t *testing.T) {
 	waitObserved := false
 	until := time.Now().Add(350 * time.Millisecond)
 	for time.Now().Before(until) {
+		callStarted := time.Now()
 		call("council_graphs_get", map[string]any{"graphId": siblings.Graph.ID}, &siblingView)
+		callDuration := time.Since(callStarted)
 		if len(siblingView.ActiveClaims) != 1 || siblingView.ActiveClaims[0].AttemptID != first.ID || siblingView.Budget.Budget.ConsumedAdmissions != "1" {
-			t.Fatal("sibling was admitted while account was held")
+			elapsedReady := time.Since(firstReadyAt)
+			// Capture only controlled fixture state, without retrying the failed
+			// assertion or waiting for the graph to change. Bound diagnostics so
+			// an unavailable owner cannot hide the original failure.
+			diagnosticCtx, diagnosticCancel := context.WithTimeout(context.Background(), time.Second)
+			defer diagnosticCancel()
+			inspect := func(id string) (domain.Attempt, error) {
+				var attempt domain.Attempt
+				result, err := session.CallTool(diagnosticCtx, &mcp.CallToolParams{Name: "council_attempts_get", Arguments: map[string]any{"id": id}})
+				if err != nil {
+					return attempt, err
+				}
+				if result == nil {
+					return attempt, domain.Fail("diagnostic_unavailable", "Fixture diagnostic returned no result.")
+				}
+				raw, err := json.Marshal(result.StructuredContent)
+				if err != nil {
+					return attempt, err
+				}
+				var out response
+				if err = json.Unmarshal(raw, &out); err != nil {
+					return attempt, err
+				}
+				if out.Envelope.Error != nil {
+					return attempt, out.Envelope.Error
+				}
+				err = json.Unmarshal(out.Envelope.Data, &attempt)
+				return attempt, err
+			}
+			firstActual, firstErr := inspect(first.ID)
+			var secondActual domain.Attempt
+			var secondErr error
+			secondID := ""
+			for _, node := range siblingView.Nodes {
+				if node.ID == waitingNode.ID && node.LatestAttemptID != nil {
+					secondID = *node.LatestAttemptID
+				}
+			}
+			if secondID == "" {
+				for _, claim := range siblingView.ActiveClaims {
+					if claim.AttemptID != first.ID {
+						secondID = claim.AttemptID
+					}
+				}
+			}
+			if secondID != "" {
+				secondActual, secondErr = inspect(secondID)
+			}
+			markers := func(id *string) map[string]string {
+				states := map[string]string{}
+				if id == nil || !domain.ValidID(*id) {
+					return states
+				}
+				for _, name := range []string{fixture.GraphReadyFile, fixture.GraphReleaseFile} {
+					body, err := os.ReadFile(filepath.Join(root, "workspaces", *id, name))
+					switch {
+					case os.IsNotExist(err):
+						states[name] = "absent"
+					case err != nil:
+						states[name] = "unreadable"
+					case bytes.Equal(body, []byte("ready\n")), bytes.Equal(body, []byte("release\n")):
+						states[name] = "expected"
+					default:
+						states[name] = "unexpected contents"
+					}
+				}
+				return states
+			}
+			errorText := func(err error) string {
+				if err != nil {
+					return err.Error()
+				}
+				return ""
+			}
+			diagnostic, diagnosticErr := json.Marshal(map[string]any{
+				"sinceFirstVerifiedReady": elapsedReady.String(), "lastMCPCallDuration": callDuration.String(),
+				"graphAtFailure": siblingView, "firstBefore": first, "firstActualAfterFailure": firstActual,
+				"firstError": errorText(firstErr), "firstMarkersAfterFailure": markers(first.SourceSnapshotID),
+				"secondActualAfterFailure": secondActual, "secondError": errorText(secondErr), "secondMarkersAfterFailure": markers(secondActual.SourceSnapshotID),
+			})
+			t.Fatalf("shared-account claim changed before controlled release: diagnostics=%s marshalError=%v", diagnostic, diagnosticErr)
 		}
 		for _, blocker := range siblingView.Blockers {
 			if blocker.NodeID != nil && *blocker.NodeID == waitingNode.ID && (blocker.Code == "capacity_wait" || blocker.Code == "attempt_active") {

@@ -1,17 +1,17 @@
 # 008 MCP Host Integration — Acceptance Draft
 
-**Status: DRAFT — NOT ACCEPTED.** This is a provisional traceability record. The first local checks passed with the mixed test-source provenance described below. Subsequent protocol and Unix fixture corrections require a fresh complete run and exact committed-source hosted qualification before delivery. The last observed repository base was `f2026a64301dfe8da8695910ba447836a0b972c4` with substantial uncommitted feature changes; this hash alone does not identify the candidate. Replace all placeholders with independently verified results before acceptance.
+**Status: DRAFT — NOT ACCEPTED.** This is a provisional traceability record. The first local checks passed with the mixed test-source provenance described below. Subsequent protocol and Unix fixture corrections passed the complete local run; the later graph test-only change passed a focused rerun. Exact committed-source hosted qualification remains required before delivery. The last observed repository base was `f2026a64301dfe8da8695910ba447836a0b972c4` with substantial uncommitted feature changes; this hash alone does not identify the candidate. Replace all placeholders with independently verified results before acceptance.
 
-- Exact committed product/test source: **PENDING**.
-- `npm run build`: **PENDING on the corrected final product source**; the previous product source passed.
-- `npm test`: **PENDING corrected-source result**. A previous product-source run passed, including 97/97 browser and 3/3 script/package tests. An intermediate run failed reconnection while transport files were changing; corrected fixtures passed focused tests. Exact-source full and hosted results remain required.
-- `npm run check`: **PENDING on the corrected final product source**; the previous product source and notice check passed.
+- Exact corrected candidate product/test source: **PENDING**; prior candidate `bb6773278fad39c02d451fe2dcfc03e927d5e46a` failed Linux ARM64, as described below.
+- `npm run build`: **PASS** on the corrected product source, as part of the complete local run; generated browser assets were unchanged.
+- `npm test`: **PASS** on Windows ARM64 on the corrected product source: all 26 engine batches, 97/97 browser tests and 3/3 script/package tests passed. The graph test changed after its engine batch; its final version passed a separate focused rerun, as recorded below. Exact committed-source hosted results remain required.
+- `npm run check`: **PASS** on the corrected product and test source. The notice inventory check passed.
 - Hosted run and exact commit: **PENDING**; six native jobs and Linux race must all be reported individually, including skips and failures.
 - Documentation-only acceptance follow-up commit/push: **PENDING**.
 
 ## Requirement evidence and bounds
 
-The evidence below names implementation and observed focused offline fixture coverage. Prior local and focused results are recorded below. Corrected-source full verification and exact-head hosted qualification remain gates. Tests use disposable local state and fake agents; no vendor credentials were inspected.
+The evidence below names implementation and observed focused offline fixture coverage. Prior local and focused results are recorded below. The corrected-product full run and separately rerun final graph test are recorded below; exact-head hosted qualification remains a gate. Tests use disposable local state and fake agents; no vendor credentials were inspected.
 
 | Requirement | Implementation and focused evidence | Scope and limits |
 | --- | --- | --- |
@@ -56,8 +56,14 @@ Full scoped evidence export, production backup, verified restore and reviewed cl
 
 ## Post-push corrections pending exact-source qualification
 
-Preliminary hosted run [42448475324](https://github.com/Ejupi-Labs/council/actions/runs/42448475324) tested `6f38e14728125c6f95474d591db1a2915d681d40` and was not a passing qualification. The Unix jobs exposed a missing test-process guardian entrypoint and a read-only Go module cache created under a disposable fixture home; macOS ARM64 also exposed a reconnect-fixture close race. Those test-only fixture corrections and the SDK protocol corrections in `review.md` require full requalification on the corrected source. The namespace-isolated Linux scenario remains skipped when the runner denies unshare.
+Preliminary hosted run [42448475324](https://github.com/Ejupi-Labs/council/actions/runs/42448475324) tested `6f38e14728125c6f95474d591db1a2915d681d40` and was not a passing qualification. The Unix jobs exposed a missing test-process guardian entrypoint and a read-only Go module cache created under a disposable fixture home; macOS ARM64 also exposed a reconnect-fixture close race. Those test-only fixture corrections and the SDK protocol corrections in `review.md` passed corrected-product local verification; exact committed-source hosted qualification remains required. The namespace-isolated Linux scenario remains skipped when the runner denies unshare.
 
 The transport preserves string and integral numeric IDs without SDK floating-point rounding and translates cancellation IDs in the corresponding direction. A nonzero numeric ID whose normalized exponent text, including a negative sign, exceeds 20 characters is rejected as an invalid frame; hosts can use string IDs for unusually large values. This bound is an explicit interoperability limitation.
 
-The later candidate [42450778981](https://github.com/Ejupi-Labs/council/actions/runs/42450778981), `d8374f9f60df0fda265d117eac6c8dd7ec638296`, failed a Windows ARM64 graph readiness fixture before Stop; its follow-up bounded two-phase fixture change is described in `review.md`. The currently running local suite began before this test-only change, so the changed case must be rerun and the next exact committed source qualified in hosted CI.
+The later candidate [42450778981](https://github.com/Ejupi-Labs/council/actions/runs/42450778981), `d8374f9f60df0fda265d117eac6c8dd7ec638296`, failed a Windows ARM64 graph readiness fixture before Stop; its follow-up bounded two-phase fixture change is described in `review.md`. The currently running local suite began before this test-only change, so the changed case passed a separate rerun; the exact committed source must be qualified in hosted CI.
+
+## Corrected candidate local verification
+
+The complete `npm test` exited 0 on Windows ARM64 with the corrected product source, 26/26 engine batches, 97/97 browser tests and 3/3 packaging/script tests. The complete run had already executed the graph-control engine batch when the test-only two-phase readiness change was made; the final version of that one test was separately rerun with `go test -p 1 ./internal/engine -run '^TestGraphNodeStopCancelsLiveBranchAndBlocksWaitingFollowerWhileIndependentSiblingFinishes$' -count=1 -v` and passed in 9.098 seconds. `npm run check` and the notice check passed. This is mixed test-source provenance, not one run of all final test files; hosted CI must qualify the complete exact candidate.
+
+Candidate [42452268832](https://github.com/Ejupi-Labs/council/actions/runs/42452268832) at `bb6773278fad39c02d451fe2dcfc03e927d5e46a` failed Linux ARM64 in the shared-account orchestration fixture. Its original failure text did not distinguish an overlapping admission from expiration or settlement of the first fake worker. A failure-only diagnostic records the captured claims, budgets, attempts and elapsed time without changing the assertion. The finalized diagnostic variant passed three consecutive Windows ARM64 local runs in 89.450 seconds. Root cause and exact-source hosted qualification remain open.
