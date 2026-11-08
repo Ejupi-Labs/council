@@ -36,7 +36,7 @@ const help = `Council — managed local workspace
 Commands support --json and --api-version 1. Lists accept --limit N and --cursor CURSOR.
 Mutations accept --request-id ID for exact retries. Draft update accepts --use-current-policy.
 Private state: <user-home>/.council/v2/. Draft saving and explicit execution are separate.
-` + executionHelp + routingHelp + workflowHelp + graphHelp + recoveryHelp
+` + executionHelp + routingHelp + workflowHelp + graphHelp + recoveryHelp + historyHelp
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (exit int) {
 	if handled, code := fixture.HandleWorkflowInternal(args); handled {
@@ -81,7 +81,11 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				e = errors.New("incompatible owner")
 			}
 		} else {
-			desc, e = owner.Ensure(ctx, root, verifyExecutionOwner)
+			verify := verifyExecutionOwner
+			if strings.HasPrefix(c.op, "history.") {
+				verify = verifyHistoryOwner
+			}
+			desc, e = owner.Ensure(ctx, root, verify)
 		}
 		if e != nil {
 			return emit(stdout, stderr, c.json, ownerFailure(c.requestID))
@@ -94,7 +98,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}
 		var result domain.Result
-		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op)) && c.method == "POST" {
+		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op) || historyMutation(c.op)) && c.method == "POST" {
 			result = forwardGraphIntent(ctx, root, desc, c)
 		} else {
 			result = forward(ctx, desc, c)
@@ -125,7 +129,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}
 		var result domain.Result
-		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op)) && c.method == "POST" {
+		if (strings.HasPrefix(c.op, "graphs.") || recoveryMutation(c.op) || historyMutation(c.op)) && c.method == "POST" {
 			result = forwardGraphIntent(ctx, root, desc, c)
 		} else {
 			result = forward(ctx, desc, c)
@@ -174,6 +178,11 @@ func client() *http.Client {
 func verifyOwner(ctx context.Context, desc localstate.Descriptor) bool {
 	metadata, ok := readOwnerMetadata(ctx, desc)
 	return ok && ((metadata.Scope == "workspace_foundation" && metadata.ManagedExecution == "not_implemented" && (metadata.AppVersion == domain.AppVersion || metadata.AppVersion == "2.0.0-dev")) || executionMetadata(metadata))
+}
+
+func verifyHistoryOwner(ctx context.Context, desc localstate.Descriptor) bool {
+	metadata, ok := readOwnerMetadata(ctx, desc)
+	return ok && executionMetadata(metadata) && metadata.HistoryContract == "007a-v1" && hasCapability(metadata, "metadata_history")
 }
 
 func verifyExecutionOwner(ctx context.Context, desc localstate.Descriptor) bool {

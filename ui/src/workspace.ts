@@ -4,6 +4,7 @@ import { DraftsView } from './drafts.js';
 import { RoutingView } from './routing.js';
 import { WorkflowView } from './workflow.js';
 import { GraphsView } from './graphs.js';
+import { HistoryView } from './history.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, verifyOwner, writeSession } from './api.js';
 import type { Page, Policy, Project, ProjectDetail, ProjectOpen } from './types.js';
 
@@ -29,6 +30,7 @@ class Workspace {
   private readonly workflow = new WorkflowView();
   private readonly tasks = new TasksView(this.drafts, this.routing, this.workflow);
   private readonly graphs = new GraphsView();
+  private readonly history = new HistoryView();
   private readonly agents = new AgentsView(id => this.tasks.selectHarness(id), capabilities => this.tasks.setCapabilities(capabilities));
   private readonly path = element<HTMLInputElement>('project-path');
   private readonly projectSelect = element<HTMLSelectElement>('project-select');
@@ -99,7 +101,7 @@ class Workspace {
 
   private async connect(): Promise<void> {
     const generation = ++this.connectionGeneration;
-    this.routing.setReady(false); this.workflow.setReady(false); this.graphs.disconnect();
+    this.routing.setReady(false); this.workflow.setReady(false); this.graphs.disconnect(); this.history.disconnect();
     feedback('app-status', 'Verifying access to the local owner…');
     element<HTMLButtonElement>('reconnect').disabled = true;
     try {
@@ -108,13 +110,13 @@ class Workspace {
       this.ready = true;
       this.updateControls();
       this.routing.setReady(supportsManagedExecution(meta)); this.workflow.setReady(supportsManagedExecution(meta));
-      this.tasks.setOwner(meta); this.graphs.setOwner(meta);
+      this.tasks.setOwner(meta); this.graphs.setOwner(meta); this.history.setOwner(meta);
       feedback('app-status', supportsManagedExecution(meta) ? 'Connected to the local workspace. Auto uses finite verified workflows. Up to two managed workers can run; context, account and task limits may reduce concurrency.' : 'Connected to the local workspace. This owner does not support managed execution.');
       // Recovery never replays a cached mutation automatically; each retry remains explicit.
       await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh(), this.routing.refresh(), this.workflow.refreshPreference()]);
     } catch (error) {
       if (generation !== this.connectionGeneration) return;
-      this.ready = false; this.routing.setReady(false); this.workflow.setReady(false); this.tasks.disconnect(); this.graphs.disconnect(); this.updateControls();
+      this.ready = false; this.routing.setReady(false); this.workflow.setReady(false); this.tasks.disconnect(); this.graphs.disconnect(); this.history.disconnect(); this.updateControls();
       feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');
     } finally {
       if (generation === this.connectionGeneration) {
@@ -173,7 +175,7 @@ class Workspace {
     this.selectedId = id;
     this.projectSelect.value = id;
     writeSession('selectedProject', id);
-    this.drafts.setProject(id); this.tasks.setProject(id); this.graphs.setProject(id);
+    this.drafts.setProject(id); this.tasks.setProject(id); this.graphs.setProject(id); this.history.setProject(id);
     const project = this.projects.get(id);
     if (project) this.renderProject({ project, observation: null });
     void this.loadProject(id);
@@ -231,7 +233,7 @@ class Workspace {
       if (selectionGeneration === this.selectionGeneration && this.path.value === pending.body.selectedPath) {
         this.selectionGeneration++; this.detailGeneration++;
         this.selectedId = data.project.id; writeSession('selectedProject', data.project.id);
-        this.drafts.setProject(data.project.id); this.tasks.setProject(data.project.id); this.graphs.setProject(data.project.id); this.renderProjects(); this.renderProject(data);
+        this.drafts.setProject(data.project.id); this.tasks.setProject(data.project.id); this.graphs.setProject(data.project.id); this.history.setProject(data.project.id); this.renderProjects(); this.renderProject(data);
         feedback('project-status', 'Project opened. Existing files, staging and branch are unchanged.', 'success');
       } else feedback('project-status', 'Project opened and retained. Your newer selection or folder input has been kept.', 'success');
     } catch (error) {

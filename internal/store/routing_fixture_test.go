@@ -187,8 +187,8 @@ func cleanSyntheticBrowserEpoch(t *testing.T, path string, old *sql.DB, ids rout
 		t.Fatal("actual legacy migration failed", err)
 	}
 	defer s.Close()
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
-		t.Fatal("the real legacy migration did not reach schema7", version, err)
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatal("the real legacy migration did not reach current schema", version, err)
 	}
 	if after := unaffectedRows(t, s.db); !reflect.DeepEqual(before, after) {
 		t.Fatal("the real migration changed historical fixture records")

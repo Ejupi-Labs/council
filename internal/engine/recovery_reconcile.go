@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Ejupi-Labs/council/v2/internal/domain"
 	"github.com/Ejupi-Labs/council/v2/internal/evidence"
@@ -26,6 +27,41 @@ func (e *Engine) ReconcileIncident(ctx context.Context, id string, in domain.Rec
 		return e.failure(in.RequestID, err)
 	} else if previous != nil {
 		return *previous
+	}
+
+	// History receipt incidents use their own typed binding and the same
+	// synchronous publisher barrier. Non-history incidents keep the original
+	// recovery path and never inherit history authority.
+	e.historyMu.Lock()
+	e.control.Lock()
+	historyResult, handled := e.db.TryReconcileHistoryIncident(ctx, e.config.OwnerInstanceID, id, in, !e.fenceUncertain)
+	if handled {
+		if historyResult.Envelope.Error != nil && persistenceFault(historyResult.Envelope.Error) {
+			verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			saved, verifyErr := e.db.VerifyHistoryIncidentReconciliationReceipt(verifyCtx, e.config.OwnerInstanceID, id, in)
+			if verifyErr != nil {
+				e.preserveUnrecordedHistoryFenceLocked()
+			} else if saved != nil {
+				historyResult = *saved
+			} else if gate, gateErr := e.db.Gate(verifyCtx); gateErr != nil || gate.State != "fenced" {
+				// A missing receipt is safe only while the original incident
+				// is still durably fenced and eligible for an exact retry.
+				e.preserveUnrecordedHistoryFenceLocked()
+			} else {
+				e.fenced = true
+			}
+			cancel()
+		}
+		if historyResult.Envelope.Error == nil && !e.fenceUncertain {
+			if gate, gateErr := e.db.Gate(context.Background()); gateErr == nil && gate.State == "open" {
+				e.fenced = false
+			}
+		}
+	}
+	e.control.Unlock()
+	e.historyMu.Unlock()
+	if handled {
+		return historyResult
 	}
 
 	e.prepareGate.Lock()

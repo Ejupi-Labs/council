@@ -73,7 +73,7 @@ func Acquire(root string) (*Lock, error) {
 	if err := securePrivate(root, true); err != nil {
 		return nil, fmt.Errorf("Cannot protect Council's v2 directory: %w", err)
 	}
-	file, err := openPrivate(filepath.Join(root, "owner.lock"))
+	file, err := openPrivate(filepath.Join(root, ownerLockName))
 	if err != nil {
 		return nil, errors.New("Cannot open Council's private owner lock.")
 	}
@@ -153,7 +153,7 @@ func openPrivate(path string) (*os.File, error) {
 }
 
 func (l *Lock) Root() string         { return l.root }
-func (l *Lock) DatabasePath() string { return filepath.Join(l.root, "workspace.sqlite3") }
+func (l *Lock) DatabasePath() string { return filepath.Join(l.root, databaseName) }
 func (l *Lock) CheckHeld() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -214,7 +214,7 @@ func ReadDescriptor(root string) (Descriptor, error) {
 	if err := verifyPrivate(root, true); err != nil {
 		return d, errors.New("Council's v2 directory is not private.")
 	}
-	path := filepath.Join(root, "owner.json")
+	path := filepath.Join(root, ownerDescriptorName)
 	if err := verifyPrivate(path, false); err != nil {
 		return d, err
 	}
@@ -262,7 +262,7 @@ func (l *Lock) WriteDescriptor(d Descriptor) error {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return err
 	}
-	path := filepath.Join(l.root, "owner-"+hex.EncodeToString(suffix[:])+".tmp")
+	path := filepath.Join(l.root, ownerTemporaryPrefix+hex.EncodeToString(suffix[:])+".tmp")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -283,7 +283,7 @@ func (l *Lock) WriteDescriptor(d Descriptor) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := atomicReplace(path, filepath.Join(l.root, "owner.json")); err != nil {
+	if err := atomicReplace(path, filepath.Join(l.root, ownerDescriptorName)); err != nil {
 		return errors.New("Cannot publish owner descriptor.")
 	}
 	return syncDirectory(l.root)
@@ -306,7 +306,7 @@ func (l *Lock) RemoveOwnDescriptor(instance string) error {
 	if d.OwnerInstanceID != instance {
 		return nil
 	}
-	if err := os.Remove(filepath.Join(l.root, "owner.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(l.root, ownerDescriptorName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return syncDirectory(l.root)

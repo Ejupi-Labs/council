@@ -200,5 +200,12 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: .85rem; }
 .workflow-panel .routing-evidence-list p { overflow-wrap: anywhere; }
 .delivery-preferences { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; max-width: 700px; }
 .delivery-preferences > summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; color: var(--lilac); }
+.history-panel { margin-block: 24px; min-width: 0; overflow-wrap: anywhere; }
+.history-panel > summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: var(--lilac); font-weight: 600; }
+.history-panel form, .history-panel section { margin-top: 20px; min-width: 0; }
+.history-panel label { display: block; margin-bottom: 8px; }
+.history-panel input { min-width: 0; max-width: 100%; }
+.history-panel dd, .history-panel li { overflow-wrap: anywhere; }
+@media (max-width: 560px) { .history-panel .facts { grid-template-columns: minmax(0, 1fr); } }
 .delivery-preferences .button-row { margin-top: 12px; }
 @media (max-width: 560px) { .workflow-panel .option-grid, .workflow-options { grid-template-columns: minmax(0, 1fr); } #workflow-declarations textarea { min-height: 120px; } }

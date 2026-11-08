@@ -25,6 +25,8 @@ type Config struct {
 	BeforeApplicationReady  func(context.Context, domain.Attempt) error
 	BeforeApplicationAction func(context.Context, domain.Attempt, workspace.ApplyAction)
 	AfterApplicationAction  func(context.Context, domain.Attempt, workspace.ApplyAction, workspace.ApplyResult)
+	// HistoryTestHook is an internal fixture barrier. Production leaves it nil.
+	HistoryTestHook func(string) error
 }
 
 type Engine struct {
@@ -37,21 +39,24 @@ type Engine struct {
 	lifecycleActive  int
 	lifecycleDrained chan struct{}
 	prepareGate      sync.Mutex
-	control          sync.Mutex
-	db               *store.Store
-	lock             *localstate.Lock
-	config           Config
-	evidence         *evidence.Store
-	workspace        *workspace.Manager
-	ctx              context.Context
-	cancel           context.CancelFunc
-	wake             chan struct{}
-	done             chan struct{}
-	shutdown         chan struct{}
-	shutdownOnce     sync.Once
-	closeOnce        sync.Once
-	closeErr         error
-	watchEnd         chan struct{}
+	// historyMu serializes the sole synchronous history publisher against
+	// reconciliation; no background publisher may outlive owner admission.
+	historyMu    sync.Mutex
+	control      sync.Mutex
+	db           *store.Store
+	lock         *localstate.Lock
+	config       Config
+	evidence     *evidence.Store
+	workspace    *workspace.Manager
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wake         chan struct{}
+	done         chan struct{}
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
+	closeOnce    sync.Once
+	closeErr     error
+	watchEnd     chan struct{}
 	// activeWorkers retains each cancellation handle until that exact worker exits.
 	// All access is ordered by control; cancellation alone never releases ownership.
 	activeWorkers map[string]context.CancelFunc

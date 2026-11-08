@@ -87,6 +87,9 @@ func graphIntentInputHash(record graphIntentRecord) string {
 // authority under the same ID. The immutable body remains after acknowledgement.
 func forwardGraphIntent(ctx context.Context, root string, desc localstate.Descriptor, c command) domain.Result {
 	uncertain := func() domain.Result {
+		if historyMutation(c.op) {
+			return domain.Failure(c.requestID, domain.Fail("write_uncertain", "The retained history request is unresolved. Retry its exact request identity and original input."))
+		}
 		if recoveryMutation(c.op) {
 			return domain.Failure(c.requestID, domain.Fail("write_uncertain", "The retained recovery request is unresolved. Preserve its exact request identity and original input; no authority was refreshed."))
 		}
@@ -112,6 +115,9 @@ func forwardGraphIntent(ctx context.Context, root string, desc localstate.Descri
 			return uncertain()
 		}
 		if record.InputSHA256 != description.InputSHA256 {
+			if historyMutation(c.op) {
+				return domain.Failure(c.requestID, domain.Fail("request_conflict", "This request identity already names different history input. Retain the original intent or use a new identity."))
+			}
 			if recoveryMutation(c.op) {
 				return domain.Failure(c.requestID, domain.Fail("request_conflict", "This request identity already names different recovery input. Retain the original intent or use a new identity for changed input."))
 			}
@@ -296,12 +302,36 @@ func bindGraphIntent(c command, detail domain.GraphDetail) (command, *domain.Err
 }
 
 func validateFrozenGraphBody(c command) *domain.Error {
-	if (!strings.HasPrefix(c.op, "graphs.") && !recoveryMutation(c.op)) || c.method != "POST" || !domain.ValidID(c.requestID) {
+	if (!strings.HasPrefix(c.op, "graphs.") && !recoveryMutation(c.op) && !historyMutation(c.op)) || c.method != "POST" || !domain.ValidID(c.requestID) {
 		return domain.Invalid("graph mutation identity")
 	}
 	var id string
 	var invalid *domain.Error
 	switch c.op {
+	case "history.snapshots.create":
+		var in domain.CaptureHistoryInput
+		if e := domain.StrictDecodeHistory(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidateCaptureHistoryInput(in)
+	case "history.exports.preview":
+		var in domain.PreviewHistoryExportInput
+		if e := domain.StrictDecodeHistory(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidatePreviewHistoryExportInput(in)
+	case "history.exports.create":
+		var in domain.ExecuteHistoryExportInput
+		if e := domain.StrictDecodeHistory(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidateExecuteHistoryExportInput(in)
+	case "history.operations.reconcile":
+		var in domain.ReconcileHistoryOperationInput
+		if e := domain.StrictDecodeHistory(c.params.Body, &in); e != nil {
+			return e
+		}
+		id, invalid = in.RequestID, domain.ValidateReconcileHistoryOperationInput(in)
 	case "tasks.pause":
 		var in domain.PauseTaskInput
 		if e := domain.StrictDecode(c.params.Body, &in); e != nil {

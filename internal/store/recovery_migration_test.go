@@ -69,7 +69,7 @@ func recoveryV6Fixture(t *testing.T, path string) (*sql.DB, graphSchema5IDs) {
 // Snapshot complete raw row values, including all accepted006 graph tables.
 func recoveryV6Rows(t *testing.T, db *sql.DB) map[string][][]any {
 	t.Helper()
-	rows, err := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' AND name NOT IN ('recovery_owner_epoch','recovery_owner_epoch_events','recovery_checkpoints','recovery_graph_scopes','recovery_observations','recovery_decisions') ORDER BY name")
+	rows, err := db.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' AND name NOT IN ('recovery_owner_epoch','recovery_owner_epoch_events','recovery_checkpoints','recovery_graph_scopes','recovery_observations','recovery_decisions','history_snapshots','history_previews','history_export_operations','history_effect_journal','history_incident_bindings') ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestRecoveryMigrationPreservesV6RowsAndFence(t *testing.T) {
 	}
 	defer s.Close()
 	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatal(version, err)
 	}
 	if after := recoveryV6Rows(t, s.db); !reflect.DeepEqual(before, after) {
@@ -253,7 +253,7 @@ func TestRecoverySchemaFreshAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatal(version, err)
 	}
 	if err := s.Close(); err != nil {

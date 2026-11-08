@@ -4,6 +4,7 @@ import { DraftsView } from './drafts.js';
 import { RoutingView } from './routing.js';
 import { WorkflowView } from './workflow.js';
 import { GraphsView } from './graphs.js';
+import { HistoryView } from './history.js';
 import { addFact, api, ApiError, consumeAccessToken, element, errorMessage, feedback, policyName, readSession, requestId, supportsManagedExecution, timeLabel, verifyOwner, writeSession } from './api.js';
 function isAbsolute(path) {
     return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || /^\\\\[^\\]+\\[^\\]+/.test(path);
@@ -15,6 +16,7 @@ class Workspace {
     workflow = new WorkflowView();
     tasks = new TasksView(this.drafts, this.routing, this.workflow);
     graphs = new GraphsView();
+    history = new HistoryView();
     agents = new AgentsView(id => this.tasks.selectHarness(id), capabilities => this.tasks.setCapabilities(capabilities));
     path = element('project-path');
     projectSelect = element('project-select');
@@ -94,6 +96,7 @@ class Workspace {
         this.routing.setReady(false);
         this.workflow.setReady(false);
         this.graphs.disconnect();
+        this.history.disconnect();
         feedback('app-status', 'Verifying access to the local owner…');
         element('reconnect').disabled = true;
         try {
@@ -106,6 +109,7 @@ class Workspace {
             this.workflow.setReady(supportsManagedExecution(meta));
             this.tasks.setOwner(meta);
             this.graphs.setOwner(meta);
+            this.history.setOwner(meta);
             feedback('app-status', supportsManagedExecution(meta) ? 'Connected to the local workspace. Auto uses finite verified workflows. Up to two managed workers can run; context, account and task limits may reduce concurrency.' : 'Connected to the local workspace. This owner does not support managed execution.');
             // Recovery never replays a cached mutation automatically; each retry remains explicit.
             await Promise.allSettled([this.loadPolicy(), this.loadProjects(), this.agents.refresh(), this.routing.refresh(), this.workflow.refreshPreference()]);
@@ -118,6 +122,7 @@ class Workspace {
             this.workflow.setReady(false);
             this.tasks.disconnect();
             this.graphs.disconnect();
+            this.history.disconnect();
             this.updateControls();
             feedback('app-status', errorMessage(error) + ' Open “council ui” for a current private launch link.', 'error');
         }
@@ -189,6 +194,7 @@ class Workspace {
         this.drafts.setProject(id);
         this.tasks.setProject(id);
         this.graphs.setProject(id);
+        this.history.setProject(id);
         const project = this.projects.get(id);
         if (project)
             this.renderProject({ project, observation: null });
@@ -261,6 +267,7 @@ class Workspace {
                 this.drafts.setProject(data.project.id);
                 this.tasks.setProject(data.project.id);
                 this.graphs.setProject(data.project.id);
+                this.history.setProject(data.project.id);
                 this.renderProjects();
                 this.renderProject(data);
                 feedback('project-status', 'Project opened. Existing files, staging and branch are unchanged.', 'success');

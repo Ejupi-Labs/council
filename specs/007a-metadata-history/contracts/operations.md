@@ -60,7 +60,9 @@ explicitly marked optional. Any `data` below is wrapped in the normal envelope.
 ```json
 {"snapshotId":"0123456789abcdef0123456789abcdef","revision":"1",
  "projectId":"abcdef0123456789abcdef0123456789","profile":"metadata-history/1",
- "completeness":"incomplete_history","capturedAt":"2026-11-08T00:00:00.000Z",
+ "completeness":"incomplete_history",
+ "notice":"Incomplete observational history. Not a backup, evidence export, restore, or proof of acceptance.",
+ "capturedAt":"2026-11-08T00:00:00.000Z",
  "taskCount":"2","attemptCount":"3",
  "includedCategories":["project_identity","task_metadata","attempt_metadata"],
  "omittedCategories":["task_text","project_paths","user_files","artifact_payloads","provider_output","vendor_authentication","owner_authority","legacy_state"],
@@ -71,6 +73,8 @@ Each `additionalOmissions` item is exactly `{"reason":<fixed reason>,"count":<de
 items are unique and ordered by the published reason order. `taskCount` and
 `attemptCount` describe emitted records, not total hidden data. An empty valid
 snapshot is `"0"`/`"0"`, not an error or a claim that excluded data does not exist.
+`notice` is the exact fixed string shown above, not user-provided or derived from
+excluded data. It appears in every snapshot summary, including the exported one.
 
 **TaskRow** is exactly `{"ordinal":<decimal>,"taskId":<id>,"projectId":<id>,
 "revision":<decimal>,"stateRevision":<decimal>,"currentVersion":<decimal>}`.
@@ -81,8 +85,12 @@ contiguous starting at `"1"` in its own section; each attempt references exactly
 emitted task from the selected project. A phase is a capture-time observation,
 not proof of completion or current authority. No row may be added by replay.
 
-**SnapshotPage** is exactly `{"snapshotId":<id>,"revision":"1","kind":"tasks"|
-"attempts","items":[<TaskRow or AttemptRow>],"nextCursor":<string|null>}`. A cursor
+**SnapshotPage** is exactly `{"snapshotId":<id>,"revision":"1",
+"completeness":"incomplete_history",
+"notice":"Incomplete observational history. Not a backup, evidence export, restore, or proof of acceptance.",
+"kind":"tasks"|"attempts","items":[<TaskRow or AttemptRow>],
+"nextCursor":<string|null>}`. Each independently inspected page carries the same
+fixed notice and completeness label as its snapshot. A cursor
 is bound to the immutable snapshot ID, revision, section and position, cannot select
 another project, and is rejected when malformed, altered or inconsistent. The owner
 validates cursor bounds before a query and returns all pages in stable snapshot order.
@@ -105,6 +113,12 @@ and scope proof are never received from the client or included in public JSON.
 "durability":<null|{"fileFlush":"succeeded","directorySync":"succeeded"|"unavailable",
 "powerLossNamespaceGuarantee":false}>,"blockers":[<fixed code>],"nextAction":<fixed code>,"filename":<safe filename>,
 "destinationDirectory":<absolute private-root path>,"destinationPath":<absolute output path>}`.
+Operation blocker codes are exactly `owner_epoch_uncertain`, `journal_unproven`,
+`actor_not_drained`, `history_effect_uncertain`, `other_blocker`, `target_conflict`,
+`root_unavailable` and `request_interrupted`; each occurs at most
+once. `nextAction` is exactly `none`, `wait`, `inspect`, `reconcile` or `contact_support`.
+The controller never places arbitrary diagnostic text or exception details in these codes.
+
 The typed durability observation is exposed identically by UI and CLI; `unavailable`
 does not imply a failed file flush or a power-loss namespace guarantee. `requestId` is
 the original export request identity; the disclosed destination fields
@@ -177,21 +191,20 @@ No request ID, selected filename, original path, output path, private controller
 identity or excluded source field occurs in the document.
 
 `filename` is a single ASCII basename of 1–64 bytes matching
-`[A-Za-z0-9][A-Za-z0-9_-]{0,58}\.json`; `.json` is lowercase. Reject separators,
+`history-[A-Za-z0-9][A-Za-z0-9_-]{0,50}\.json`; `.json` is lowercase. Reject separators,
 colon, drive/device syntax, leading/trailing spaces, dot segments, NUL, alternate
 streams and Windows reserved device names case-insensitively. On filesystems with
 case or Unicode aliasing, reject an equivalent existing name. The client cannot
-select a directory or absolute path. The owner locates an already provisioned
-Council-private `history-exports` directory beneath its held private state root,
+select a directory or absolute path. The owner uses its already-held Council-private v2 state root,
 validates each anchor, directory type/identity, owner, mount/reparse/link constraints
 and containment according to native platform support. Council never stages or commits
 exports into Git and never includes them in release inputs. It does not claim that a
 user's home or private root is outside every Git repository or project tree. Unknown
 identity, unsafe mount/link/reparse configuration or unsupported exclusive-create and
 file-flush semantics fails closed. `os.Root` or a string
-prefix alone is not sufficient proof. Owner startup must provision this directory
-through separately authorized, journaled lifecycle handling or report it unavailable;
-the history export operation must not create it before its own effect permit.
+prefix alone is not sufficient proof. The already-held v2 root is used directly; this slice creates no export subdirectory.
+The `history-*.json` basename namespace is reserved centrally for output and cannot be
+used by Council control or temporary files. Every such output remains private state.
 
 Revalidate the exact snapshot, preview, target absence, held parent identity and
 current owner at the effect boundary. Commit and positively acknowledge a single
@@ -279,3 +292,13 @@ Inspection and owner-mediated `verify_no_publication` remain available while thi
 operation or an unrelated incident fences new dispatch/effects. They validate owner
 and journal authority without requiring an open dispatch gate, and must preserve all
 unrelated incidents and fences. UI and CLI tests cover that recovery path.
+
+History-specific persistence incidents are durably bound to the exact operation or
+pre-effect request identity and fingerprint in the same transaction as their global
+fence. Reconciliation may settle only the linked incident after its specific durable
+proof, then must recheck every other incident, claim and pending effect before opening
+any gate. It must not infer linkage from messages or timestamps. An unbound or
+unacknowledged fence remains uncertain and dirty; the history feature does not
+automatically clear it. A proven unpermitted operation permits only a no-publication
+decision, not execution or removal. Receipt-linked capture/preview/create incidents
+require exact receipt proof and cannot themselves authorize publication.

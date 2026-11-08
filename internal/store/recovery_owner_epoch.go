@@ -204,6 +204,9 @@ func (s *Store) CompleteOwnerEpoch(ctx context.Context, ownerID string) (bool, e
 			"SELECT count(*) FROM attempts WHERE phase!='settled'",
 			"SELECT count(*) FROM delivery_operations WHERE active_effect_id IS NOT NULL OR status IN ('preparing','applying','uncertain')",
 			"SELECT count(*) FROM graph_inputs WHERE state IN ('preparing','uncertain')",
+			// A history publisher may have created a partial final file after its
+			// durable permit. A clean epoch cannot conceal an unresolved effect.
+			"SELECT count(*) FROM history_export_operations WHERE state IN ('effect_started','uncertain')",
 		} {
 			if err = tx.QueryRowContext(ctx, q).Scan(&count); err != nil {
 				return storageError()

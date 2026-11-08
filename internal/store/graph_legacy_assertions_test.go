@@ -41,7 +41,7 @@ func assertGraphLegacyClaim(t *testing.T, s *Store, attemptID string) {
 
 func assertNoMigratedGraphAuthority(t *testing.T, s *Store) {
 	t.Helper()
-	if err := s.validateRecoverySchemaWith(context.Background(), s.db); err != nil {
+	if err := s.validateHistorySchemaWith(context.Background(), s.db); err != nil {
 		t.Fatal("current exact schema inventory is invalid", err)
 	}
 	for _, table := range []string{"task_graphs", "graph_versions", "graph_nodes", "graph_inputs", "graph_dispatches", "graph_admission_observations", "graph_delivery_bindings"} {

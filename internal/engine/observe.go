@@ -43,7 +43,7 @@ func (e *Engine) Meta(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs", "safe_recovery"}, "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "recoveryContract": "007-v1", "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": managedCapacity(claims)}, nil
+	return map[string]any{"scope": "managed_execution", "managedExecution": "native_codex_claude", "capabilities": []string{"workspace_foundation", "managed_execution", "economical_routing", "verified_delivery", "task_graphs", "safe_recovery", "metadata_history"}, "historyContract": "007a-v1", "executionContract": domain.ExecutionContract, "workflowContract": domain.WorkflowContract, "graphContract": domain.GraphContract, "recoveryContract": "007-v1", "maintenanceContract": "owner-stop/1", "admission": map[string]any{"state": g.State, "incidentId": g.IncidentID, "incident": incident}, "capacity": managedCapacity(claims)}, nil
 }
 
 func managedCapacity(claims []domain.GraphClaimView) map[string]any {

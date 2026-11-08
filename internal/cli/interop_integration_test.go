@@ -124,15 +124,16 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			t.Cleanup(func() { _ = db.Close(); _ = lock.Close() })
 			// This is an owned synthetic downgrade from current APIs, not a frozen
 			// schema5 fixture. Never discard graph authority or a held claim.
+			historyTables := []string{"history_incident_bindings", "history_effect_journal", "history_export_operations", "history_previews", "history_snapshots"}
 			recoveryTables := []string{"recovery_decisions", "recovery_observations", "recovery_graph_scopes", "recovery_checkpoints"}
 			graphTables := []string{"graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"}
 			assertEmptyCurrentGraphState := func(current *sql.DB) {
 				t.Helper()
 				var currentSchema int
-				if err := current.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 7 {
-					t.Fatal("controlled current fixture must have schema7", currentSchema, err)
+				if err := current.QueryRow("PRAGMA user_version").Scan(&currentSchema); err != nil || currentSchema != 8 {
+					t.Fatal("controlled current fixture must have schema8", currentSchema, err)
 				}
-				for _, table := range append(append(append([]string{}, recoveryTables...), graphTables...), "capacity_claims") {
+				for _, table := range append(append(append(append([]string{}, historyTables...), recoveryTables...), graphTables...), "capacity_claims") {
 					var count int
 					if err := current.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 						t.Fatal("controlled downgrade/upgrade must not discard or invent graph authority or claims", table, count, err)
@@ -165,7 +166,11 @@ func TestPopulatedPreviousSchemasUpgradeThroughCLIWithoutReplayingHistory(t *tes
 			// Foreign keys remain ON. Retained history/receipt bytes are untouched;
 			// real frozen schema5 migration is independently covered by Store tests.
 			// Its graph/account/context foreign keys must not outlive those parents.
-			statements := []string{"DROP TABLE recovery_owner_epoch_events", "DROP TABLE recovery_owner_epoch"}
+			statements := []string{}
+			for _, table := range historyTables {
+				statements = append(statements, "DROP TABLE "+table)
+			}
+			statements = append(statements, "DROP TABLE recovery_owner_epoch_events", "DROP TABLE recovery_owner_epoch")
 			for _, table := range recoveryTables {
 				statements = append(statements, "DROP TABLE "+table)
 			}

@@ -105,11 +105,18 @@ func New(service Executor, config Config) http.Handler {
 				return
 			}
 			bodyLimit := int64(domain.MaxBodyBytes)
+			if strings.HasPrefix(op, "history.") {
+				bodyLimit = int64(domain.HistoryMaxRequestBytes)
+			}
 			if op == "graphs.start" {
 				bodyLimit = domain.MaxGraphDeclarationBytes
 			}
 			body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
 			if err != nil {
+				if strings.HasPrefix(op, "history.") {
+					fail("input_too_large", "History requests cannot exceed 16 KiB.")
+					return
+				}
 				if op == "graphs.start" {
 					fail("input_too_large", "The graph declaration exceeds 2 MiB or could not be read. Reduce it explicitly.")
 					return
@@ -161,6 +168,9 @@ func contains(values []string, value string) bool {
 }
 
 func route(p, requestedMethod string) (operation, id, method string, queries []string) {
+	if op, identity, methods, keys := historyRoute(p); op != "" {
+		return op, identity, methods, keys
+	}
 	if op, identity, methods, keys := executionRoute(p, requestedMethod); op != "" {
 		return op, identity, methods, keys
 	}
@@ -247,4 +257,38 @@ func serveAsset(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 		w.Header().Set("Content-Type", kind)
 	}
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
+}
+
+// historyRoute accepts fixed local API paths; request bodies and identities are
+// validated by the common transport and the history service.
+func historyRoute(p string) (operation, id, method string, queries []string) {
+	switch p {
+	case "/api/v1/history/snapshots":
+		return "history.snapshots.create", "", "POST", nil
+	case "/api/v1/history/exports/preview":
+		return "history.exports.preview", "", "POST", nil
+	case "/api/v1/history/exports":
+		return "history.exports.create", "", "POST", nil
+	}
+	parts := strings.Split(strings.TrimPrefix(p, "/api/v1/history/"), "/")
+	if !strings.HasPrefix(p, "/api/v1/history/") {
+		return "", "", "", nil
+	}
+	if len(parts) == 2 && parts[1] != "" {
+		switch parts[0] {
+		case "snapshots":
+			return "history.snapshots.get", parts[1], "GET", nil
+		case "operations":
+			return "history.operations.get", parts[1], "GET", nil
+		}
+	}
+	if len(parts) == 3 && parts[1] != "" {
+		if parts[0] == "snapshots" && parts[2] == "records" {
+			return "history.snapshots.records", parts[1], "GET", []string{"kind", "limit", "cursor"}
+		}
+		if parts[0] == "operations" && parts[2] == "reconciliations" {
+			return "history.operations.reconcile", parts[1], "POST", nil
+		}
+	}
+	return "", "", "", nil
 }

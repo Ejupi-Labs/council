@@ -21,7 +21,7 @@ func workflowPreservedRows(t *testing.T, db *sql.DB, currentSchema ...bool) map[
 	// schema4→5 fault tests still compare every original claim byte below.
 	if len(currentSchema) != 0 && currentSchema[0] {
 		newTables["capacity_claims"] = true
-		for _, name := range []string{"task_graphs", "graph_versions", "graph_nodes", "graph_inputs", "graph_dispatches", "graph_admission_observations", "graph_delivery_bindings", "recovery_owner_epoch", "recovery_owner_epoch_events", "recovery_checkpoints", "recovery_graph_scopes", "recovery_observations", "recovery_decisions"} {
+		for _, name := range []string{"task_graphs", "graph_versions", "graph_nodes", "graph_inputs", "graph_dispatches", "graph_admission_observations", "graph_delivery_bindings", "recovery_owner_epoch", "recovery_owner_epoch_events", "recovery_checkpoints", "recovery_graph_scopes", "recovery_observations", "recovery_decisions", "history_snapshots", "history_previews", "history_export_operations", "history_effect_journal", "history_incident_bindings"} {
 			newTables[name] = true
 		}
 	}
@@ -108,7 +108,7 @@ func TestWorkflowMigrationPreservesAcceptedSchema4WithoutGrantingAuthority(t *te
 		t.Fatal("migration rewrote accepted004 row JSON/receipts/defaults")
 	}
 	var version, workflows int
-	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != 7 {
+	if e = s.db.QueryRow("PRAGMA user_version").Scan(&version); e != nil || version != schemaVersion {
 		t.Fatal("accepted004 was not upgraded", version, e)
 	}
 	if e = s.db.QueryRow("SELECT count(*) FROM workflows").Scan(&workflows); e != nil || workflows != 0 {

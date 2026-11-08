@@ -36,6 +36,9 @@ func serviceFailure(id string, err error) domain.Result {
 	return domain.Failure(id, domain.Fail("internal_error", "The operation could not complete. Report this request identity."))
 }
 func (s *Service) Execute(ctx context.Context, operation string, p Params) domain.Result {
+	if strings.HasPrefix(operation, "history.") {
+		return s.executeHistory(ctx, operation, p)
+	}
 	if executionOperation(operation) {
 		return s.executeManaged(ctx, operation, p)
 	}

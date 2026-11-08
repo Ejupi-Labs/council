@@ -78,6 +78,12 @@ func (s *Store) validateRecoverySchemaWith(ctx context.Context, q queryer) error
 	if err := validateKnownRecoveryDDL(ctx, q); err != nil {
 		return err
 	}
+	return s.validateRecoveryDataWith(ctx, q)
+}
+
+// validateRecoveryDataWith is shared by v7 and later schema validators. The
+// historical exact-DDL validator remains strict when checking a v7 migration.
+func (s *Store) validateRecoveryDataWith(ctx context.Context, q queryer) error {
 	if _, err := readRecoveryOwnerEpoch(ctx, q); err != nil {
 		return err
 	}

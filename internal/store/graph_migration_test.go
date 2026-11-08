@@ -31,7 +31,7 @@ func TestGraphMigrationPreservesSchema5HistoryAndHeldClaim(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("known schema5 was not upgraded transactionally: version=%d err=%v", version, err)
 	}
 	if after := graphSchema5Rows(t, s.db); !reflect.DeepEqual(before, after) {

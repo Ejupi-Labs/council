@@ -67,7 +67,7 @@ func Status(code string) int {
 		return 404
 	case "method_not_allowed":
 		return 405
-	case "graph_budget_required", "graph_scope_required", "graph_input_stale", "graph_control_conflict", "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict", "workflow_revision_conflict", "candidate_stale", "integration_conflict", "scope_paused", "checkpoint_not_paused", "checkpoint_scope_conflict", "checkpoint_blocked", "scope_stopped", "continuation_not_prepared", "cleanup_unknown":
+	case "history_too_large", "graph_budget_required", "graph_scope_required", "graph_input_stale", "graph_control_conflict", "revision_conflict", "request_conflict", "project_identity_changed", "revision_exhausted", "source_draft_conflict", "task_version_conflict", "attempt_active", "acceptance_conflict", "routing_adoption_required", "budget_conflict", "report_conflict", "workflow_revision_conflict", "candidate_stale", "integration_conflict", "scope_paused", "checkpoint_not_paused", "checkpoint_scope_conflict", "checkpoint_blocked", "scope_stopped", "continuation_not_prepared", "cleanup_unknown":
 		return 409
 	case "input_too_large":
 		return 413

@@ -80,7 +80,7 @@ metadata bytes; they prove neither source provenance nor semantic completeness.
 ## Destination and publication
 
 **Decision:** begin with an explicit user-selected absent filename in a
-Council-managed private history-export directory, showing the full destination
+Council-managed private history-output namespace in the private v2 directory, showing the full destination
 and immutable snapshot ID in a preview. Restrict the initial destination to
 that directory, outside legacy state and Council release inputs; verify the
 private root and supported filesystem before publication. This bounded choice is

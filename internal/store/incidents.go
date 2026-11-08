@@ -172,7 +172,7 @@ func (s *Store) recoveryReleaseResolvedFence(ctx context.Context, tx *sql.Tx) er
 	if state != "fenced" || !incidentID.Valid {
 		return nil
 	}
-	var resolved, unresolved, claims, effects, inputs int
+	var resolved, unresolved, claims, effects, inputs, historyEffects int
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM recovery_decisions WHERE incident_id=? AND json_extract(data,'$.outcome')='reconciled'", incidentID.String).Scan(&resolved); err != nil {
 		return storageError()
 	}
@@ -191,7 +191,10 @@ func (s *Store) recoveryReleaseResolvedFence(ctx context.Context, tx *sql.Tx) er
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM graph_inputs WHERE state IN ('preparing','uncertain')").Scan(&inputs); err != nil {
 		return storageError()
 	}
-	if unresolved != 0 || claims != 0 || effects != 0 || inputs != 0 {
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM history_export_operations WHERE state IN ('effect_started','uncertain')").Scan(&historyEffects); err != nil {
+		return storageError()
+	}
+	if unresolved != 0 || claims != 0 || effects != 0 || inputs != 0 || historyEffects != 0 {
 		return nil
 	}
 	result, err := tx.ExecContext(ctx, "UPDATE execution_control SET state='open',incident_id=NULL WHERE singleton=1 AND state='fenced' AND incident_id=?", incidentID.String)

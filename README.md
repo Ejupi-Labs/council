@@ -22,6 +22,13 @@ and the remaining host, harness and release work follow in the
 [delivery plan](docs/refactor/delivery-plan.md). Native provider qualification requires a separate
 explicitly requested live task and remains unperformed.
 
+The development preview also includes project-scoped metadata history capture, inspection and
+local export. It is **incomplete observational history**, not a backup, evidence export, restore
+or proof of acceptance. It excludes task content, files, provider output and vendor authentication.
+See the [metadata history guide](docs/refactor/metadata-history-guide.md) for CLI commands, private
+output location, exact retry and interrupted-publication limits. Full evidence export, backup,
+verified restore and reviewed cleanup remain separate required work.
+
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly
 recognized document replacement can prefer a suitable declared profile. Optional user reports can
@@ -219,6 +226,7 @@ Platform runtime evidence and cross-compilation evidence are reported separately
 - [Ejupi Labs design identity](docs/refactor/design-identity.md)
 - [Ordered feature delivery](docs/refactor/delivery-plan.md)
 - [Requirements traceability](docs/refactor/traceability.md)
+- [Project metadata history guide](docs/refactor/metadata-history-guide.md)
 - [Workspace foundation specification](specs/001-workspace-foundation/spec.md)
 - [Managed execution specification](specs/002-managed-execution/spec.md)
 - [Managed execution quickstart](specs/002-managed-execution/quickstart.md)

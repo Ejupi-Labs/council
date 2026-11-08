@@ -72,7 +72,7 @@ func makeSchema2(t *testing.T, path string, populated ...bool) (*sql.DB, string,
 	if _, err = db.Exec("DROP TABLE recovery_owner_epoch_events; DROP TABLE recovery_owner_epoch"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"recovery_decisions", "recovery_observations", "recovery_graph_scopes", "recovery_checkpoints", "graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"} {
+	for _, name := range []string{"history_incident_bindings", "history_effect_journal", "history_export_operations", "history_previews", "history_snapshots", "recovery_decisions", "recovery_observations", "recovery_graph_scopes", "recovery_checkpoints", "graph_delivery_bindings", "graph_admission_observations", "graph_dispatches", "graph_inputs", "graph_nodes", "graph_versions", "task_graphs"} {
 		var count int
 		if err = db.QueryRow("SELECT count(*) FROM " + name).Scan(&count); err != nil || count != 0 {
 			t.Fatal("Synthetic schema2 setup must not discard graph state", name, count, err)
@@ -144,7 +144,7 @@ func TestInteropMigrationPreservesRowsAndHeldClaim(t *testing.T) {
 		t.Fatal("unaffected rows changed", before, after)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatal(version, err)
 	}
 	claims, err := s.GraphClaims(context.Background())

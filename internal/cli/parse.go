@@ -44,6 +44,7 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 	addWorkflowFlags(values)
 	addGraphFlags(values)
 	addRecoveryFlags(values)
+	addHistoryFlags(values)
 	bools["version"] = !taskVersionCommand
 	values["version"] = taskVersionCommand
 	for i := 0; i < len(args); i++ {
@@ -103,6 +104,9 @@ func parse(args []string, stdin io.Reader) (command, *domain.Error) {
 		return c, domain.Invalid("command")
 	}
 	c.name = strings.Join(positionals[:min(2, len(positionals))], " ")
+	if historyCommand(c.name) {
+		return parseHistory(c, positionals, flags)
+	}
 	if recoveryCommand(c.name) {
 		return parseRecovery(c, positionals, flags, stdin)
 	}

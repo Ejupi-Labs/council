@@ -23,6 +23,7 @@ type ownerMetadata struct {
 	WorkflowContract    string   `json:"workflowContract,omitempty"`
 	GraphContract       string   `json:"graphContract,omitempty"`
 	RecoveryContract    string   `json:"recoveryContract,omitempty"`
+	HistoryContract     string   `json:"historyContract,omitempty"`
 	graphCapacityValid  bool
 	MaintenanceContract string `json:"maintenanceContract,omitempty"`
 	Admission           *struct {

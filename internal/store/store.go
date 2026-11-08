@@ -84,6 +84,8 @@ func Open(path string) (*Store, error) {
 		err = s.migrateGraphs(context.Background())
 	} else if version == 6 && appID == applicationID {
 		err = s.migrateRecovery(context.Background())
+	} else if version == 7 && appID == applicationID {
+		err = s.migrateHistory(context.Background())
 	} else if version != schemaVersion || appID != applicationID {
 		return fail()
 	}
@@ -108,6 +110,8 @@ func Open(path string) (*Store, error) {
 			err = s.migrateGraphs(context.Background())
 		case 6:
 			err = s.migrateRecovery(context.Background())
+		case 7:
+			err = s.migrateHistory(context.Background())
 		default:
 			return fail()
 		}
@@ -131,7 +135,7 @@ func Open(path string) (*Store, error) {
 		}
 		rows.Close()
 	}
-	if err = s.validateRecoverySchemaWith(context.Background(), db); err != nil {
+	if err = s.validateHistorySchemaWith(context.Background(), db); err != nil {
 		return fail()
 	}
 	if err = configureDurableJournal(context.Background(), db); err != nil {
