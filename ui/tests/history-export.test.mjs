@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fixture, fixtureRequestId, openWorkspace, ownerAPI, pollOwner } from './helpers.mjs';
@@ -46,7 +46,8 @@ test('CLI snapshot is exported from UI once across a lost acknowledgement', { ti
   assert.equal(previewHTTP.status(), 201, JSON.stringify(previewEnvelope.error));
   const preview = previewEnvelope.data.preview;
   assert.equal(preview.snapshotId, snapshot.snapshotId); assert.equal(preview.filename, outputName);
-  assert.equal(path.resolve(preview.destinationPath), path.resolve(f.home, '.council', 'v2', outputName));
+  const fixturePrivateRoot = await realpath(path.join(f.home, '.council', 'v2'));
+  assert.equal(path.resolve(preview.destinationPath), path.join(fixturePrivateRoot, outputName));
   await page.locator('#history-preview-facts').filter({ hasText: preview.destinationPath }).waitFor();
   await assert.rejects(lstat(preview.destinationPath), error => error.code === 'ENOENT');
 
