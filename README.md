@@ -30,6 +30,10 @@ and [metadata history guide](docs/refactor/metadata-history-guide.md) describe t
 output location, exact retry and interrupted-publication limits. Full evidence export, backup,
 verified restore and reviewed cleanup remain separate required work.
 
+Feature 008, MCP host integration, is in development and is not yet accepted.
+The [MCP host guide](docs/refactor/mcp-host-guide.md) describes its current
+stdio setup and explicitly records the pending qualification.
+
 Start with a project and task. No account, quota, price or model form is required. Auto uses a
 compatible native default for unknown suitability. An explicit routine/general hint or a narrowly
 recognized document replacement can prefer a suitable declared profile. Optional user reports can

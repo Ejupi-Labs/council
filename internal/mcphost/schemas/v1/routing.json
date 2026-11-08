@@ -1,0 +1,1136 @@
+{
+  "council_routing_profiles_list": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "contextId": {
+        "type": "string",
+        "enum": [
+          "codex-native",
+          "claude-native"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "council_routing_accounts_list": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "string",
+        "pattern": "^([1-9]|[1-9][0-9]|100)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "not": {
+          "pattern": "[^A-Za-z0-9_-]"
+        },
+        "description": "Opaque cursor from the same list and filter; its contents are validated by the owner."
+      }
+    },
+    "additionalProperties": false
+  },
+  "council_routing_capacity_get": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "contextId": {
+        "type": "string",
+        "enum": [
+          "codex-native",
+          "claude-native"
+        ]
+      },
+      "accountId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "additionalProperties": false,
+    "oneOf": [
+      {
+        "required": [
+          "contextId"
+        ]
+      },
+      {
+        "required": [
+          "accountId"
+        ]
+      }
+    ]
+  },
+  "council_routing_reports_list": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "contextId": {
+        "type": "string",
+        "enum": [
+          "codex-native",
+          "claude-native"
+        ]
+      },
+      "accountId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "limit": {
+        "type": "string",
+        "pattern": "^([1-9]|[1-9][0-9]|100)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "not": {
+          "pattern": "[^A-Za-z0-9_-]"
+        },
+        "description": "Opaque cursor from the same list and filter; its contents are validated by the owner."
+      }
+    },
+    "additionalProperties": false,
+    "oneOf": [
+      {
+        "required": [
+          "contextId"
+        ]
+      },
+      {
+        "required": [
+          "accountId"
+        ]
+      }
+    ]
+  },
+  "council_routing_reports_get": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id"
+    ]
+  },
+  "council_tasks_routing_get": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId"
+    ]
+  },
+  "council_tasks_routing_decisions": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "limit": {
+        "type": "string",
+        "pattern": "^([1-9]|[1-9][0-9]|100)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "not": {
+          "pattern": "[^A-Za-z0-9_-]"
+        },
+        "description": "Opaque cursor from the same list and filter; its contents are validated by the owner."
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId"
+    ]
+  },
+  "council_tasks_budget_get": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId"
+    ]
+  },
+  "council_tasks_budget_ledger": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "limit": {
+        "type": "string",
+        "pattern": "^([1-9]|[1-9][0-9]|100)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "not": {
+          "pattern": "[^A-Za-z0-9_-]"
+        },
+        "description": "Opaque cursor from the same list and filter; its contents are validated by the owner."
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId"
+    ]
+  },
+  "council_tasks_usage": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "limit": {
+        "type": "string",
+        "pattern": "^([1-9]|[1-9][0-9]|100)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "not": {
+          "pattern": "[^A-Za-z0-9_-]"
+        },
+        "description": "Opaque cursor from the same list and filter; its contents are validated by the owner."
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId"
+    ]
+  },
+  "council_routing_policy_update": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "economyOrder": {
+            "type": "array",
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "codex-native-default",
+                "codex-luna-economy",
+                "codex-sol-general",
+                "claude-native-default",
+                "claude-haiku-economy",
+                "claude-sonnet-general"
+              ]
+            }
+          },
+          "unknownAvailability": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "require_positive"
+            ]
+          },
+          "defaultBudget": {
+            "type": "object",
+            "properties": {
+              "admissionLimit": {
+                "type": "string",
+                "pattern": "^([1-9]|1[0-6])$"
+              },
+              "windowSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              }
+            },
+            "additionalProperties": false
+          },
+          "continuation": {
+            "type": "object",
+            "properties": {
+              "maxAutomaticAdmissions": {
+                "type": "string",
+                "pattern": "^(0|[1-9]|1[0-5])$"
+              },
+              "categories": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pre_launch_ineligible",
+                    "terminal_transient"
+                  ]
+                }
+              },
+              "allowReplacement": {
+                "type": "boolean"
+              },
+              "allowEscalation": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ]
+  },
+  "council_routing_context_update": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "enum": [
+          "codex-native",
+          "claude-native"
+        ]
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "input"
+    ]
+  },
+  "council_routing_profile_update": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "enum": [
+          "codex-native-default",
+          "codex-luna-economy",
+          "codex-sol-general",
+          "claude-native-default",
+          "claude-haiku-economy",
+          "claude-sonnet-general"
+        ]
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "referencePrice": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 3,
+                "pattern": "^[A-Z]{3}$"
+              },
+              "unit": {
+                "type": "string",
+                "enum": [
+                  "per_million_tokens"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "api_list",
+                  "declared_marginal"
+                ]
+              },
+              "inputPerMillion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?$",
+                "not": {
+                  "pattern": "[^0-9eE+.-]"
+                }
+              },
+              "outputPerMillion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?$",
+                "not": {
+                  "pattern": "[^0-9eE+.-]"
+                }
+              },
+              "sourceLabel": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "sourceUrl": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "observedAt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "validUntil": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "currency",
+              "sourceLabel",
+              "observedAt"
+            ]
+          },
+          "clearReferencePrice": {
+            "const": true
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision"
+        ],
+        "not": {
+          "required": [
+            "referencePrice",
+            "clearReferencePrice"
+          ]
+        }
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "input"
+    ]
+  },
+  "council_routing_accounts_create": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "providerLabel": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "entitlement": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "subscription",
+              "local"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "label"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ]
+  },
+  "council_routing_accounts_update": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "providerLabel": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "entitlement": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "subscription",
+              "local"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "input"
+    ]
+  },
+  "council_routing_links_update": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "enum": [
+          "codex-native",
+          "claude-native"
+        ]
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "declaredAccountId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "unlink": {
+            "const": true
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "declaredAccountId"
+            ]
+          },
+          {
+            "required": [
+              "unlink"
+            ]
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "input"
+    ]
+  },
+  "council_routing_reports_create": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "context",
+                  "account"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "context"
+                  },
+                  "id": {
+                    "type": "string",
+                    "enum": [
+                      "codex-native",
+                      "claude-native"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 32,
+                    "maxLength": 32,
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                }
+              }
+            ]
+          },
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "occupancy",
+              "allowance",
+              "service"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observedAt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "validForSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "retryAfter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "correctionOf": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "correctionAction": {
+            "type": "string",
+            "enum": [
+              "recover",
+              "withdraw"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision",
+          "subject",
+          "dimension",
+          "state"
+        ],
+        "oneOf": [
+          {
+            "properties": {
+              "dimension": {
+                "const": "occupancy"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "busy",
+                  "available",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "dimension": {
+                "const": "allowance"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "available",
+                  "exhausted",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "dimension": {
+                "const": "service"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "temporary_throttle",
+                  "temporary_overload",
+                  "authentication_denied",
+                  "model_denied",
+                  "permission_denied",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "correctionOf"
+              ]
+            },
+            "then": {
+              "required": [
+                "correctionAction"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "correctionAction"
+              ]
+            },
+            "then": {
+              "required": [
+                "correctionOf"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "correctionAction": {
+                  "const": "withdraw"
+                }
+              },
+              "required": [
+                "correctionAction"
+              ]
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "unknown"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "retryAfter"
+              ]
+            },
+            "then": {
+              "properties": {
+                "dimension": {
+                  "const": "service"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "temporary_throttle",
+                    "temporary_overload"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ]
+  },
+  "council_tasks_budget_amend": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 32,
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "grant",
+              "adopt"
+            ]
+          },
+          "expectedBudgetRevision": {
+            "type": "string",
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+            "not": {
+              "pattern": "[^0-9]"
+            }
+          },
+          "additionalAdmissions": {
+            "type": "string",
+            "pattern": "^([1-9]|1[0-6])$"
+          },
+          "newWindowSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "suitability": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "routine",
+                  "general"
+                ]
+              },
+              "targetProfileId": {
+                "type": "string",
+                "enum": [
+                  "codex-native-default",
+                  "codex-luna-economy",
+                  "codex-sol-general",
+                  "claude-native-default",
+                  "claude-haiku-economy",
+                  "claude-sonnet-general"
+                ]
+              },
+              "expectedPolicyRevision": {
+                "type": "string",
+                "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                "not": {
+                  "pattern": "[^0-9]"
+                }
+              },
+              "budget": {
+                "type": "object",
+                "properties": {
+                  "admissionLimit": {
+                    "type": "string",
+                    "pattern": "^([1-9]|1[0-6])$"
+                  },
+                  "windowSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400
+                  }
+                },
+                "additionalProperties": false
+              },
+              "continuation": {
+                "type": "object",
+                "properties": {
+                  "maxAutomaticAdmissions": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]|1[0-5])$"
+                  },
+                  "categories": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "pre_launch_ineligible",
+                        "terminal_transient"
+                      ]
+                    }
+                  },
+                  "allowReplacement": {
+                    "type": "boolean"
+                  },
+                  "allowEscalation": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "useCurrentPolicy": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "budget"
+                  ]
+                },
+                {
+                  "required": [
+                    "useCurrentPolicy"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "expectedRevision",
+          "action",
+          "additionalAdmissions"
+        ],
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "grant"
+              }
+            },
+            "required": [
+              "expectedBudgetRevision"
+            ],
+            "not": {
+              "required": [
+                "routing"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "adopt"
+              }
+            },
+            "required": [
+              "newWindowSeconds"
+            ],
+            "not": {
+              "required": [
+                "expectedBudgetRevision"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "taskId",
+      "input"
+    ]
+  }
+}

@@ -19,12 +19,14 @@ import (
 	"github.com/Ejupi-Labs/council/v2/internal/fixture"
 	"github.com/Ejupi-Labs/council/v2/internal/localstate"
 	"github.com/Ejupi-Labs/council/v2/internal/owner"
+	"github.com/Ejupi-Labs/council/v2/internal/ownerclient"
 	"github.com/Ejupi-Labs/council/v2/internal/store"
 )
 
 const help = `Council — managed local workspace
 
   council ui [--no-open] [--json]
+  council mcp
   council projects open PATH | list | get ID
   council policy get | set autonomous|supervised --expected-revision R
   council agents list | refresh
@@ -176,18 +178,15 @@ func client() *http.Client {
 }
 
 func verifyOwner(ctx context.Context, desc localstate.Descriptor) bool {
-	metadata, ok := readOwnerMetadata(ctx, desc)
-	return ok && ((metadata.Scope == "workspace_foundation" && metadata.ManagedExecution == "not_implemented" && (metadata.AppVersion == domain.AppVersion || metadata.AppVersion == "2.0.0-dev")) || executionMetadata(metadata))
+	return ownerclient.VerifyOwner(ctx, desc)
 }
 
 func verifyHistoryOwner(ctx context.Context, desc localstate.Descriptor) bool {
-	metadata, ok := readOwnerMetadata(ctx, desc)
-	return ok && executionMetadata(metadata) && metadata.HistoryContract == "007a-v1" && hasCapability(metadata, "metadata_history")
+	return ownerclient.VerifyHistoryOwner(ctx, desc)
 }
 
 func verifyExecutionOwner(ctx context.Context, desc localstate.Descriptor) bool {
-	metadata, ok := readOwnerMetadata(ctx, desc)
-	return ok && executionMetadata(metadata)
+	return ownerclient.VerifyExecutionOwner(ctx, desc)
 }
 
 func forward(ctx context.Context, desc localstate.Descriptor, c command) domain.Result {

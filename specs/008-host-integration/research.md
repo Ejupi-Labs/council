@@ -9,10 +9,9 @@ history does not satisfy them.
 ## Protocol implementation and compatibility
 
 **Decision:** use the official [MCP Go SDK v1.8.0](https://github.com/modelcontextprotocol/go-sdk/tree/v1.8.0)
-as the candidate protocol implementation, compiled into Council's native binary,
-and serve local MCP over stdio. Pin the exact version and review its dependency
-tree as part of the implementation plan; merely documenting this candidate does
-not change `go.mod`. Stdio requires newline-delimited UTF-8 JSON-RPC on stdin and
+as the protocol implementation for Council's native binary and serve local MCP
+over stdio. The module is pinned; the host implementation and its acceptance
+are still pending. Stdio requires newline-delimited UTF-8 JSON-RPC on stdin and
 stdout. Reserve stdout exclusively for protocol messages and send bounded,
 non-sensitive diagnostics to stderr. The client-launched host process is a
 connection to the continuing Council owner, not another owner or scheduler.
@@ -153,20 +152,48 @@ result or written to host configuration.
 
 The [v1.8.0 `go.mod`](https://raw.githubusercontent.com/modelcontextprotocol/go-sdk/v1.8.0/go.mod)
 declares Go 1.25.0; Council declares Go 1.27.3, so the stated language minimum is
-compatible. This does not establish build, runtime, platform or semantic
-compatibility. Resolve the precise imported/transitive Go module graph, pin it,
-check existing `golang.org/x/sys` selection, reproducible/offline builds,
-security advisories and license notices. Council currently has no runtime npm
-dependencies; a Go SDK does not change that fact.
+compatible. On 2026-11-08, Council pinned this exact SDK version and its selected
+transitive checksums. Go 1.27.3 on Windows ARM64 successfully built the SDK's
+`mcp` package and `go mod verify` verified the module cache. Dependency listing
+for that package on Windows, macOS and Linux, each on AMD64 and ARM64, selected
+the following module union; this is dependency selection, not six native builds
+or a claim that the unimplemented host is qualified:
+
+| Module | Selected version | Upstream license distribution |
+| --- | --- | --- |
+| `github.com/modelcontextprotocol/go-sdk` | `v1.8.0` | MIT / Apache-2.0 transition described below |
+| `github.com/google/jsonschema-go` | `v0.4.3` | MIT |
+| `github.com/segmentio/asm` | `v1.1.3` | MIT |
+| `github.com/segmentio/encoding` | `v0.5.4` | MIT |
+| `github.com/yosida95/uritemplate/v3` | `v3.0.2` | BSD-3-Clause |
+| `golang.org/x/oauth2` | `v0.35.0` | BSD-3-Clause |
+| `golang.org/x/sync` | `v0.24.0` | BSD-3-Clause and patent notice |
+| `golang.org/x/sys` | `v0.49.0` | BSD-3-Clause and patent notice |
+| `golang.org/x/time` | `v0.15.0` | BSD-3-Clause and patent notice |
+
+Minimal version selection retains Council's existing `x/sys` version and
+selects `x/sync` v0.24.0, newer than the SDK's v0.20.0 requirement. The package
+notice generator records the exact upstream license and applicable patent texts
+from these pinned public module distributions in `third-party/go-NOTICES.txt`.
+Re-audit the actual linked dependency graph, security advisories, reproducible
+offline builds and release packaging after host integration. Council has no
+runtime npm dependencies; the Go SDK does not change that fact.
 
 The SDK's [tagged LICENSE](https://raw.githubusercontent.com/modelcontextprotocol/go-sdk/v1.8.0/LICENSE)
 describes an ongoing transition from MIT to Apache-2.0, with some contributions
 remaining MIT and documentation under CC-BY-4.0. Do not label the whole upstream
 source unconditionally as one license. Review the selected source, transitive
-licenses and required notices; update the release notice inventory and verify
-the actual package includes applicable notices without copying unrelated files,
-user state or credentials. No dependency approval, package change or legal
-conclusion follows from this research alone.
+licenses and required notices; verify the actual release package includes them
+without copying unrelated files, user state or credentials. This inventory is
+not a legal conclusion.
+
+The SDK's default server options also advertise logging and, when tools are
+inferred, tool list-change notifications. Supply explicit capabilities for the
+implemented surface and verify the initialize response rather than relying on
+those defaults. The SDK exposes `StdioTransport.MaxLineLength`,
+`ServerOptions.SupportedProtocolVersions`, `InitializedHandler`, and the raw
+`Server.AddTool` handler needed for the design; implementation and wire tests
+must still establish their behavior in Council.
 
 ## Required offline evidence
 

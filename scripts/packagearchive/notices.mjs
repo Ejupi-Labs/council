@@ -8,11 +8,19 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const modules = [
   ['github.com/dustin/go-humanize', 'v1.1.0', ['LICENSE']],
+  ['github.com/google/jsonschema-go', 'v0.4.3', ['LICENSE']],
   ['github.com/google/uuid', 'v1.6.0', ['LICENSE']],
   ['github.com/mattn/go-isatty', 'v0.0.24', ['LICENSE']],
+  ['github.com/modelcontextprotocol/go-sdk', 'v1.8.0', ['LICENSE']],
   ['github.com/ncruces/go-strftime', 'v1.1.0', ['LICENSE']],
   ['github.com/remyoudompheng/bigfft', 'v0.0.0-20230129092748-24d4a6f8daec', ['LICENSE']],
+  ['github.com/segmentio/asm', 'v1.1.3', ['LICENSE']],
+  ['github.com/segmentio/encoding', 'v0.5.4', ['LICENSE']],
+  ['github.com/yosida95/uritemplate/v3', 'v3.0.2', ['LICENSE']],
+  ['golang.org/x/oauth2', 'v0.35.0', ['LICENSE']],
+  ['golang.org/x/sync', 'v0.24.0', ['LICENSE', 'PATENTS']],
   ['golang.org/x/sys', 'v0.49.0', ['LICENSE', 'PATENTS']],
+  ['golang.org/x/time', 'v0.15.0', ['LICENSE', 'PATENTS']],
   ['modernc.org/libc', 'v1.79.0', ['AUTHORS', 'LICENSE', 'LICENSE-3RD-PARTY.md']],
   ['modernc.org/mathutil', 'v1.7.1', ['AUTHORS', 'LICENSE']],
   ['modernc.org/memory', 'v1.12.1', ['AUTHORS', 'LICENSE', 'LICENSE-GO', 'LICENSE-MMAP-GO']],
@@ -24,8 +32,10 @@ export async function compileNotices() {
   if (environment.GOVERSION !== 'go1.27.3') throw new Error('Refresh notices with the selected Go 1.27.3 toolchain.');
   let text = 'Council native preview: Go and dependency notices\n\n'
     + 'Toolchain: Go 1.27.3. SQLite runtime: 3.54.1 via modernc.org/sqlite v1.61.1.\n'
-    + 'The pinned runtime module inventory below is the union for Windows, macOS and\n'
-    + 'Linux on AMD64/ARM64. Full upstream notice texts follow under relative source\n'
+    + 'The inventory includes pinned MCP SDK runtime dependencies for Windows, macOS\n'
+    + 'and Linux on AMD64/ARM64, including the SDK linked into the binary.\n'
+    + 'Re-audit the final linked module graph when the host implementation changes.\n'
+    + 'Full upstream notice texts follow under relative source\n'
     + 'identifiers. Aggregate upstream notices also describe test/build-only material;\n'
     + 'retaining them does not claim that every listed component is linked. No source\n'
     + 'code, machine-local path, vendor state or credentials are included here.\n\n';
