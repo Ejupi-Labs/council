@@ -19,7 +19,13 @@ func TestGraphNodeStopCancelsLiveBranchAndBlocksWaitingFollowerWhileIndependentS
 		in.Dependencies = &edges
 	})
 	e, ctx := f.e, context.Background()
-	ready := graphParallelAwait(t, f, 8*time.Second, "The live Stop fixture did not establish both actual running workers", func(workers []graphParallelWorker, view domain.GraphDetail) bool {
+	// Allow independent source preparation before either fake worker starts;
+	// the first worker's fixed eight-second release deadline begins only once
+	// it is running, so the overlap check below remains separately bounded.
+	graphParallelAwait(t, f, 30*time.Second, "The live Stop fixture did not establish its first actual running worker", func(workers []graphParallelWorker, view domain.GraphDetail) bool {
+		return len(workers) > 0
+	})
+	ready := graphParallelAwait(t, f, 6*time.Second, "The live Stop fixture did not establish both actual running workers", func(workers []graphParallelWorker, view domain.GraphDetail) bool {
 		return len(workers) == 2
 	})
 	var a, b graphParallelWorker
