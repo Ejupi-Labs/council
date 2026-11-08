@@ -46,6 +46,9 @@ Every mutation takes its complete owner request under `input`, including a
 caller-chosen 32-character lowercase hexadecimal `requestId`. Keep the complete
 request and exact captured authority for retries. A new JSON-RPC request ID is
 only a transport correlation ID and does not replace the durable Council ID.
+String and integral numeric JSON-RPC IDs are correlated without floating-point
+rounding. To bound resource use, a nonzero numeric ID whose normalized exponent text, including a negative sign, exceeds 20 characters is rejected as an invalid frame; use a string
+ID for unusually large identifiers.
 If a reply is lost, retry the same intent and request ID or inspect the existing
 record; a lost reply does not prove that the operation was rolled back.
 

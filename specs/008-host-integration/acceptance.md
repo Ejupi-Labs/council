@@ -1,17 +1,17 @@
 # 008 MCP Host Integration — Acceptance Draft
 
-**Status: DRAFT — NOT ACCEPTED.** This is a provisional traceability record. The local checks passed with the mixed test-source provenance described below; exact committed-source hosted qualification and delivery are pending. The last observed repository base was `f2026a64301dfe8da8695910ba447836a0b972c4` with substantial uncommitted feature changes; this hash alone does not identify the candidate. Replace all placeholders with independently verified results before acceptance.
+**Status: DRAFT — NOT ACCEPTED.** This is a provisional traceability record. The first local checks passed with the mixed test-source provenance described below. Subsequent protocol and Unix fixture corrections require a fresh complete run and exact committed-source hosted qualification before delivery. The last observed repository base was `f2026a64301dfe8da8695910ba447836a0b972c4` with substantial uncommitted feature changes; this hash alone does not identify the candidate. Replace all placeholders with independently verified results before acceptance.
 
 - Exact committed product/test source: **PENDING**.
-- `npm run build`: **PASS** on the final product source; generated browser assets were unchanged.
-- `npm test`: **PASS** on Windows ARM64, including 97/97 browser tests and 3/3 script/package tests; three MCP test-only fixes were made after that package ran and rerun separately, as detailed below.
-- `npm run check`: **PASS** on the final product source; `node scripts/packagearchive/notices.mjs --check` also passed.
+- `npm run build`: **PENDING on the corrected final product source**; the previous product source passed.
+- `npm test`: **PENDING corrected-source result**. A previous product-source run passed, including 97/97 browser and 3/3 script/package tests. An intermediate run failed reconnection while transport files were changing; corrected fixtures passed focused tests. Exact-source full and hosted results remain required.
+- `npm run check`: **PENDING on the corrected final product source**; the previous product source and notice check passed.
 - Hosted run and exact commit: **PENDING**; six native jobs and Linux race must all be reported individually, including skips and failures.
 - Documentation-only acceptance follow-up commit/push: **PENDING**.
 
 ## Requirement evidence and bounds
 
-The evidence below names implementation and observed focused offline fixture coverage. The local full-suite result and the separately rerun corrected tests are recorded below. Independent correction review and exact-head hosted qualification remain gates. Tests use disposable local state and fake agents; no vendor credentials were inspected.
+The evidence below names implementation and observed focused offline fixture coverage. Prior local and focused results are recorded below. Corrected-source full verification and exact-head hosted qualification remain gates. Tests use disposable local state and fake agents; no vendor credentials were inspected.
 
 | Requirement | Implementation and focused evidence | Scope and limits |
 | --- | --- | --- |
@@ -53,3 +53,9 @@ The six-platform dependency audit selected 18 external modules across the six na
 ## Mandatory follow-up and limits
 
 Full scoped evidence export, production backup, verified restore and reviewed cleanup remain required subsequent feature work and release gates. Metadata-only history is incomplete and must not be described as a restore or complete evidence archive. Live harness/provider qualification requires a separately requested live task. There is no claim of remote multi-user isolation, universal OS sandboxing, real-provider telemetry, or overall release completion.
+
+## Post-push corrections pending exact-source qualification
+
+Preliminary hosted run [42448475324](https://github.com/Ejupi-Labs/council/actions/runs/42448475324) tested `6f38e14728125c6f95474d591db1a2915d681d40` and was not a passing qualification. The Unix jobs exposed a missing test-process guardian entrypoint and a read-only Go module cache created under a disposable fixture home; macOS ARM64 also exposed a reconnect-fixture close race. Those test-only fixture corrections and the SDK protocol corrections in `review.md` require full requalification on the corrected source. The namespace-isolated Linux scenario remains skipped when the runner denies unshare.
+
+The transport preserves string and integral numeric IDs without SDK floating-point rounding and translates cancellation IDs in the corresponding direction. A nonzero numeric ID whose normalized exponent text, including a negative sign, exceeds 20 characters is rejected as an invalid frame; hosts can use string IDs for unusually large values. This bound is an explicit interoperability limitation.

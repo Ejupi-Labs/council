@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,9 +33,19 @@ import (
 // Capture only correlation IDs, not request bodies or owner credentials.
 type reconnectTrace struct {
 	io.WriteCloser
-	mu      sync.Mutex
-	pending []byte
-	ids     []string
+	mu        sync.Mutex
+	pending   []byte
+	ids       []string
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Closing stdin delivers EOF to the host. The SDK later closes both sides of
+// its transport; return the original result without closing stdin twice, so a
+// second close cannot mask an unrelated read or process error.
+func (w *reconnectTrace) Close() error {
+	w.closeOnce.Do(func() { w.closeErr = w.WriteCloser.Close() })
+	return w.closeErr
 }
 
 func (w *reconnectTrace) Write(p []byte) (int, error) {
@@ -75,9 +86,22 @@ type reconnectHost struct {
 
 func (h *reconnectHost) close() error {
 	h.once.Do(func() {
-		_ = h.trace.Close()
+		stdinErr := h.trace.Close()
 		finished := make(chan error, 1)
-		go func() { _ = h.session.Close(); finished <- h.cmd.Wait() }()
+		// Keep the SDK reader open while the host drains any in-flight
+		// cancellation response after stdin EOF. Await its EOF before Wait,
+		// because exec.Cmd.Wait closes StdoutPipe after the process exits.
+		go func() {
+			readErr := h.session.Wait()
+			processErr := h.cmd.Wait()
+			if readErr != nil {
+				readErr = fmt.Errorf("MCP fixture session: %w", readErr)
+			}
+			if processErr != nil {
+				processErr = fmt.Errorf("MCP fixture exit: %w", processErr)
+			}
+			finished <- errors.Join(readErr, processErr)
+		}()
 		select {
 		case h.err = <-finished:
 		case <-time.After(8 * time.Second):
@@ -87,6 +111,10 @@ func (h *reconnectHost) close() error {
 			case <-time.After(5 * time.Second):
 			}
 			h.err = errors.New("MCP fixture did not exit after EOF")
+		}
+		_ = h.session.Close()
+		if stdinErr != nil {
+			h.err = errors.Join(h.err, fmt.Errorf("MCP fixture stdin EOF: %w", stdinErr))
 		}
 	})
 	return h.err

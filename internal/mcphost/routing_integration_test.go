@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,22 @@ func TestMCPRoutingCapacityBudgetAndUnknownUsageAcrossCLI(t *testing.T) {
 	seed := exec.Command(seedExecutable, seedArgs...)
 	seed.Dir = repository
 	seed.Env = append(env, "COUNCIL_ROUTING_SCHEMA3_SEED_PATH="+filepath.Join(home, ".council", "v2", "workspace.sqlite3"), "COUNCIL_ROUTING_SCHEMA3_PROJECT="+project, "COUNCIL_ROUTING_SCHEMA3_SEED_OUTPUT="+seedOutput)
+	if seedExecutable == "go" {
+		// HOME is private fixture state, but a Go module cache contains
+		// read-only module trees that Unix TempDir cleanup cannot remove.
+		// Reuse the caller's existing external cache without moving it.
+		cacheCmd := exec.Command("go", "env", "GOMODCACHE")
+		cacheCmd.Dir = repository
+		cacheOutput, cacheErr := cacheCmd.Output()
+		cache := strings.TrimSpace(string(cacheOutput))
+		info, statErr := os.Stat(cache)
+		rel, relErr := filepath.Rel(home, cache)
+		insideHome := relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		if cacheErr != nil || !filepath.IsAbs(cache) || statErr != nil || !info.IsDir() || insideHome {
+			t.Fatal("Go seed requires an existing module cache outside the fixture home")
+		}
+		seed.Env = append(seed.Env, "GOMODCACHE="+cache)
+	}
 	if output, err := seed.CombinedOutput(); err != nil {
 		t.Fatalf("isolated legacy routing seed: %v: %s", err, output)
 	}
