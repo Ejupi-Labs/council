@@ -1,6 +1,8 @@
 # Independent review: metadata history
 
-**Status: review in progress; acceptance is pending.** This record summarizes
+**Status: review closed; acceptance is recorded in [acceptance.md](acceptance.md)** (see the
+closure note at the end of this record; the originally written status was "review in
+progress; acceptance is pending"). This record summarizes
 independent design and implementation reviews of feature 007a and the resulting
 corrections. It is not a release or platform qualification statement.
 
@@ -85,3 +87,15 @@ after the required qualification has actually run.
 - **Pending:** the complete local `npm run build`, `npm test` and `npm run check`
   qualification on final source; full rendered UI coverage; and exact-source
   hosted native and race CI. Passing an earlier or narrower run is not acceptance.
+
+## Closure note (appended; earlier text above is unchanged except the status line)
+
+The **Pending** item above was written before qualification. It is closed by
+[acceptance.md](acceptance.md), which records the exact product/test source
+`1af4ea199a9b5ab2f19878ee713ea2f0b0706d0a`, a successful local `npm test` with the
+mixed-source provenance it describes, a passing `npm run check`, and all seven jobs of
+hosted run 42434896240 on that commit. That run skipped the Linux isolated
+mount-replacement scenario because the runner denied the required namespace; the skip is
+a recorded limit, not a pass. This closure does not extend the feature's scope: it remains
+incomplete metadata-only history, and content-bearing evidence export, backup, verified
+restore and reviewed cleanup remain mandatory, unaccepted follow-up work (`specs/007-scoped-retention/`).

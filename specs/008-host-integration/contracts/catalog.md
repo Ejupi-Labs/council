@@ -1,9 +1,11 @@
 # MCP tool catalog and owner mapping
 
-**Status: design draft.** This is the closed 008 allowlist, audited against the
+**Status: implemented; accepted for the documented offline scope** (see
+[acceptance.md](../acceptance.md) for evidence and limits; this contract is not itself
+acceptance evidence). It began as a design draft. This is the closed 008 allowlist, audited against the
 current owner routes in `internal/httpapi/{server,execution,routing,workflow,graphs,recovery}.go`
-and their application/domain validators. Names below are proposed MCP tool names,
-not claims that the tools already exist. The `/api/v1` prefix is implicit in the
+and their application/domain validators. Names below are the MCP tool names implemented
+in `internal/mcphost/catalog.go`. The `/api/v1` prefix is implicit in the
 owner route column. No tool accepts an arbitrary URL, HTTP method, filesystem
 command, bearer token, native process handle or caller-supplied proof of cleanup.
 

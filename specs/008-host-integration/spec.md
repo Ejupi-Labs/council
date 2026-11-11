@@ -3,7 +3,7 @@
 **Feature context**: `specs/008-host-integration/`
 **Git branch**: `refactor`
 **Created**: 2026-11-08
-**Status**: Reviewed for implementation
+**Status**: Implemented; accepted for its documented offline scope (see [acceptance.md](acceptance.md)); originally "Reviewed for implementation"
 **Input**: Provide a useful native MCP host interface to Council's existing shared local workspace, task lifecycle, routing, evidence and controls.
 
 ## Scope and meaning

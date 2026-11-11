@@ -79,3 +79,24 @@ test('an explicit policy reload cannot overwrite a newer dropdown edit', { timeo
     assert.equal(await page.locator('#policy-mode').inputValue(), 'autonomous');
   } finally { if (owner) await owner.stop(); await f.close(); }
 });
+
+test('in-page navigation fragments never replace the stored access token', { timeout: 60000 }, async () => {
+  const f = await fixture(); let owner;
+  try {
+    owner = await f.start();
+    const token = new URLSearchParams(new URL(owner.url).hash.slice(1)).get('token');
+    assert.ok(token, 'fixture owner token is unavailable');
+    const page = await f.browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const pageErrors = []; page.on('pageerror', error => pageErrors.push(error.message));
+    await page.goto(owner.url);
+    await page.waitForFunction(() => !location.hash);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('council.accessToken')), token);
+    // A navigation link adds "#agents"; reloading must not mistake it for a credential.
+    await page.locator('a[href="#agents"]').first().click();
+    await page.waitForFunction(() => location.hash === '#agents');
+    await page.reload();
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('council.accessToken')), token);
+    assert.equal(await page.evaluate(() => location.hash), '#agents', 'navigation fragment must be left in place');
+    assert.equal(pageErrors.length, 0, pageErrors.join('\n'));
+  } finally { if (owner) await owner.stop(); await f.close(); }
+});

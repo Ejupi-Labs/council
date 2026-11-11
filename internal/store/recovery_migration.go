@@ -7,7 +7,7 @@ import (
 )
 
 // recoverySchema adds durable checkpoint and append-only reconciliation records.
-// Existing incident and graph records remain unchanged during the v6 migration.
+// Existing incident and graph records remain unchanged during the schema 6 to 7 migration.
 const recoverySchema = `
 CREATE TABLE recovery_owner_epoch(singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner_instance_id TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('untracked','clean','dirty')),generation INTEGER NOT NULL CHECK(typeof(generation)='integer' AND generation>=0));
 INSERT INTO recovery_owner_epoch VALUES(1,'','untracked',0);

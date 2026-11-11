@@ -684,8 +684,11 @@ export class RoutingView {
         if (!id || this.detail?.task.graphRef)
             return;
         const result = await this.mutate(action + ':' + id, () => this.amendment(action), 'task-routing-status');
+        // The acknowledgement can arrive after another task was selected; only the still-selected
+        // task's status region may report it.
         if (result) {
-            feedback('task-routing-status', 'Explicit ' + action + ' recorded. No worker was started and no old continuation proof was re-armed.', 'success');
+            if (this.detail?.task.id === id)
+                feedback('task-routing-status', 'Explicit ' + action + ' recorded. No worker was started and no old continuation proof was re-armed.', 'success');
             await this.onTaskChanged(id);
         }
     }
@@ -718,7 +721,8 @@ export class RoutingView {
             await api('/tasks/' + pending.taskId + '/attempts', 'POST', pending.start);
             this.adoptStart = null;
             writeSession('routingAdoptStart', null);
-            feedback('task-routing-status', 'Adoption acknowledged, then the separately captured explicit Start acknowledged. Each has its own retained request identity.', 'success');
+            if (this.detail?.task.id === pending.taskId)
+                feedback('task-routing-status', 'Adoption acknowledged, then the separately captured explicit Start acknowledged. Each has its own retained request identity.', 'success');
             await this.onTaskChanged(pending.taskId);
         }
         catch (error) {

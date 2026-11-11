@@ -8,7 +8,8 @@ Full scoped evidence export, useful production backup/restore and reviewed clean
 mandatory before release. Feature 008 is accepted in its documented offline scope while the payload privacy boundary for full
 backup awaits clarification; this reorders independent work without accepting or dropping
 retention requirements. Its Darwin AMD64 job metadata discrepancy and the prior unexplained Linux ARM64 fixture failure remain recorded for release qualification. Features 009–012 remain planned. The rebuild is incomplete.
-See each active feature's acceptance/review records for observed evidence.
+See each active feature's acceptance/review records for observed evidence. A later read-only
+review and its unresolved findings are recorded in [post-acceptance-review.md](post-acceptance-review.md).
 
 ## Release boundary
 
@@ -75,7 +76,10 @@ than silently deferring a required behavior.
 
 ## Ordered first-release slices
 
-Features001–006 are accepted in their specified scope;007–012 are planned.
+Features 001–008, including the 007a metadata-history slice, are accepted in their
+documented offline scopes (see the status above and each feature's `acceptance.md`).
+The 007 follow-up (scoped retention, backup/restore and reviewed cleanup) and 009–012 are
+planned and unaccepted.
 The exit descriptions define each slice's acceptance boundary and are not
 pass claims. The order is sequential; later slices build on accepted earlier ones and must
 preserve their working journeys.

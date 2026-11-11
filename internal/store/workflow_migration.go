@@ -108,15 +108,3 @@ func validateRoutingSeedCounts(ctx context.Context, q queryer) error {
 	}
 	return nil
 }
-func (s *Store) validateWorkflowSchema(ctx context.Context) error {
-	if err := validateKnownWorkflowDDL(ctx, s.db); err != nil {
-		return err
-	}
-	if err := validateRoutingSeedCounts(ctx, s.db); err != nil {
-		return err
-	}
-	if _, err := s.deliveryPreference(ctx, s.db); err != nil {
-		return err
-	}
-	return validateForeignKeys(ctx, s.db)
-}

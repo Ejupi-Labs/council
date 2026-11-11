@@ -33,13 +33,3 @@ func (s *Store) validateFoundation(ctx context.Context) error {
 	_, e := s.policy(ctx, s.db)
 	return e
 }
-func (s *Store) validateExecutionSchema(ctx context.Context) error {
-	if err := validateExecutionTables(ctx, s.db); err != nil {
-		return err
-	}
-	if err := validateCapacityTable(ctx, s.db, 3); err != nil {
-		return err
-	}
-	_, err := s.gate(ctx, s.db)
-	return err
-}

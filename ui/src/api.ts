@@ -21,12 +21,12 @@ export function writeSession(key: string, value: unknown): void {
 
 export function consumeAccessToken(): boolean {
   const fragment = location.hash.slice(1);
-  if (fragment) {
+  // Only the launcher's "#token=" fragment carries credentials. Any other fragment is in-page
+  // navigation (#tasks, #agents, ...): it must neither replace the stored token nor be consumed.
+  if (fragment.startsWith('token=')) {
     history.replaceState(null, '', location.pathname + location.search);
     try {
-      accessToken = fragment.startsWith('token=')
-        ? new URLSearchParams(fragment).get('token') ?? ''
-        : decodeURIComponent(fragment);
+      accessToken = new URLSearchParams(fragment).get('token') ?? '';
     } catch { accessToken = ''; }
     try {
       if (accessToken) sessionStorage.setItem(ACCESS_KEY, accessToken);

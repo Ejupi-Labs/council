@@ -132,8 +132,8 @@ export class TasksView {
   setPolicy(policy: Policy): void { this.policy = policy; this.controls(); }
   setProject(id: string): void {
     if (id === this.projectId) return;
-    this.projectId = id; this.projectGeneration++; this.detailGeneration++; this.attemptGeneration++; this.clearArtifact();
-    this.selectedTaskId = null; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); this.attempt = null; this.tasks = []; this.taskCursor = null; this.routing?.clearTask(); this.workflow?.clearTask(); this.explicitAttempt = null;
+    this.projectId = id; this.projectGeneration++; this.detailGeneration++; this.attemptGeneration++; this.clearAttempt();
+    this.selectedTaskId = null; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); this.tasks = []; this.taskCursor = null; this.routing?.clearTask(); this.workflow?.clearTask(); this.explicitAttempt = null;
     element('task-detail').hidden = true; element('execution-link').hidden = true; element('task-list').replaceChildren(); this.controls();
     if (this.available) void this.refreshTasks();
   }
@@ -272,7 +272,7 @@ export class TasksView {
     const changed = id !== this.selectedTaskId;
     if (!keepAttempt || changed) this.explicitAttempt = null;
     const selection = this.attemptSelection;
-    if (changed) { this.routing?.clearTask(); this.workflow?.clearTask(); this.selectedTaskId = id; this.attemptGeneration++; this.clearArtifact(); this.guidanceEdited = false; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); this.attempt = null; this.attempts = []; element('attempt-list').replaceChildren(); element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
+    if (changed) { this.routing?.clearTask(); this.workflow?.clearTask(); this.selectedTaskId = id; this.attemptGeneration++; this.clearAttempt(); this.guidanceEdited = false; this.detail = null; this.recovery.setTask(null, this.recoveryAvailable); element('task-detail').hidden = true; element('execution-link').hidden = true; this.controls(); }
     try {
       const { data } = await api<TaskDetail>('/tasks/' + id);
       if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId) return;
@@ -289,7 +289,7 @@ export class TasksView {
       if (generation !== this.detailGeneration || projectGeneration !== this.projectGeneration || id !== this.selectedTaskId) return;
       if (selection === this.attemptSelection) {
         if (selected && selected.taskId === id) void this.selectAttempt(selected);
-        else if (!selected) { this.attempt = null; this.controls(); }
+        else if (!selected) { this.clearAttempt(); this.controls(); }
       }
       try { await this.loadAttempts(); } catch (error) { if (generation === this.detailGeneration) element('usage-total').textContent = errorMessage(error) + ' Execution history is temporarily unavailable; current execution detail remains available.'; }
       this.controls();
@@ -451,6 +451,16 @@ export class TasksView {
     element('more-events').hidden = !this.eventCursor;
   }
 
+  // Empties every execution panel and its pagination so a different task never shows (or pages
+  // with) another task's execution identity, evidence, events or cursors.
+  private clearAttempt(): void {
+    this.attempt = null; this.attempts = []; this.artifacts = []; this.events = [];
+    this.attemptCursor = null; this.artifactCursor = null; this.eventCursor = null;
+    for (const id of ['attempt-summary', 'attempt-facts', 'attempt-list', 'attempt-events', 'artifact-list', 'native-models-facts', 'native-models-list', 'native-models-evidence']) element(id).replaceChildren();
+    for (const id of ['more-attempts', 'more-events', 'more-artifacts', 'native-models-panel']) element(id).hidden = true;
+    feedback('attempt-status', ''); this.clearArtifact();
+  }
+
   private clearArtifact(): void {
     this.artifactGeneration++; this.readArtifact = null;
     if (this.downloadURL) URL.revokeObjectURL(this.downloadURL); this.downloadURL = null;
@@ -494,7 +504,10 @@ export class TasksView {
     try { const { data } = await api<T>(pending.path, pending.method, pending.body); delete this.pending[key]; return data; }
     catch (e) {
       if (!wasUnresolved && !(e instanceof ApiError && e.uncertain)) delete this.pending[key];
-      feedback('attempt-status', errorMessage(e, String(pending.body['requestId'])) + (this.pending[key] ? ' Retry this same pending operation to reconcile.' : ' Your input is retained.'), 'error'); return null;
+      // A late failure for task A must not paint into task B's status region; A's retained
+      // pending operation is shown again when A is reopened.
+      if (!pending.taskId || pending.taskId === this.selectedTaskId) feedback('attempt-status', errorMessage(e, String(pending.body['requestId'])) + (this.pending[key] ? ' Retry this same pending operation to reconcile.' : ' Your input is retained.'), 'error');
+      return null;
     } finally { this.mutationBusy.delete(key); writeSession('pendingExecutionControls', this.pending); this.controls(); }
   }
   private async stop(): Promise<void> {

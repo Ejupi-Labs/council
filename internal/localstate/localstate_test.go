@@ -181,7 +181,10 @@ func TestRejectRedirectedPrivateFileTargets(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(sentinel, filepath.Join(root, name)); err != nil {
-				t.Fatal(err)
+				// Matches TestRejectRedirectedRoot: a host without symlink privilege (for
+				// example an unelevated Windows account without Developer Mode) cannot
+				// construct this fixture, so the redirection case is skipped, not failed.
+				t.Skipf("symlink unavailable: %v", err)
 			}
 			if lock, err := Acquire(root); err == nil {
 				lock.Close()

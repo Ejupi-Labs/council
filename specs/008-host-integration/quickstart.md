@@ -1,6 +1,6 @@
 # Quickstart and Acceptance: MCP Host Integration
 
-These are design scenarios, not a claim that the command or tools already exist. Use disposable Council state, a real offline MCP client and fake agents; do not open vendor credentials or issue live provider calls.
+These scenarios were written at design time; the `council mcp` command and tools now exist, and executed evidence and limits are recorded in [acceptance.md](acceptance.md). This document is not itself acceptance evidence. Use disposable Council state, a real offline MCP client and fake agents; do not open vendor credentials or issue live provider calls.
 
 1. Start `council mcp` through a real stdio client, negotiate an explicitly supported protocol version, list the documented closed catalog and verify every stdout frame is protocol JSON while diagnostics go only to stderr. Exercise malformed, duplicate-key, oversized, unknown and unsupported requests without effects.
 2. With no owner, connect and observe one background owner start. Open a disposable project and start a fake task from MCP, then inspect it through CLI and UI. Reverse the direction with CLI- and UI-created work. Start a second host concurrently and verify the same task/owner IDs and shared capacity.

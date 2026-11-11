@@ -166,6 +166,3 @@ func (s *Store) validateGraphSchemaWith(ctx context.Context, q queryer) error {
 	_, e := s.graphClaimRecords(ctx, q)
 	return e
 }
-func (s *Store) validateGraphSchema(ctx context.Context) error {
-	return s.validateGraphSchemaWith(ctx, s.db)
-}

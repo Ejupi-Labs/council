@@ -28,21 +28,6 @@ func (s *Store) graphBudgetProofCurrent(ctx context.Context, q queryer, taskID, 
 	}
 	return graphEpoch != "" && graphEpoch == h.Summary.BudgetAuthorityEpoch, nil
 }
-func (s *Store) graphBudgetEpoch(ctx context.Context, q queryer, taskID string) (string, error) {
-	member, e := s.graphMembership(ctx, q, taskID)
-	if e != nil {
-		return "", e
-	}
-	if member == nil {
-		return "", nil
-	}
-	h, e := s.graphHeader(ctx, q, member.GraphID)
-	if e != nil {
-		return "", e
-	}
-	return h.Summary.BudgetAuthorityEpoch, nil
-}
-
 func (s *Store) graphAttemptBudgetEpoch(ctx context.Context, q queryer, a domain.Attempt) (string, error) {
 	member, e := s.graphMembership(ctx, q, a.TaskID)
 	if e != nil {

@@ -136,19 +136,3 @@ func validateKnownRoutingDDL(ctx context.Context, q schemaQueryer, includeRoutin
 	}
 	return nil
 }
-func (s *Store) validateRoutingSchema(ctx context.Context) error {
-	if err := validateKnownWorkflowDDL(ctx, s.db); err != nil {
-		return err
-	}
-	var contexts, profiles, policy int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM routing_contexts").Scan(&contexts); err != nil || contexts != 2 {
-		return storageError()
-	}
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM routing_profiles").Scan(&profiles); err != nil || profiles != 6 {
-		return storageError()
-	}
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM routing_policy WHERE singleton=1").Scan(&policy); err != nil || policy != 1 {
-		return storageError()
-	}
-	return validateForeignKeys(ctx, s.db)
-}

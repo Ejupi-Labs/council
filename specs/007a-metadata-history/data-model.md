@@ -1,7 +1,8 @@
 # Data Model: Project Metadata History
 
-**Status: draft design for feature `007a-metadata-history`; not an implemented
-contract.** This model follows [spec.md](spec.md) and defines proposed logical
+**Status: implemented; accepted for the bounded offline metadata-history scope** (see
+[acceptance.md](acceptance.md); this model is not itself acceptance evidence). It began as a
+draft design for feature `007a-metadata-history`. This model follows [spec.md](spec.md) and defines proposed logical
 records and invariants, not a schema migration or a claim that current records
 already prove eligibility. The physical store, exact schema, limits, transport,
 platform primitives and complete acceptance tests must be fixed by the feature

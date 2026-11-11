@@ -3,7 +3,7 @@
 **Feature context**: `specs/007a-metadata-history/`
 **Git branch**: `refactor`
 **Created**: 2026-11-08
-**Status**: Reviewed for implementation
+**Status**: Implemented; accepted for the bounded offline metadata-history scope (see [acceptance.md](acceptance.md)); originally "Reviewed for implementation"
 **Input**: Give programmers a useful, project-scoped view and local export of Council-generated structured history while excluding opaque content and preserving unrelated work.
 
 **Sequencing amendment (2026-11-08):** The original feature ordered full retention

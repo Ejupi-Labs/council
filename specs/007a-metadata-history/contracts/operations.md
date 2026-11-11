@@ -1,8 +1,15 @@
 # Metadata history operation contract
 
-**Status: design draft for 007a.** This contract specifies the proposed bounded
-owner, HTTP and CLI surface for implementation and review. It does not claim the
-operations exist or that the required native filesystem proof is implemented.
+**Status: implemented; accepted for the bounded offline scope** (see
+[acceptance.md](acceptance.md) for evidence and limits; this contract is not itself
+acceptance evidence). It began as a design draft for 007a that specified the bounded
+owner, HTTP and CLI surface for implementation and review. It makes no claim beyond
+the native filesystem proof that acceptance.md records.
+
+**Implementation note:** `<safe filename>` / `--filename NAME` is validated by
+`domain.ValidHistoryFilename` as `history-<name>.json` (`^history-[A-Za-z0-9][A-Za-z0-9_-]{0,50}\.json$`);
+callers pass the complete name, for example `history-weekly.json`. The file is created directly in the
+private v2 state root (the reserved history filename namespace), not in a separate export directory.
 The source is the known Council-managed store held by its native owner lock; this
 slice does not authenticate arbitrary imported stores or detect same-user external
 database tampering. It never reads vendor authentication files or extracts values
